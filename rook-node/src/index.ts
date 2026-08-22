@@ -91,9 +91,15 @@ async function main(): Promise<void> {
   let identity: CloudIdentity | undefined = node.db.getCloudIdentity();
   if (!noUplink) {
     try {
-      if (pairToken && serverUrl) {
+      if (pairToken) {
         const name = `${process.platform}-node`;
-        identity = await pairWithServer({ serverUrl, pairingToken: pairToken, name, version: ROOK_NODE_VERSION });
+        identity = await pairWithServer({
+          // Production by default; --server overrides for local development.
+          serverUrl: serverUrl ?? "https://www.rook.lighting",
+          pairingToken: pairToken,
+          name,
+          version: ROOK_NODE_VERSION,
+        });
         node.db.saveCloudIdentity(identity);
         console.log(`[rook-node] Paired with ${identity.serverUrl} as ${identity.nodeId}`);
       }

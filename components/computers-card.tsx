@@ -6,7 +6,11 @@ import { Card, PrimaryButton, SectionHeader, StatusPill } from "@/components/roo
 import { useRookTheme } from "@/lib/ui";
 import { trpc } from "@/lib/trpc";
 
-/** Cross-platform confirm: react-native-web does not implement Alert.alert. */
+/** The server base URL the node should dial. Web uses the current origin; native falls back to production. */
+function serverOrigin(): string {
+  if (Platform.OS === "web" && typeof window !== "undefined") return window.location.origin;
+  return process.env.EXPO_PUBLIC_API_ORIGIN?.replace(/\/$/, "") || "https://www.rook.lighting";
+}
 function confirmRemoval(name: string, onConfirm: () => void): void {
   const message = `Remove ${name}? This computer will immediately lose access to your account until it is paired again.`;
   if (Platform.OS === "web") {
@@ -156,7 +160,7 @@ export function ComputersCard() {
             <StatusPill label="Expires in 10 min" tone="amber" />
           </View>
           <Text style={{ color: colors.textFaint, fontSize: 12.5, lineHeight: 18 }}>
-            On your computer, install Rook Node and run:
+            In the rook-node folder on your computer, run:
           </Text>
           <Pressable accessibilityRole="button" onLongPress={copyCode}>
             <View
@@ -167,8 +171,8 @@ export function ComputersCard() {
                 paddingVertical: 10,
               }}
             >
-              <Text style={{ color: colors.text, fontFamily: Platform.select({ web: "monospace" }), fontSize: 12 }}>
-                rook-node --pair {pairingCode}
+              <Text style={{ color: colors.text, fontFamily: Platform.select({ web: "monospace" }), fontSize: 12 }} selectable>
+                npx tsx src/index.ts --pair {pairingCode} --server {serverOrigin()}
               </Text>
             </View>
           </Pressable>
