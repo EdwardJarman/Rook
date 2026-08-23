@@ -7,6 +7,8 @@
  * are executed through the exact same dispatch() pipeline as local gateway
  * traffic — validation, leasing, approvals, replay protection are identical.
  */
+import dns from "node:dns";
+
 import {
   DEFAULT_POLL_AFTER_MS,
   type CloudApprovalGrant,
@@ -18,6 +20,10 @@ import {
 import type { RookNode } from "../core/node.js";
 import type { Capability, TypedAction } from "../types.js";
 import { ensurePinnedChromium } from "../runtime/chromium.js";
+
+// Prefer IPv4: some Windows networks advertise broken IPv6 routes, which can
+// stall the first outbound connection of a process.
+dns.setDefaultResultOrder("ipv4first");
 
 const REQUEST_TIMEOUT_MS = 20_000;
 const MAX_BACKOFF_MS = 60_000;
@@ -43,7 +49,7 @@ export async function pairWithServer(input: {
   // process (adapter failover between anycast IPs); retry transport-level
   // failures so one dead attempt can't burn the one-time token.
   let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
       return await pairAttempt(input);
     } catch (error) {
