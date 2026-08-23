@@ -40,8 +40,8 @@ function parseArgs(argv: string[]): {
   const pairArg = argv.indexOf("--pair");
   const serverArg = argv.indexOf("--server");
   const config = defaultConfig({
-    gatewayPort: Number.isFinite(port) && port > 0 ? port : undefined,
-    nodeSecret: secret,
+    ...(Number.isFinite(port) && port > 0 ? { gatewayPort: port } : {}),
+    ...(secret !== undefined ? { nodeSecret: secret } : {}),
     noLaunch: flags.has("--no-launch"),
   });
   return {

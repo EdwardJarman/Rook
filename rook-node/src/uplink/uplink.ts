@@ -39,6 +39,25 @@ export async function pairWithServer(input: {
   name: string;
   version: string;
 }): Promise<CloudIdentity> {
+  // Some Windows networks blackhole the first outbound connection to a new
+  // process (adapter failover between anycast IPs); retry transport-level
+  // failures so one dead attempt can't burn the one-time token.
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await pairAttempt(input);
+    } catch (error) {
+      lastError = error;
+      // A server response (4xx/5xx) is authoritative — never retry those.
+      if (!(error instanceof UplinkError) || !/\(\d{3}\)/.test(error.message)) throw error;
+      if (/401|400/.test(error.message)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 800));
+    }
+  }
+  throw lastError;
+}
+
+async function pairAttempt(input: { serverUrl: string; pairingToken: string; name: string; version: string }): Promise<CloudIdentity> {
   const response = await fetch(new URL("/api/node/pair", normalizeServerUrl(input.serverUrl)), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
