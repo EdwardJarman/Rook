@@ -52,8 +52,8 @@ jobs:
         if: steps.nodetest.outcome == 'failure'
         shell: bash
         run: |
-          grep -aE "FAIL|AssertionError|Error:|✗|×" /tmp/vitest.log | head -6 | while IFS= read -r line; do echo "::error::$line"; done
-          tail -4 /tmp/vitest.log | while IFS= read -r line; do echo "::error::$line"; done
+          grep -aE "FAIL|AssertionError|Error|✗|×" /tmp/vitest.log | head -8 | while IFS= read -r line; do echo "::error::$line"; done
+          tail -12 /tmp/vitest.log | while IFS= read -r line; do echo "::error::$line"; done
           exit 1
 
   tauri-shell:
@@ -74,18 +74,20 @@ jobs:
           workspaces: rook-node/src-tauri
       # tauri-build's build script validates that the externalBin and resources
       # exist; stage placeholders so `cargo check` can run without a full build.
+      # NOTE: this job runs from rook-node/src-tauri, so paths are relative to it.
       - name: Stage sidecar placeholder for tauri-build
         shell: bash
         run: |
-          mkdir -p src-tauri/binaries src-tauri/resources/chromium
+          mkdir -p binaries resources/chromium
           if [ "${{ runner.os }}" = "Windows" ]; then
-            echo "placeholder" > src-tauri/binaries/rook-node-x86_64-pc-windows-msvc.exe
+            echo "placeholder" > binaries/rook-node-x86_64-pc-windows-msvc.exe
           elif [ "${{ runner.os }}" = "macOS" ]; then
-            echo "placeholder" > src-tauri/binaries/rook-node-aarch64-apple-darwin
+            echo "placeholder" > binaries/rook-node-aarch64-apple-darwin
           else
-            echo "placeholder" > src-tauri/binaries/rook-node-x86_64-unknown-linux-gnu
+            echo "placeholder" > binaries/rook-node-x86_64-unknown-linux-gnu
           fi
-          echo "placeholder" > src-tauri/resources/chromium/.keep
+          echo "placeholder" > resources/chromium/.keep
+          ls -la binaries resources/chromium
       - name: cargo check
         id: cargochk
         shell: bash
