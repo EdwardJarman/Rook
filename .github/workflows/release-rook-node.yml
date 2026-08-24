@@ -28,24 +28,28 @@ jobs:
             rust-target: x86_64-pc-windows-msvc
             sidecar-ext: .exe
             browsers-path: "$LOCALAPPDATA/ms-playwright"
+            asset-name: Rook-Node-Setup.exe
           - label: macOS arm64
             os: macos-14
             pkg-target: node24-macos-arm64
             rust-target: aarch64-apple-darwin
             sidecar-ext: ""
             browsers-path: "$HOME/Library/Caches/ms-playwright"
+            asset-name: Rook-Node-arm64.dmg
           - label: macOS x64
             os: macos-13
             pkg-target: node24-macos-x64
             rust-target: x86_64-apple-darwin
             sidecar-ext: ""
             browsers-path: "$HOME/Library/Caches/ms-playwright"
+            asset-name: Rook-Node-intel.dmg
           - label: Linux x64
             os: ubuntu-22.04
             pkg-target: node24-linux-x64
             rust-target: x86_64-unknown-linux-gnu
             sidecar-ext: ""
             browsers-path: "$HOME/.cache/ms-playwright"
+            asset-name: Rook-Node-x86_64.AppImage
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -143,21 +147,37 @@ jobs:
             src-tauri/target/${{ matrix.rust-target }}/release/bundle/appimage/*.AppImage
           if-no-files-found: warn
 
-      - name: Attach installers to the release
+      - name: Stage release assets under stable names
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          mkdir -p release-assets
+          BUNDLE="src-tauri/target/${{ matrix.rust-target }}/release/bundle"
+          if [ -d "$BUNDLE/nsis" ]; then
+            cp "$BUNDLE"/nsis/*.exe "release-assets/${{ matrix.asset-name }}"
+          elif [ -d "$BUNDLE/dmg" ]; then
+            cp "$BUNDLE"/dmg/*.dmg "release-assets/${{ matrix.asset-name }}"
+          elif [ -d "$BUNDLE/appimage" ]; then
+            cp "$BUNDLE"/appimage/*.AppImage "release-assets/${{ matrix.asset-name }}"
+          else
+            echo "no bundle output found in $BUNDLE"; exit 1
+          fi
+          ls -la release-assets
+
+      - name: Publish release with stable asset names
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            src-tauri/target/${{ matrix.rust-target }}/release/bundle/nsis/*.exe
-            src-tauri/target/${{ matrix.rust-target }}/release/bundle/dmg/*.dmg
-            src-tauri/target/${{ matrix.rust-target }}/release/bundle/appimage/*.AppImage
-          draft: true
-          fail_on_unmatched_files: false
+          files: release-assets/*
+          draft: false
+          make_latest: true
+          fail_on_unmatched_files: true
           body: |
             Rook Node ${{ github.ref_name }} — installers for Windows, macOS, and Linux.
 
-            **Windows**: run the NSIS installer. SmartScreen may warn (unsigned build) — choose "More info → Run anyway".
-            **macOS**: unsigned build — after installing, run `xattr -cr /Applications/Rook\ Node.app` once.
-            **Linux**: AppImage; chmod +x and run. Requires WebKit dependencies per Tauri prerequisites.
+            **Windows**: run `Rook-Node-Setup.exe`. SmartScreen may warn (unsigned build) — choose "More info → Run anyway".
+            **macOS (Apple Silicon)**: `Rook-Node-arm64.dmg`. Unsigned — after installing, run `xattr -cr "/Applications/Rook Node.app"` once.
+            **macOS (Intel)**: `Rook-Node-intel.dmg`. Same `xattr` step applies.
+            **Linux**: `Rook-Node-x86_64.AppImage`; `chmod +x` and run.
 
             After opening the app, press **Connect account** and sign in — that pairs this computer with your Rook account.

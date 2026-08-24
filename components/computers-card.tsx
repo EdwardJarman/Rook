@@ -1,6 +1,7 @@
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
+import { useRouter } from "expo-router";
 import { useState } from "react";
-import { Linking, Platform, Pressable, Text, View } from "react-native";
+import { Platform, Pressable, Text, View } from "react-native";
 
 import { Card, PrimaryButton, SectionHeader, StatusPill } from "@/components/rook-primitives";
 import { useRookTheme } from "@/lib/ui";
@@ -12,16 +13,17 @@ function serverOrigin(): string {
   return process.env.EXPO_PUBLIC_API_ORIGIN?.replace(/\/$/, "") || "https://www.rook.lighting";
 }
 
-/** Public installer downloads live on GitHub Releases. */
-const RELEASES_URL = "https://github.com/EdwardJarman/Rook/releases/latest";
-
-/** Best-effort OS detection so the download button speaks the user's platform. */
-function detectOs(): "windows" | "mac" | "linux" {
-  if (Platform.OS !== "web" || typeof navigator === "undefined") return "windows";
-  const ua = navigator.userAgent;
-  if (ua.includes("Mac")) return "mac";
-  if (ua.includes("Linux") && !ua.includes("Android")) return "linux";
-  return "windows";
+/**
+ * Primary download action: the server 302s to the right installer for the
+ * caller's OS (see server/download-routes.ts). Users never see GitHub.
+ */
+function startDownload(): void {
+  const url = `${serverOrigin()}/api/download/node`;
+  if (Platform.OS === "web") {
+    window.location.href = url;
+    return;
+  }
+  void import("react-native").then(({ Linking }) => void Linking.openURL(url));
 }
 function confirmRemoval(name: string, onConfirm: () => void): void {
   const message = `Remove ${name}? This computer will immediately lose access to your account until it is paired again.`;
@@ -45,6 +47,7 @@ function confirmRemoval(name: string, onConfirm: () => void): void {
  */
 export function ComputersCard() {
   const { colors } = useRookTheme();
+  const router = useRouter();
   const nodes = trpc.nodes.list.useQuery(undefined, { retry: 1 });
   const commands = trpc.nodes.commands.useQuery(undefined, {
     retry: 1,
@@ -108,13 +111,7 @@ export function ComputersCard() {
         title="Your computers"
         caption="Run Bots on your own machine. Download Rook Node, press Connect — done."
         action={
-          <PrimaryButton
-            label={detectOs() === "mac" ? "Download for Mac" : detectOs() === "linux" ? "Download for Linux" : "Download for Windows"}
-            icon="computer"
-            onPress={() => {
-              void Linking.openURL(RELEASES_URL).catch(() => undefined);
-            }}
-          />
+          <PrimaryButton label="Download Rook Node" icon="computer" onPress={startDownload} />
         }
       />
 
@@ -212,11 +209,20 @@ export function ComputersCard() {
       ) : null}
 
       {!pairingCode ? (
-        <Pressable accessibilityRole="button" onPress={() => setShowCodeFlow((value) => !value)} style={{ alignSelf: "flex-start" }}>
-          <Text style={{ color: colors.textFaint, fontSize: 12 }}>
-            {showCodeFlow ? "Hide pairing code" : "Advanced: pair with a one-time code"}
-          </Text>
-        </Pressable>
+        <View style={{ flexDirection: "row", gap: 16 }}>
+          <Pressable accessibilityRole="button" onPress={() => router.push("/download")} style={{ alignSelf: "flex-start" }}>
+            <Text style={{ color: colors.textFaint, fontSize: 12 }}>Other platforms</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setShowCodeFlow((value) => !value)}
+            style={{ alignSelf: "flex-start" }}
+          >
+            <Text style={{ color: colors.textFaint, fontSize: 12 }}>
+              {showCodeFlow ? "Hide pairing code" : "Advanced: pair with a one-time code"}
+            </Text>
+          </Pressable>
+        </View>
       ) : null}
 
       {showCodeFlow && !pairingCode ? (

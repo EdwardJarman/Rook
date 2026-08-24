@@ -6,6 +6,7 @@ import { getAiBackendStatus } from "../ai";
 import { handleChatGPTRoute } from "../ai/chatgpt";
 import { createContext } from "./context";
 import { registerOAuthRoutes } from "./oauth";
+import { registerNodeDownloadRoutes } from "../download-routes";
 import { registerNodeRelayRoutes } from "../node-relay-routes";
 import * as db from "../db";
 import { registerStorageProxy } from "./storageProxy";
@@ -51,6 +52,7 @@ export function createApp() {
 
   registerStorageProxy(app);
   registerOAuthRoutes(app);
+  registerNodeDownloadRoutes(app);
   registerNodeRelayRoutes(app, {
     consumePairingToken: (token) => db.consumePairingToken(token),
     markPairingTokenUsed: (token, nodeId) => db.markPairingTokenUsed(token, nodeId),
