@@ -80,11 +80,11 @@ jobs:
         run: |
           mkdir -p binaries resources/chromium
           if [ "${{ runner.os }}" = "Windows" ]; then
-            echo "placeholder" > binaries/rook-node-x86_64-pc-windows-msvc.exe
+            echo "placeholder" > binaries/rook-node-sidecar-x86_64-pc-windows-msvc.exe
           elif [ "${{ runner.os }}" = "macOS" ]; then
-            echo "placeholder" > binaries/rook-node-aarch64-apple-darwin
+            echo "placeholder" > binaries/rook-node-sidecar-aarch64-apple-darwin
           else
-            echo "placeholder" > binaries/rook-node-x86_64-unknown-linux-gnu
+            echo "placeholder" > binaries/rook-node-sidecar-x86_64-unknown-linux-gnu
           fi
           echo "placeholder" > resources/chromium/.keep
           ls -la binaries resources/chromium
