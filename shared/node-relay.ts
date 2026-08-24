@@ -17,6 +17,45 @@ export const PAIRING_TOKEN_TTL_MS = 10 * 60_000;
 export const COMMAND_TTL_MS = 15 * 60_000;
 export const APPROVAL_GRANT_TTL_MS = 5 * 60_000;
 export const DEFAULT_POLL_AFTER_MS = 3_000;
+/** How long a browser-pairing handshake may take from click to callback. */
+export const CONNECT_STATE_TTL_MS = 15 * 60_000;
+
+/** Normalizes a Rook server base URL (protocol required). */
+export function normalizeServerUrl(serverUrl: string): string {
+  const trimmed = serverUrl.trim().replace(/\/+$/, "");
+  if (!/^https?:\/\//.test(trimmed)) throw new Error("Server URL must start with http:// or https://");
+  return trimmed;
+}
+
+/** The web-app page that authenticates the owner and redirects back to the node. */
+export function buildConnectNodeUrl(input: { serverUrl: string; state: string; port: number }): string {
+  const url = new URL("/connect-node", normalizeServerUrl(input.serverUrl));
+  url.searchParams.set("state", input.state);
+  url.searchParams.set("port", String(input.port));
+  return url.toString();
+}
+
+/** The loopback callback the browser is redirected to after pairing is minted. */
+export function buildPairCallbackUrl(input: { port: number; token: string; state: string }): string {
+  return `http://localhost:${input.port}/pair?token=${encodeURIComponent(input.token)}&state=${encodeURIComponent(input.state)}`;
+}
+
+/** Validates the callback query the node receives from the browser redirect. */
+export function parsePairCallback(query: URLSearchParams): { token: string; state: string } | undefined {
+  const token = query.get("token");
+  const state = query.get("state");
+  if (!token || !state) return undefined;
+  if (!token.startsWith("rkp-") || token.length < 8 || token.length > 120) return undefined;
+  if (state.length < 16 || state.length > 128) return undefined;
+  return { token, state };
+}
+
+/** Only loopback ports in the ephemeral/user range may be redirected to. */
+export function validateConnectPort(port: unknown): number | undefined {
+  const n =
+    typeof port === "string" ? Number.parseInt(port, 10) : typeof port === "number" ? port : NaN;
+  return Number.isInteger(n) && n >= 1024 && n <= 65535 ? n : undefined;
+}
 
 /** One-time pairing token shown in the app; the node exchanges it for a credential. */
 export function generatePairingToken(): string {

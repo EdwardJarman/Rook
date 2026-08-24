@@ -93,7 +93,7 @@ export function ComputersCard() {
     <View style={{ gap: 12 }}>
       <SectionHeader
         title="Your computers"
-        caption="Run Bots on your own machine. Forever free — Rook never runs them for you."
+        caption="Run Bots on your own machine. Press “Connect account” in the Rook Node app — no codes needed."
         action={
           <PrimaryButton label="Pair a computer" icon="computer" onPress={startPairing} disabled={createPairing.isPending} />
         }

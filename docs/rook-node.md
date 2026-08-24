@@ -16,11 +16,16 @@ Rook app (phone) ──tRPC──▶ Rook server (Vercel) ◀──HTTPS poll ev
   hold long-lived WebSocket connections, so the node dials *out* on an interval
   (`POST /api/node/sync`): it posts results of finished commands and claims
   queued ones. Outbound-only means no port forwarding; NAT and firewalls just work.
-- **Pairing**: the app mints a one-time token (`rkp-…`, 10-minute TTL) via the
-  `nodes.createPairing` tRPC mutation. The user runs
-  `rook-node --pair <token> --server <url>`; the node exchanges the token for a
-  durable credential (`nodeId` + `nodeSecret`), stores it in its local SQLite,
-  and shows up as "online" in the app.
+- **Pairing (browser flow, primary)**: the node prints/opens
+  `http://localhost:37831/connect`. One button opens the Rook web app at
+  `/connect-node?state=…&port=…`; the signed-in owner's browser mints a
+  one-time token (`nodes.createPairing`) and redirects to
+  `http://localhost:<port>/pair?token=…&state=…`. The node validates the
+  single-use `state`, exchanges the token for a durable credential via
+  `/api/node/pair`, saves it, and the uplink starts immediately.
+- **Pairing (code flow, fallback)**: `nodes.createPairing` in the app mints a
+  `rkp-…` token; `rook-node --pair <token> [--server <url>]` exchanges it.
+  Useful for headless machines where no browser is available.
 - **Commands** are version-1 `CommandEnvelope`s built by the server
   (`buildCommandEnvelope`). Sensitive capabilities are queued as
   `awaiting_approval`, fire an Expo push alert to the owner's devices, and only

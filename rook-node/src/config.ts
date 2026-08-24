@@ -27,9 +27,14 @@ export interface RookConfig {
   requireAuth: boolean;
   /** Optional stable node secret override (tests). When omitted, generated. */
   nodeSecret?: string;
+  /** Rook server base URL for the uplink and browser pairing. */
+  serverUrl: string;
   /** When true, do not auto-launch Chromium (tests / headless CI). */
   noLaunch?: boolean;
 }
+
+/** Default Rook server. Override with ROOK_NODE_SERVER_URL or --server. */
+export const DEFAULT_SERVER_URL = "https://www.rook.lighting";
 
 /** Builds the default on-disk layout for the current machine. */
 export function defaultConfig(overrides: Partial<RookConfig> = {}): RookConfig {
@@ -40,6 +45,7 @@ export function defaultConfig(overrides: Partial<RookConfig> = {}): RookConfig {
     dataHome,
     gatewayPort: DEFAULT_GATEWAY_PORT,
     requireAuth: true,
+    serverUrl: process.env.ROOK_NODE_SERVER_URL?.trim() || DEFAULT_SERVER_URL,
     ...overrides,
   };
 }

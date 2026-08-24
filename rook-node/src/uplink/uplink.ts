@@ -11,6 +11,7 @@ import dns from "node:dns";
 
 import {
   DEFAULT_POLL_AFTER_MS,
+  normalizeServerUrl,
   type CloudApprovalGrant,
   type QueuedRelayCommand,
   type RelayResultReport,
@@ -85,13 +86,6 @@ async function pairAttempt(input: { serverUrl: string; pairingToken: string; nam
     nodeSecret: body.nodeSecret,
     pairedAt: new Date().toISOString(),
   };
-}
-
-export function normalizeServerUrl(serverUrl: string): string {
-  const trimmed = serverUrl.trim().replace(/\/+$/, "");
-  if (!/^https?:\/\//.test(trimmed)) throw new UplinkError("Server URL must start with http:// or https://");
-  // Loopback servers are allowed for development; production is HTTPS-only by deployment.
-  return trimmed;
 }
 
 /**

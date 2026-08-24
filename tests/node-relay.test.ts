@@ -6,11 +6,15 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildCommandEnvelope,
+  buildConnectNodeUrl,
+  buildPairCallbackUrl,
   generateNodeId,
   generatePairingToken,
   hashToken,
   isSensitiveCapability,
+  parsePairCallback,
   parseUplinkAuth,
+  validateConnectPort,
   validatePairRequest,
   validateSyncRequest,
   verifyStoredSecret,
@@ -114,5 +118,35 @@ describe("sensitive capability gate", () => {
       expect(isSensitiveCapability(capability)).toBe(false);
     }
     expect(generateNodeId().startsWith("node-")).toBe(true);
+  });
+});
+
+describe("browser pairing links", () => {
+  it("builds a connect URL carrying state and loopback port", () => {
+    const url = buildConnectNodeUrl({ serverUrl: "https://www.rook.lighting/", state: "s".repeat(48), port: 37831 });
+    expect(url).toBe("https://www.rook.lighting/connect-node?state=" + "s".repeat(48) + "&port=37831");
+  });
+
+  it("builds a loopback callback URL with encoded params", () => {
+    const url = buildPairCallbackUrl({ port: 37831, token: "rkp-a b", state: "s".repeat(48) });
+    expect(url.startsWith("http://localhost:37831/pair?token=rkp-a%20b&state=")).toBe(true);
+  });
+
+  it("parses only well-formed callbacks", () => {
+    const good = parsePairCallback(new URLSearchParams({ token: "rkp-abc123", state: "s".repeat(48) }));
+    expect(good?.token).toBe("rkp-abc123");
+    expect(parsePairCallback(new URLSearchParams({ token: "rkp-abc123", state: "short" }))).toBeUndefined();
+    expect(parsePairCallback(new URLSearchParams({ state: "s".repeat(48) }))).toBeUndefined();
+    expect(parsePairCallback(new URLSearchParams({ token: "garbage", state: "s".repeat(48) }))).toBeUndefined();
+    expect(parsePairCallback(new URLSearchParams({ token: "rkp-" + "x".repeat(200), state: "s".repeat(48) }))).toBeUndefined();
+  });
+
+  it("accepts only sane loopback ports", () => {
+    expect(validateConnectPort("37831")).toBe(37831);
+    expect(validateConnectPort(49152)).toBe(49152);
+    expect(validateConnectPort("80")).toBeUndefined();
+    expect(validateConnectPort("99999")).toBeUndefined();
+    expect(validateConnectPort("abc")).toBeUndefined();
+    expect(validateConnectPort(undefined)).toBeUndefined();
   });
 });
