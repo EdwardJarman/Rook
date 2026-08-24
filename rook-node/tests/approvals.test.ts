@@ -55,9 +55,10 @@ describe("approval manager", () => {
     expect(second?.state).toBe("approved");
   });
 
-  it("expires overdue approvals", () => {
-    const record = approvals.request({ ...base(), ttlMs: 1 });
-    // force the clock forward by resolving with expiry semantics
+  it("expires overdue approvals", async () => {
+    const record = approvals.request({ ...base(), ttlMs: 5 });
+    // Wait past the 5ms TTL — same-millisecond checks race on fast CI machines.
+    await new Promise((resolve) => setTimeout(resolve, 20));
     approvals.expireOverdue();
     const stored = db.getApproval(record.id);
     expect(stored?.state).toBe("expired");

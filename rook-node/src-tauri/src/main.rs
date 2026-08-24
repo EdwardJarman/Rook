@@ -69,7 +69,7 @@ fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn stop_sidecar(state: State<'_, SidecarState>) -> Result<(), String> {
     let child = state.child.lock().map_err(|_| "lock")?.take();
-    if let Some(mut child) = child {
+    if let Some(child) = child {
         child.kill().map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -81,6 +81,7 @@ fn open_connect(app: tauri::AppHandle) -> Result<(), String> {
     let url = "http://localhost:37831/connect";
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
         std::process::Command::new("cmd")
             .args(["/c", "start", "", url])
             .creation_flags(0x08000000) // CREATE_NO_WINDOW

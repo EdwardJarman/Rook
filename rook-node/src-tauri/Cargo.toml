@@ -4,10 +4,6 @@ version = "0.1.0"
 description = "Rook Node — supervised local Chromium runner sidecar supervisor."
 edition = "2021"
 
-[lib]
-name = "rook_node_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
-
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
