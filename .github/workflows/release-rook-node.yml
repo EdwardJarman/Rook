@@ -27,25 +27,25 @@ jobs:
             pkg-target: node24-win-x64
             rust-target: x86_64-pc-windows-msvc
             sidecar-ext: .exe
-            browsers-cache: "%LOCALAPPDATA%\\ms-playwright"
+            browsers-path: "$LOCALAPPDATA/ms-playwright"
           - label: macOS arm64
             os: macos-14
             pkg-target: node24-macos-arm64
             rust-target: aarch64-apple-darwin
             sidecar-ext: ""
-            browsers-cache: "~/Library/Caches/ms-playwright"
+            browsers-path: "$HOME/Library/Caches/ms-playwright"
           - label: macOS x64
             os: macos-13
             pkg-target: node24-macos-x64
             rust-target: x86_64-apple-darwin
             sidecar-ext: ""
-            browsers-cache: "~/Library/Caches/ms-playwright"
+            browsers-path: "$HOME/Library/Caches/ms-playwright"
           - label: Linux x64
             os: ubuntu-22.04
             pkg-target: node24-linux-x64
             rust-target: x86_64-unknown-linux-gnu
             sidecar-ext: ""
-            browsers-cache: "~/.cache/ms-playwright"
+            browsers-path: "$HOME/.cache/ms-playwright"
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -95,7 +95,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p src-tauri/resources
-          cp -r "${{ matrix.browsers-cache }}" src-tauri/resources/chromium
+          cp -r "${{ matrix.browsers-path }}" src-tauri/resources/chromium
           ls src-tauri/resources/chromium
 
       - name: Smoke-test the standalone sidecar
