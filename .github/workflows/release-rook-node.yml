@@ -89,7 +89,7 @@ jobs:
         run: node scripts/patch-inspector.mjs
 
       - name: Compile sidecar to standalone binary
-        run: pnpm dlx @yao-pkg/pkg build/index.cjs --config package.json -t ${{ matrix.pkg-target }} --output src-tauri/binaries/rook-node-${{ matrix.rust-target }}${{ matrix.sidecar-ext }}
+        run: pnpm dlx @yao-pkg/pkg build/index.cjs --config package.json -t ${{ matrix.pkg-target }} --output src-tauri/binaries/rook-node-sidecar-${{ matrix.rust-target }}${{ matrix.sidecar-ext }}
 
       - name: Stage bundled Chromium as a Tauri resource
         shell: bash
@@ -104,7 +104,7 @@ jobs:
           export PLAYWRIGHT_BROWSERS_PATH="$PWD/src-tauri/resources/chromium"
           PORT=$((20000 + RANDOM % 20000))
           EXT="${{ matrix.sidecar-ext }}"
-          ./src-tauri/binaries/rook-node-${{ matrix.rust-target }}${EXT} --headless --no-launch --no-uplink --port $PORT &
+          ./src-tauri/binaries/rook-node-sidecar-${{ matrix.rust-target }}${EXT} --headless --no-launch --no-uplink --port $PORT &
           SIDECAR_PID=$!
           for i in $(seq 1 20); do
             if curl -fsS "http://127.0.0.1:$PORT/healthz" > /dev/null 2>&1; then

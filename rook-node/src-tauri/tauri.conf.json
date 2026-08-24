@@ -29,7 +29,7 @@
     "category": "Utility",
     "shortDescription": "Rook Node — the forever-free computer runner for your Bots.",
     "longDescription": "Rook Node runs a supervised, version-pinned Chromium on the user's own computer. It provides a dedicated Rook profile, per-Bot tab groups, a control gateway, durable local state, a shared workspace, and live-screen input control. The app remains the control surface; the user's own machine becomes the Bot computer.",
-    "externalBin": ["binaries/rook-node"],
+    "externalBin": ["binaries/rook-node-sidecar"],
     "resources": ["resources/chromium"]
   },
   "plugins": {}

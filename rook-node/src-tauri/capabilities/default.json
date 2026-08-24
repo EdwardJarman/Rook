@@ -16,7 +16,7 @@
       "identifier": "shell:allow-execute",
       "allow": [
         {
-          "name": "binaries/rook-node",
+          "name": "binaries/rook-node-sidecar",
           "sidecar": true
         }
       ]

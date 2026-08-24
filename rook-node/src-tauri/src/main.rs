@@ -43,7 +43,7 @@ fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
     let browsers_dir = browsers_path(app)?;
     let command = app
         .shell()
-        .sidecar("binaries/rook-node")
+        .sidecar("binaries/rook-node-sidecar")
         .map_err(|e| e.to_string())?
         .args(["--headless"])
         .env("PLAYWRIGHT_BROWSERS_PATH", &browsers_dir);
