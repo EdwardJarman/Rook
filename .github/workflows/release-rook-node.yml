@@ -77,7 +77,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libfuse2
 
       - name: Install dependencies (downloads pinned Chromium via postinstall)
         run: pnpm install --frozen-lockfile
@@ -118,7 +118,19 @@ jobs:
           exit 1
 
       - name: Build Tauri installers
-        run: pnpm dlx @tauri-apps/cli@2 build --target ${{ matrix.rust-target }}
+        id: tauribuild
+        shell: bash
+        run: |
+          pnpm dlx @tauri-apps/cli@2 build --target ${{ matrix.rust-target }} 2>&1 | tee /tmp/tauri-build.log
+          exit ${PIPESTATUS[0]}
+        continue-on-error: true
+
+      - name: Surface Tauri build errors
+        if: steps.tauribuild.outcome == 'failure'
+        shell: bash
+        run: |
+          grep -aE "error|failed|Error" /tmp/tauri-build.log | tail -6 | while IFS= read -r line; do echo "::error::$line"; done
+          exit 1
 
       - name: Upload artifacts (workflow dispatch)
         if: github.event_name == 'workflow_dispatch'
