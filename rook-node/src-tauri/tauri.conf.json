@@ -4,34 +4,33 @@
   "version": "0.1.0",
   "identifier": "com.rook.node",
   "build": {
-    "beforeDevCommand": "",
-    "beforeBuildCommand": "pnpm --dir ../ build",
-    "devUrl": "http://localhost:1420",
     "frontendDist": "../web"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "title": "Rook Node",
-        "width": 980,
-        "height": 680,
-        "minWidth": 720,
-        "minHeight": 520,
+        "width": 560,
+        "height": 520,
+        "minWidth": 420,
+        "minHeight": 420,
         "resizable": true,
         "center": true
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; style-src 'unsafe-inline'"
     }
   },
   "bundle": {
     "active": true,
     "targets": ["nsis", "appimage", "dmg"],
     "category": "Utility",
-    "externalBin": ["binaries/rook-node"],
     "shortDescription": "Rook Node — the forever-free computer runner for your Bots.",
-    "longDescription": "Rook Node runs a supervised, version-pinned Chromium on the user's own computer. It provides a dedicated Rook profile, per-Bot tab groups, a control gateway, durable local state, a shared workspace, and live-screen input control. The app remains the control surface; the user's own machine becomes the Bot computer."
+    "longDescription": "Rook Node runs a supervised, version-pinned Chromium on the user's own computer. It provides a dedicated Rook profile, per-Bot tab groups, a control gateway, durable local state, a shared workspace, and live-screen input control. The app remains the control surface; the user's own machine becomes the Bot computer.",
+    "externalBin": ["binaries/rook-node"],
+    "resources": ["resources/chromium"]
   },
   "plugins": {}
 }

@@ -1,0 +1,81 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Rook Node</title>
+    <style>
+      body {
+        font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+        background: #f6f5f1;
+        color: #1a1d23;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        margin: 0;
+      }
+      .card {
+        background: #fff;
+        border: 1px solid #e9e8e2;
+        border-radius: 20px;
+        padding: 34px 38px;
+        max-width: 420px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.06);
+        text-align: center;
+      }
+      h1 { font-size: 20px; margin: 0 0 6px; }
+      p { font-size: 14px; line-height: 1.5; margin: 8px 0; color: #4a4d55; }
+      .muted { color: #8a887f; font-size: 12.5px; }
+      .btn {
+        display: inline-block; margin-top: 14px; background: #1a1d23; color: #fff;
+        text-decoration: none; padding: 11px 22px; border-radius: 12px;
+        font-weight: 600; font-size: 14px; cursor: pointer; border: none;
+      }
+      .btn[disabled] { opacity: 0.5; cursor: default; }
+      .pill { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px; margin-top: 10px; }
+      .on { background: #e4f3ea; color: #1d7a46; }
+      .off { background: #efeee9; color: #6b6a63; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>Rook Node</h1>
+      <p>Your computer, as a Bot computer for Rook. Forever free.</p>
+      <span id="status" class="pill off">Starting…</span>
+      <div><button id="connect" class="btn" disabled>Connect account</button></div>
+      <p class="muted" id="hint">Connecting opens your browser and comes right back.</p>
+    </div>
+    <script>
+      const { invoke } = window.__TAURI__.core;
+      const statusEl = document.getElementById("status");
+      const connectBtn = document.getElementById("connect");
+
+      async function refresh() {
+        try {
+          const health = JSON.parse(await invoke("health"));
+          if (health.includes("running")) {
+            statusEl.textContent = "Running";
+            statusEl.className = "pill on";
+            connectBtn.disabled = false;
+          } else {
+            statusEl.textContent = health;
+            statusEl.className = "pill off";
+          }
+        } catch (e) {
+          statusEl.textContent = "Sidecar unavailable";
+        }
+      }
+
+      connectBtn.addEventListener("click", async () => {
+        connectBtn.disabled = true;
+        try {
+          await invoke("open_connect");
+        } catch (e) {}
+        setTimeout(() => { connectBtn.disabled = false; }, 1500);
+      });
+
+      refresh();
+      setInterval(refresh, 3000);
+    </script>
+  </body>
+</html>

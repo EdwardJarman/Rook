@@ -11,8 +11,18 @@
   "engines": {
     "node": ">=22.5.0"
   },
+  "pkg": {
+    "assets": [
+      "node_modules/**/playwright/**",
+      "node_modules/**/playwright-core/**",
+      "node_modules/**/ws/**"
+    ]
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "bundle:js": "esbuild src/index.ts --bundle --platform=node --format=cjs --outfile=build/index.cjs --external:playwright --external:ws --log-level=error",
+    "prebundle:exe": "node scripts/patch-inspector.mjs",
+    "bundle:exe": "pnpm run bundle:js && pnpm dlx @yao-pkg/pkg build/index.cjs --config package.json -t node24-win-x64,node24-macos-arm64,node24-macos-x64,node24-linux-x64 --output build/rook-node",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "test": "vitest run",
@@ -27,6 +37,7 @@
   "devDependencies": {
     "@types/node": "^22.19.3",
     "@types/ws": "^8.18.1",
+    "esbuild": "0.25.12",
     "tsx": "^4.21.0",
     "typescript": "~5.9.3",
     "vitest": "^2.1.9"

@@ -12,7 +12,12 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { chromium, type BrowserContext, type Browser } from "playwright";
 
-const require = createRequire(import.meta.url);
+const require = createRequire(
+  (import.meta as { url?: string }).url ?? "file:///" + process.cwd().replace(/\\/g, "/") + "/",
+);
+
+/** True when running inside a @yao-pkg/pkg standalone executable. */
+const runningAsSingleExe = Boolean((process as { pkg?: unknown }).pkg);
 
 import type { RookConfig } from "../config.js";
 import { profileDir } from "../config.js";
@@ -187,6 +192,13 @@ export async function ensurePinnedChromium(log: (message: string) => void = () =
 }
 
 function downloadChromium(log: (message: string) => void): Promise<void> {
+  if (runningAsSingleExe) {
+    return Promise.reject(
+      new Error(
+        "The bundled Chromium is missing. Reinstall Rook Node, or point PLAYWRIGHT_BROWSERS_PATH at the browsers folder that ships with it.",
+      ),
+    );
+  }
   log(`[rook-node] Downloading pinned Chromium (${PINNED_PLAYWRIGHT}); first run only…`);
   return new Promise((resolve, reject) => {
     const child = spawn(

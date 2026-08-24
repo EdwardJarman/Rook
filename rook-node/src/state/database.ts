@@ -32,8 +32,11 @@ import type { RookConfig } from "../config.js";
 
 // node:sqlite is still flagged experimental in some Node majors; load it through
 // createRequire so neither bundlers nor test runners try to resolve it as an
-// external package.
-const require = createRequire(import.meta.url);
+// external package. Bundlers that rewrite import.meta (esbuild CJS) leave it
+// undefined, so fall back to the process cwd as the resolution base.
+const require = createRequire(
+  (import.meta as { url?: string }).url ?? "file:///" + process.cwd().replace(/\\/g, "/") + "/",
+);
 const { DatabaseSync: SqliteDatabaseSync } = require("node:sqlite") as { DatabaseSync: typeof DatabaseSync };
 
 const SCHEMA = `
