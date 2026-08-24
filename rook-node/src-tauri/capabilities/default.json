@@ -9,17 +9,6 @@
     "core:event:default",
     "core:window:default",
     "core:app:default",
-    "core:resources:default",
-    "core:menu:default",
-    "core:tray:default",
-    {
-      "identifier": "shell:allow-execute",
-      "allow": [
-        {
-          "name": "binaries/rook-node-sidecar",
-          "sidecar": true
-        }
-      ]
-    }
+    "core:resources:default"
   ]
 }

@@ -6,15 +6,18 @@
 //   - sets PLAYWRIGHT_BROWSERS_PATH to the bundled Chromium resource,
 //   - exposes health/start/stop + "Connect account" (opens the local pairing
 //     page in the system browser).
+//
+// The sidecar is spawned via std::process::Command at an explicit, verified
+// path (next to the app executable). The shell plugin's sidecar resolution
+// produced "path not found" inside installed builds, so we don't rely on it.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use tauri::{Manager, State};
-use tauri_plugin_shell::process::{CommandChild, CommandEvent};
-use tauri_plugin_shell::ShellExt;
 
 struct SidecarState {
-    child: Mutex<Option<CommandChild>>,
+    child: Mutex<Option<Child>>,
     /// Why the last spawn attempt failed, for the status UI.
     last_error: Mutex<Option<String>>,
 }
@@ -24,7 +27,7 @@ fn health(state: State<'_, SidecarState>) -> Result<String, String> {
     let guard = state.child.lock().map_err(|_| "lock")?;
     let error = state.last_error.lock().map_err(|_| "lock")?.clone();
     let body = match guard.as_ref() {
-        Some(child) => serde_json::json!({ "running": true, "pid": child.pid(), "error": error }),
+        Some(child) => serde_json::json!({ "running": true, "pid": child.id(), "error": error }),
         None => serde_json::json!({ "running": false, "error": error }),
     };
     Ok(body.to_string())
@@ -35,56 +38,11 @@ fn start_sidecar(app: tauri::AppHandle) -> Result<(), String> {
     spawn_sidecar(&app)
 }
 
-fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
-    let state: State<'_, SidecarState> = app.state();
-    {
-        let existing = state.child.lock().map_err(|_| "lock")?;
-        if existing.is_some() {
-            return Ok(());
-        }
-    }
-
-    let result = (|| -> Result<(), String> {
-        let browsers_dir = browsers_path(app)?;
-        if !std::path::Path::new(&browsers_dir).exists() {
-            return Err(format!("bundled Chromium folder missing at {}", browsers_dir));
-        }
-        let command = app
-            .shell()
-            .sidecar("binaries/rook-node-sidecar")
-            .map_err(|e| e.to_string())?
-            .args(["--headless"])
-            .env("PLAYWRIGHT_BROWSERS_PATH", &browsers_dir);
-
-        let (mut rx, child) = command.spawn().map_err(|e| format!("spawn failed: {}", e))?;
-        *state.child.lock().map_err(|_| "lock")? = Some(child);
-
-        tauri::async_runtime::spawn(async move {
-            while let Some(event) = rx.recv().await {
-                match event {
-                    CommandEvent::Stdout(line) => log::info!("[sidecar] {}", String::from_utf8_lossy(&line)),
-                    CommandEvent::Stderr(line) => log::error!("[sidecar] {}", String::from_utf8_lossy(&line)),
-                    CommandEvent::Terminated(payload) => {
-                        log::warn!("[sidecar] terminated code={:?}", payload.code);
-                    }
-                    _ => {}
-                }
-            }
-        });
-        Ok(())
-    })();
-
-    if let Err(message) = &result {
-        *state.last_error.lock().map_err(|_| "lock")? = Some(message.clone());
-    }
-    result
-}
-
 #[tauri::command]
 fn stop_sidecar(state: State<'_, SidecarState>) -> Result<(), String> {
     let child = state.child.lock().map_err(|_| "lock")?.take();
-    if let Some(child) = child {
-        child.kill().map_err(|e| e.to_string())?;
+    if let Some(mut child) = child {
+        let _ = child.kill();
     }
     Ok(())
 }
@@ -104,37 +62,121 @@ fn open_connect(app: tauri::AppHandle) -> Result<(), String> {
     }
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("open")
-            .arg(url)
-            .spawn()
-            .map_err(|e| e.to_string())?;
+        std::process::Command::new("open").arg(url).spawn().map_err(|e| e.to_string())?;
     }
     #[cfg(target_os = "linux")]
     {
-        std::process::Command::new("xdg-open")
-            .arg(url)
-            .spawn()
-            .map_err(|e| e.to_string())?;
+        std::process::Command::new("xdg-open").arg(url).spawn().map_err(|e| e.to_string())?;
     }
     let _ = &app;
     Ok(())
 }
 
-/// Bundled Chromium lives under the app's resource directory.
-fn browsers_path(app: &tauri::AppHandle) -> Result<String, String> {
-    let dir = app
-        .path()
-        .resource_dir()
-        .map_err(|e| e.to_string())?
-        .join("resources")
-        .join("chromium");
-    Ok(dir.to_string_lossy().to_string())
+/// The sidecar ships next to the app executable (Tauri externalBin).
+fn sidecar_path() -> Result<std::path::PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {}", e))?;
+    let dir = exe.parent().ok_or_else(|| "executable has no directory".to_string())?;
+    #[cfg(target_os = "windows")]
+    let name = "rook-node-sidecar.exe";
+    #[cfg(not(target_os = "windows"))]
+    let name = "rook-node-sidecar";
+    Ok(dir.join(name))
+}
+
+/// Bundled Chromium lives under the app's resource directory. Some layouts
+/// (dev builds, portable runs) place it next to the executable instead, so
+/// accept whichever exists.
+fn browsers_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        candidates.push(resource_dir.join("resources").join("chromium"));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("resources").join("chromium"));
+        }
+    }
+    for candidate in &candidates {
+        if candidate.exists() {
+            return Ok(candidate.clone());
+        }
+    }
+    Err(format!(
+        "bundled Chromium folder not found; tried {}",
+        candidates
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join("; ")
+    ))
+}
+
+fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
+    let state: State<'_, SidecarState> = app.state();
+    {
+        let existing = state.child.lock().map_err(|_| "lock")?;
+        if existing.is_some() {
+            return Ok(());
+        }
+    }
+
+    let result = (|| -> Result<(), String> {
+        let sidecar = sidecar_path()?;
+        if !sidecar.exists() {
+            return Err(format!("sidecar binary not found at {}", sidecar.display()));
+        }
+        let browsers_dir = browsers_path(app)?;
+        if !browsers_dir.exists() {
+            return Err(format!(
+                "bundled Chromium folder missing at {}",
+                browsers_dir.display()
+            ));
+        }
+
+        let mut child = Command::new(&sidecar)
+            .arg("--headless")
+            .env("PLAYWRIGHT_BROWSERS_PATH", &browsers_dir)
+            .current_dir(
+                sidecar
+                    .parent()
+                    .ok_or_else(|| "sidecar has no parent directory".to_string())?,
+            )
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("spawn failed: {}", e))?;
+
+        if let Some(stdout) = child.stdout.take() {
+            std::thread::spawn(move || {
+                use std::io::BufRead;
+                for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+                    log::info!("[sidecar] {}", line);
+                }
+            });
+        }
+        if let Some(stderr) = child.stderr.take() {
+            std::thread::spawn(move || {
+                use std::io::BufRead;
+                for line in std::io::BufReader::new(stderr).lines().map_while(Result::ok) {
+                    log::error!("[sidecar] {}", line);
+                }
+            });
+        }
+
+        *state.child.lock().map_err(|_| "lock")? = Some(child);
+        Ok(())
+    })();
+
+    if let Err(message) = &result {
+        eprintln!("[shell] sidecar spawn failed: {}", message);
+        *state.last_error.lock().map_err(|_| "lock")? = Some(message.clone());
+    }
+    result
 }
 
 fn main() {
     env_logger::init();
     tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
         .manage(SidecarState {
             child: Mutex::new(None),
             last_error: Mutex::new(None),
@@ -147,7 +189,7 @@ fn main() {
         ])
         .setup(|app| {
             let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
+            std::thread::spawn(move || {
                 let _ = spawn_sidecar(&handle);
             });
             Ok(())
