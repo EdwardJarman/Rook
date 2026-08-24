@@ -43,26 +43,33 @@
       <p>Your computer, as a Bot computer for Rook. Forever free.</p>
       <span id="status" class="pill off">Starting…</span>
       <div><button id="connect" class="btn" disabled>Connect account</button></div>
+      <p class="muted" id="error"></p>
       <p class="muted" id="hint">Connecting opens your browser and comes right back.</p>
     </div>
     <script>
       const { invoke } = window.__TAURI__.core;
       const statusEl = document.getElementById("status");
       const connectBtn = document.getElementById("connect");
+      const errorEl = document.getElementById("error");
 
       async function refresh() {
         try {
           const health = JSON.parse(await invoke("health"));
-          if (health.includes("running")) {
+          if (health.running) {
             statusEl.textContent = "Running";
             statusEl.className = "pill on";
             connectBtn.disabled = false;
+            errorEl.textContent = "";
           } else {
-            statusEl.textContent = health;
+            statusEl.textContent = "Not running";
             statusEl.className = "pill off";
+            errorEl.textContent = health.error ? "Reason: " + health.error : "";
+            connectBtn.disabled = false;
           }
         } catch (e) {
-          statusEl.textContent = "Sidecar unavailable";
+          statusEl.textContent = "Shell error";
+          statusEl.className = "pill off";
+          errorEl.textContent = String(e);
         }
       }
 

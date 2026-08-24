@@ -15,15 +15,19 @@ use tauri_plugin_shell::ShellExt;
 
 struct SidecarState {
     child: Mutex<Option<CommandChild>>,
+    /// Why the last spawn attempt failed, for the status UI.
+    last_error: Mutex<Option<String>>,
 }
 
 #[tauri::command]
 fn health(state: State<'_, SidecarState>) -> Result<String, String> {
     let guard = state.child.lock().map_err(|_| "lock")?;
-    Ok(match guard.as_ref() {
-        Some(child) => format!("running pid={}", child.pid()),
-        None => "not running".to_string(),
-    })
+    let error = state.last_error.lock().map_err(|_| "lock")?.clone();
+    let body = match guard.as_ref() {
+        Some(child) => serde_json::json!({ "running": true, "pid": child.pid(), "error": error }),
+        None => serde_json::json!({ "running": false, "error": error }),
+    };
+    Ok(body.to_string())
 }
 
 #[tauri::command]
@@ -40,30 +44,40 @@ fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
         }
     }
 
-    let browsers_dir = browsers_path(app)?;
-    let command = app
-        .shell()
-        .sidecar("binaries/rook-node-sidecar")
-        .map_err(|e| e.to_string())?
-        .args(["--headless"])
-        .env("PLAYWRIGHT_BROWSERS_PATH", &browsers_dir);
-
-    let (mut rx, child) = command.spawn().map_err(|e| e.to_string())?;
-    *state.child.lock().map_err(|_| "lock")? = Some(child);
-
-    tauri::async_runtime::spawn(async move {
-        while let Some(event) = rx.recv().await {
-            match event {
-                CommandEvent::Stdout(line) => log::info!("[sidecar] {}", String::from_utf8_lossy(&line)),
-                CommandEvent::Stderr(line) => log::error!("[sidecar] {}", String::from_utf8_lossy(&line)),
-                CommandEvent::Terminated(payload) => {
-                    log::warn!("[sidecar] terminated code={:?}", payload.code);
-                }
-                _ => {}
-            }
+    let result = (|| -> Result<(), String> {
+        let browsers_dir = browsers_path(app)?;
+        if !std::path::Path::new(&browsers_dir).exists() {
+            return Err(format!("bundled Chromium folder missing at {}", browsers_dir));
         }
-    });
-    Ok(())
+        let command = app
+            .shell()
+            .sidecar("binaries/rook-node-sidecar")
+            .map_err(|e| e.to_string())?
+            .args(["--headless"])
+            .env("PLAYWRIGHT_BROWSERS_PATH", &browsers_dir);
+
+        let (mut rx, child) = command.spawn().map_err(|e| format!("spawn failed: {}", e))?;
+        *state.child.lock().map_err(|_| "lock")? = Some(child);
+
+        tauri::async_runtime::spawn(async move {
+            while let Some(event) = rx.recv().await {
+                match event {
+                    CommandEvent::Stdout(line) => log::info!("[sidecar] {}", String::from_utf8_lossy(&line)),
+                    CommandEvent::Stderr(line) => log::error!("[sidecar] {}", String::from_utf8_lossy(&line)),
+                    CommandEvent::Terminated(payload) => {
+                        log::warn!("[sidecar] terminated code={:?}", payload.code);
+                    }
+                    _ => {}
+                }
+            }
+        });
+        Ok(())
+    })();
+
+    if let Err(message) = &result {
+        *state.last_error.lock().map_err(|_| "lock")? = Some(message.clone());
+    }
+    result
 }
 
 #[tauri::command]
@@ -123,6 +137,7 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .manage(SidecarState {
             child: Mutex::new(None),
+            last_error: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             health,
