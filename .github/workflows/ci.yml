@@ -41,20 +41,19 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: npx playwright install chromium --with-deps
       - run: pnpm typecheck
-      # GitHub reporter surfaces failures as public annotations.
       - name: Test
         id: nodetest
         shell: bash
         run: |
-          pnpm test -- --reporter=github 2>&1 | tee /tmp/vitest.log
+          pnpm test 2>&1 | tee /tmp/vitest.log
           exit ${PIPESTATUS[0]}
         continue-on-error: true
       - name: Surface test failures
         if: steps.nodetest.outcome == 'failure'
         shell: bash
         run: |
-          grep -E "FAIL|Error:|AssertionError" /tmp/vitest.log | head -5 | while IFS= read -r line; do echo "::error::$line"; done
-          tail -5 /tmp/vitest.log | while IFS= read -r line; do echo "::error::$line"; done
+          grep -aE "FAIL|AssertionError|Error:|✗|×" /tmp/vitest.log | head -6 | while IFS= read -r line; do echo "::error::$line"; done
+          tail -4 /tmp/vitest.log | while IFS= read -r line; do echo "::error::$line"; done
           exit 1
 
   tauri-shell:
@@ -98,5 +97,5 @@ jobs:
         if: steps.cargochk.outcome == 'failure'
         shell: bash
         run: |
-          grep -E "^error" /tmp/cargo-check.log | head -8 | while IFS= read -r line; do echo "::error::$line"; done
+          tail -8 /tmp/cargo-check.log | while IFS= read -r line; do echo "::error::$line"; done
           exit 1
