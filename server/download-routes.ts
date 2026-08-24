@@ -39,17 +39,37 @@ export function pickNodeAssetForUserAgent(ua: string | undefined): NodeAssetTarg
 
 export function registerNodeDownloadRoutes(app: import("express").Express): void {
   app.get("/api/download/node", (req, res) => {
-    const picked = pickNodeAssetForUserAgent(req.headers["user-agent"]);
-    if (picked === "page") {
-      res.redirect(302, DOWNLOAD_PAGE);
-      return;
-    }
-    res.redirect(302, `${RELEASES_DOWNLOAD_BASE}/${NODE_ASSETS[picked]}`);
+    void serveDownload(req, res);
   });
 
   app.get("/api/download/node/latest", (_req, res) => {
     void serveLatestManifest(res);
   });
+}
+
+/**
+ * Redirects to the platform installer. If the asset isn't published yet
+ * (mid-release window), sends the user to the download page with a pending
+ * hint instead of a GitHub 404.
+ */
+async function serveDownload(req: import("express").Request, res: import("express").Response): Promise<void> {
+  const picked = pickNodeAssetForUserAgent(req.headers["user-agent"]);
+  if (picked === "page") {
+    res.redirect(302, DOWNLOAD_PAGE);
+    return;
+  }
+  const assetUrl = `${RELEASES_DOWNLOAD_BASE}/${NODE_ASSETS[picked]}`;
+  try {
+    const head = await fetch(assetUrl, { method: "HEAD", redirect: "follow", signal: AbortSignal.timeout(8_000) });
+    if (!head.ok) {
+      res.redirect(302, `${DOWNLOAD_PAGE}?pending=${picked}`);
+      return;
+    }
+  } catch {
+    // GitHub unreachable from the server: send the user through anyway —
+    // their browser may reach it fine.
+  }
+  res.redirect(302, assetUrl);
 }
 
 let manifestCache: { body: unknown; expiresAt: number } | null = null;

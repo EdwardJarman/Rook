@@ -1,6 +1,7 @@
 import { useRouter } from "expo-router";
 import type { ReactNode } from "react";
 import { Platform, Pressable, Text, View } from "react-native";
+import { useLocalSearchParams } from "expo-router";
 
 import { Card, ScreenHeader, StatusPill } from "@/components/rook-primitives";
 import { ScreenContainer } from "@/components/screen-container";
@@ -25,6 +26,8 @@ function open(url: string): void {
 export default function DownloadNodeScreen() {
   const { colors } = useRookTheme();
   const { back } = useRouter();
+  const params = useLocalSearchParams<{ pending?: string | string[] }>();
+  const pending = Array.isArray(params.pending) ? params.pending[0] : params.pending;
 
   const PlatformButton = ({ label, url, note }: { label: string; url: string; note: string }): ReactNode => (
     <Card style={{ gap: 6 }}>
@@ -40,6 +43,15 @@ export default function DownloadNodeScreen() {
       <View style={{ flex: 1, alignItems: "center", padding: 24 }}>
         <View style={{ width: "100%", maxWidth: 520, gap: 16 }}>
           <ScreenHeader title="Download Rook Node" lead="Your computer, as a Bot computer. Forever free." />
+
+          {pending ? (
+            <Card style={{ gap: 6, flexDirection: "row", alignItems: "center" }}>
+              <StatusPill label="Publishing" tone="amber" />
+              <Text style={{ color: colors.text, fontSize: 12.5, flex: 1 }}>
+                The {pending} installer is being published right now — it will appear below within a few minutes.
+              </Text>
+            </Card>
+          ) : null}
 
           <PlatformButton
             label="Windows"
