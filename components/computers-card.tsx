@@ -1,6 +1,6 @@
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import { useState } from "react";
-import { Platform, Pressable, Text, View } from "react-native";
+import { Linking, Platform, Pressable, Text, View } from "react-native";
 
 import { Card, PrimaryButton, SectionHeader, StatusPill } from "@/components/rook-primitives";
 import { useRookTheme } from "@/lib/ui";
@@ -10,6 +10,18 @@ import { trpc } from "@/lib/trpc";
 function serverOrigin(): string {
   if (Platform.OS === "web" && typeof window !== "undefined") return window.location.origin;
   return process.env.EXPO_PUBLIC_API_ORIGIN?.replace(/\/$/, "") || "https://www.rook.lighting";
+}
+
+/** Public installer downloads live on GitHub Releases. */
+const RELEASES_URL = "https://github.com/EdwardJarman/Rook/releases/latest";
+
+/** Best-effort OS detection so the download button speaks the user's platform. */
+function detectOs(): "windows" | "mac" | "linux" {
+  if (Platform.OS !== "web" || typeof navigator === "undefined") return "windows";
+  const ua = navigator.userAgent;
+  if (ua.includes("Mac")) return "mac";
+  if (ua.includes("Linux") && !ua.includes("Android")) return "linux";
+  return "windows";
 }
 function confirmRemoval(name: string, onConfirm: () => void): void {
   const message = `Remove ${name}? This computer will immediately lose access to your account until it is paired again.`;
@@ -43,6 +55,7 @@ export function ComputersCard() {
   const decideCommand = trpc.nodes.decideCommand.useMutation();
   const [pairingCode, setPairingCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showCodeFlow, setShowCodeFlow] = useState(false);
 
   const pendingApprovals = (commands.data ?? []).filter((command) => command.state === "awaiting_approval");
 
@@ -93,9 +106,15 @@ export function ComputersCard() {
     <View style={{ gap: 12 }}>
       <SectionHeader
         title="Your computers"
-        caption="Run Bots on your own machine. Press “Connect account” in the Rook Node app — no codes needed."
+        caption="Run Bots on your own machine. Download Rook Node, press Connect — done."
         action={
-          <PrimaryButton label="Pair a computer" icon="computer" onPress={startPairing} disabled={createPairing.isPending} />
+          <PrimaryButton
+            label={detectOs() === "mac" ? "Download for Mac" : detectOs() === "linux" ? "Download for Linux" : "Download for Windows"}
+            icon="computer"
+            onPress={() => {
+              void Linking.openURL(RELEASES_URL).catch(() => undefined);
+            }}
+          />
         }
       />
 
@@ -160,7 +179,7 @@ export function ComputersCard() {
             <StatusPill label="Expires in 10 min" tone="amber" />
           </View>
           <Text style={{ color: colors.textFaint, fontSize: 12.5, lineHeight: 18 }}>
-            In the rook-node folder on your computer, run:
+            Advanced — for computers running Rook Node from source. In the rook-node folder, run:
           </Text>
           <Pressable accessibilityRole="button" onLongPress={copyCode}>
             <View
@@ -187,8 +206,25 @@ export function ComputersCard() {
           <MaterialIcons name="devices" size={22} color={colors.textFaint} />
           <Text style={{ color: colors.text, fontWeight: "600", fontSize: 13.5 }}>No computers yet</Text>
           <Text style={{ color: colors.textFaint, fontSize: 12, textAlign: "center" }}>
-            Pair your Windows, macOS, or Linux machine and your Bots can browse it safely under your control.
+            Download Rook Node on your Windows, macOS, or Linux machine, open it, and press “Connect account”. Your Bots browse safely under your control.
           </Text>
+        </Card>
+      ) : null}
+
+      {!pairingCode ? (
+        <Pressable accessibilityRole="button" onPress={() => setShowCodeFlow((value) => !value)} style={{ alignSelf: "flex-start" }}>
+          <Text style={{ color: colors.textFaint, fontSize: 12 }}>
+            {showCodeFlow ? "Hide pairing code" : "Advanced: pair with a one-time code"}
+          </Text>
+        </Pressable>
+      ) : null}
+
+      {showCodeFlow && !pairingCode ? (
+        <Card style={{ gap: 10, alignItems: "flex-start" }}>
+          <Text style={{ color: colors.textFaint, fontSize: 12.5, lineHeight: 18 }}>
+            For headless machines where the browser flow isn't available.
+          </Text>
+          <PrimaryButton label="Mint a pairing code" onPress={startPairing} disabled={createPairing.isPending} />
         </Card>
       ) : null}
 
