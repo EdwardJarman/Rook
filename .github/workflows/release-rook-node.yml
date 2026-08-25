@@ -1,6 +1,6 @@
 name: Release Rook Node
 
-# Builds signed-path installers (unsigned binaries; see docs) for Windows,
+# Builds installers (unsigned binaries; see docs) for Windows,
 # macOS (arm64 + x64), and Linux, and attaches them to a GitHub Release.
 #
 # Trigger:
@@ -179,6 +179,7 @@ jobs:
             **Linux**: `Rook-Node-x86_64.AppImage`; `chmod +x` and run.
 
             After opening the app, press **Connect account** and sign in — that pairs this computer with your Rook account.
+
   install-test:
     # Sandbox end-to-end install test: silently install the built NSIS
     # installer on a clean Windows runner, launch the app, and verify the
@@ -214,37 +215,37 @@ jobs:
         shell: pwsh
         run: |
           $candidates = @(
-          "$env:LOCALAPPDATA\Programs\Rook Node",
-          "$env:ProgramFiles\Rook Node"
-        ) | Where-Object { Test-Path $_ }
-        if (-not $candidates) { Write-Host "::error::install directory not found"; exit 1 }
-        $dir = $candidates[0]
-        echo "dir=$dir" >> $env:GITHUB_OUTPUT
-        foreach ($f in @("Rook Node.exe", "rook-node-sidecar.exe")) {
-          if (-not (Test-Path (Join-Path $dir $f))) { Write-Host "::error::missing $f in $dir"; exit 1 }
-        }
-        $chromium = Get-ChildItem (Join-Path $dir "resources\chromium") -Directory -ErrorAction SilentlyContinue
-        if (-not $chromium) { Write-Host "::error::no chromium resources installed"; exit 1 }
-        Write-Host "layout ok: $dir"
+            "$env:LOCALAPPDATA\Programs\Rook Node",
+            "$env:ProgramFiles\Rook Node"
+          ) | Where-Object { Test-Path $_ }
+          if (-not $candidates) { Write-Host "::error::install directory not found"; exit 1 }
+          $dir = $candidates[0]
+          echo "dir=$dir" >> $env:GITHUB_OUTPUT
+          foreach ($f in @("Rook Node.exe", "rook-node-sidecar.exe")) {
+            if (-not (Test-Path (Join-Path $dir $f))) { Write-Host "::error::missing $f in $dir"; exit 1 }
+          }
+          $chromium = Get-ChildItem (Join-Path $dir "resources\chromium") -Directory -ErrorAction SilentlyContinue
+          if (-not $chromium) { Write-Host "::error::no chromium resources installed"; exit 1 }
+          Write-Host "layout ok: $dir"
 
       - name: Launch app and verify gateway
         shell: pwsh
         run: |
           $dir = "${{ steps.layout.outputs.dir }}"
-        Start-Process -FilePath (Join-Path $dir "Rook Node.exe")
-        $healthy = $false
-        foreach ($i in 1..40) {
-          Start-Sleep -Seconds 3
-          try {
-            $r = Invoke-WebRequest -Uri "http://127.0.0.1:37831/healthz" -UseBasicParsing -TimeoutSec 3
-            if ($r.StatusCode -eq 200) { Write-Host "gateway healthy: $($r.Content)"; $healthy = $true; break }
-          } catch { }
-        }
-        if (-not $healthy) {
-          Write-Host "::error::gateway did not become healthy after install"
-          Get-Process | Where-Object { $_.Name -match "rook" } | ForEach-Object { Write-Host "process: $($_.Name) $($_.Id)" }
-          exit 1
-        }
+          Start-Process -FilePath (Join-Path $dir "Rook Node.exe")
+          $healthy = $false
+          foreach ($i in 1..40) {
+            Start-Sleep -Seconds 3
+            try {
+              $r = Invoke-WebRequest -Uri "http://127.0.0.1:37831/healthz" -UseBasicParsing -TimeoutSec 3
+              if ($r.StatusCode -eq 200) { Write-Host "gateway healthy: $($r.Content)"; $healthy = $true; break }
+            } catch { }
+          }
+          if (-not $healthy) {
+            Write-Host "::error::gateway did not become healthy after install"
+            Get-Process | Where-Object { $_.Name -match "rook" } | ForEach-Object { Write-Host "process: $($_.Name) $($_.Id)" }
+            exit 1
+          }
 
       - name: Cleanup
         if: always()
