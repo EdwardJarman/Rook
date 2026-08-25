@@ -77,7 +77,9 @@ function SessionNavigator() {
     }
   }, [isAuthenticated, loading, router, segments]);
 
-  if (loading || (isAuthenticated && !workroomReady)) {
+  const routeForGate = segments[0] as string | undefined;
+  const isSelfManagedRouteForGate = routeForGate === "connect-node" || routeForGate === "download";
+  if (loading || (isAuthenticated && !workroomReady && !isSelfManagedRouteForGate)) {
     return (
       <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.canvas, gap: 12 }}>
         <ActivityIndicator color={colors.text} />
