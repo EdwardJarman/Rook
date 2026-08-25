@@ -136,15 +136,13 @@ jobs:
           grep -aE "error|failed|Error" /tmp/tauri-build.log | tail -6 | while IFS= read -r line; do echo "::error::$line"; done
           exit 1
 
-      - name: Upload artifacts (workflow dispatch)
-        if: github.event_name == 'workflow_dispatch'
+      - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: rook-node-${{ matrix.rust-target }}
           path: |
+            rook-node/release-assets/*
             src-tauri/target/${{ matrix.rust-target }}/release/bundle/nsis/*.exe
-            src-tauri/target/${{ matrix.rust-target }}/release/bundle/dmg/*.dmg
-            src-tauri/target/${{ matrix.rust-target }}/release/bundle/appimage/*.AppImage
           if-no-files-found: warn
 
       - name: Stage release assets under stable names
@@ -181,3 +179,75 @@ jobs:
             **Linux**: `Rook-Node-x86_64.AppImage`; `chmod +x` and run.
 
             After opening the app, press **Connect account** and sign in — that pairs this computer with your Rook account.
+  install-test:
+    # Sandbox end-to-end install test: silently install the built NSIS
+    # installer on a clean Windows runner, launch the app, and verify the
+    # sidecar + gateway come up. Exercises the exact extraction path that
+    # failed on a real machine.
+    name: Install test (Windows sandbox)
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Download installer artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rook-node-x86_64-pc-windows-msvc
+          path: installer
+
+      - name: Locate installer
+        id: find
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem installer -Filter *.exe | Select-Object -First 1
+          if (-not $exe) { Write-Host "::error::no installer in artifact"; exit 1 }
+          echo "path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
+
+      - name: Silent install
+        shell: pwsh
+        run: |
+          Start-Process -FilePath "${{ steps.find.outputs.path }}" -ArgumentList "/S" -Wait
+          Write-Host "silent install finished"
+
+      - name: Verify install layout
+        id: layout
+        shell: pwsh
+        run: |
+          $candidates = @(
+          "$env:LOCALAPPDATA\Programs\Rook Node",
+          "$env:ProgramFiles\Rook Node"
+        ) | Where-Object { Test-Path $_ }
+        if (-not $candidates) { Write-Host "::error::install directory not found"; exit 1 }
+        $dir = $candidates[0]
+        echo "dir=$dir" >> $env:GITHUB_OUTPUT
+        foreach ($f in @("Rook Node.exe", "rook-node-sidecar.exe")) {
+          if (-not (Test-Path (Join-Path $dir $f))) { Write-Host "::error::missing $f in $dir"; exit 1 }
+        }
+        $chromium = Get-ChildItem (Join-Path $dir "resources\chromium") -Directory -ErrorAction SilentlyContinue
+        if (-not $chromium) { Write-Host "::error::no chromium resources installed"; exit 1 }
+        Write-Host "layout ok: $dir"
+
+      - name: Launch app and verify gateway
+        shell: pwsh
+        run: |
+          $dir = "${{ steps.layout.outputs.dir }}"
+        Start-Process -FilePath (Join-Path $dir "Rook Node.exe")
+        $healthy = $false
+        foreach ($i in 1..40) {
+          Start-Sleep -Seconds 3
+          try {
+            $r = Invoke-WebRequest -Uri "http://127.0.0.1:37831/healthz" -UseBasicParsing -TimeoutSec 3
+            if ($r.StatusCode -eq 200) { Write-Host "gateway healthy: $($r.Content)"; $healthy = $true; break }
+          } catch { }
+        }
+        if (-not $healthy) {
+          Write-Host "::error::gateway did not become healthy after install"
+          Get-Process | Where-Object { $_.Name -match "rook" } | ForEach-Object { Write-Host "process: $($_.Name) $($_.Id)" }
+          exit 1
+        }
+
+      - name: Cleanup
+        if: always()
+        shell: pwsh
+        run: |
+          Get-Process | Where-Object { $_.Name -match "rook" } | Stop-Process -Force -ErrorAction SilentlyContinue
