@@ -46,9 +46,22 @@ export default function ConnectNodeScreen() {
   const attemptedRef = useRef(false);
 
   // 1. Resolve the link from the URL, falling back to a stashed handshake.
+  // Also falls back to raw window.location.search for hydration races.
   useEffect(() => {
-    const state = Array.isArray(params.state) ? params.state[0] : params.state;
-    const portRaw = Array.isArray(params.port) ? params.port[0] : params.port;
+    const stateFromParams = Array.isArray(params.state) ? params.state[0] : params.state;
+    const portRawFromParams = Array.isArray(params.port) ? params.port[0] : params.port;
+    let state = stateFromParams;
+    let portRaw: string | undefined = portRawFromParams;
+
+    // Fallback: read directly from URL if expo params not yet hydrated
+    if ((!state || !portRaw) && typeof window !== "undefined") {
+      try {
+        const urlParams = new URLSearchParams(window.location.search);
+        if (!state) state = urlParams.get("state") ?? undefined;
+        if (!portRaw) portRaw = urlParams.get("port") ?? undefined;
+      } catch {}
+    }
+
     const port = Number.parseInt(portRaw ?? "", 10);
     if (state && state.length >= 16 && Number.isInteger(port) && port >= 1024 && port <= 65535) {
       setLink({ state, port });
