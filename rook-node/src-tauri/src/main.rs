@@ -133,18 +133,25 @@ fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
             ));
         }
 
-        let mut child = Command::new(&sidecar)
-            .arg("--headless")
-            .env("PLAYWRIGHT_BROWSERS_PATH", &browsers_dir)
-            .current_dir(
-                sidecar
-                    .parent()
-                    .ok_or_else(|| "sidecar has no parent directory".to_string())?,
-            )
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("spawn failed: {}", e))?;
+        let mut child = {
+            let mut cmd = Command::new(&sidecar);
+            cmd.arg("--headless")
+                .env("PLAYWRIGHT_BROWSERS_PATH", &browsers_dir)
+                .current_dir(
+                    sidecar
+                        .parent()
+                        .ok_or_else(|| "sidecar has no parent directory".to_string())?,
+                )
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            #[cfg(target_os = "windows")]
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW — no terminal flash
+            }
+            cmd.spawn()
+                .map_err(|e| format!("spawn failed: {}", e))?
+        };
 
         if let Some(stdout) = child.stdout.take() {
             std::thread::spawn(move || {

@@ -163,7 +163,12 @@ function hostLabel(): string {
 function openInBrowser(url: string): void {
   try {
     if (process.platform === "win32") {
-      spawn("cmd", ["/c", "start", "", url], { detached: true, stdio: "ignore", shell: false }).unref();
+      spawn("cmd", ["/c", "start", "", url], {
+        detached: true,
+        stdio: "ignore",
+        shell: false,
+        windowsHide: true,
+      }).unref();
     } else if (process.platform === "darwin") {
       spawn("open", [url], { detached: true, stdio: "ignore" }).unref();
     } else {
