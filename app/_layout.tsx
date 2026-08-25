@@ -52,12 +52,30 @@ function SessionNavigator() {
     const route = segments[0] as string | undefined;
     const isAuthRoute = route === "sign-in" || route === "sign-up";
     const isOnboardingRoute = route === "onboarding";
+    // Rook Node pairing pages handle their own sign-in prompt.
+    const isSelfManagedRoute = route === "connect-node" || route === "download";
     if (loading) return;
-    if (!isAuthenticated && !isAuthRoute) router.replace("/sign-in");
+    if (!isAuthenticated && !isAuthRoute && !isSelfManagedRoute) router.replace("/sign-in");
     if (!isAuthenticated || !workroomReady) return;
     if (!onboardingComplete && !isOnboardingRoute) router.replace("/onboarding" as never);
-    if (onboardingComplete && (isAuthRoute || isOnboardingRoute)) router.replace("/(tabs)");
+    if (onboardingComplete && (isAuthRoute || isOnboardingRoute)) router.replace("/(tabs)" as never);
   }, [isAuthenticated, loading, onboardingComplete, router, segments, workroomReady]);
+
+  // Resume an interrupted Rook Node pairing: the user signed in mid-handshake
+  // and landed on home instead of the connect page.
+  useEffect(() => {
+    const route = segments[0] as string | undefined;
+    if (loading || !isAuthenticated) return;
+    if (Platform.OS !== "web") return;
+    if (route === "connect-node") return;
+    try {
+      if (window.localStorage.getItem("rook-connect-pending")) {
+        router.replace("/connect-node" as never);
+      }
+    } catch {
+      // localStorage unavailable — skip.
+    }
+  }, [isAuthenticated, loading, router, segments]);
 
   if (loading || (isAuthenticated && !workroomReady)) {
     return (
@@ -75,6 +93,8 @@ function SessionNavigator() {
       <Stack.Screen name="sign-in" />
       <Stack.Screen name="sign-up" />
       <Stack.Screen name="onboarding" />
+      <Stack.Screen name="connect-node" />
+      <Stack.Screen name="download" />
       <Stack.Screen name="(tabs)" />
     </Stack>
   );

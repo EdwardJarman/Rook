@@ -23,11 +23,41 @@ export default function ConnectNodeScreen() {
   const createPairing = trpc.nodes.createPairing.useMutation();
   const [status, setStatus] = useState<"ready" | "working" | "redirecting" | "error">("ready");
   const [error, setError] = useState<string | null>(null);
+  const [link, setLink] = useState<{ state: string; port: number } | null>(null);
 
-  const state = Array.isArray(params.state) ? params.state[0] : params.state;
-  const portRaw = Array.isArray(params.port) ? params.port[0] : params.port;
-  const port = Number.parseInt(portRaw ?? "", 10);
-  const validLink = Boolean(state && state.length >= 16 && Number.isInteger(port) && port >= 1024 && port <= 65535);
+  const fromUrl = (() => {
+    const state = Array.isArray(params.state) ? params.state[0] : params.state;
+    const portRaw = Array.isArray(params.port) ? params.port[0] : params.port;
+    const port = Number.parseInt(portRaw ?? "", 10);
+    if (state && state.length >= 16 && Number.isInteger(port) && port >= 1024 && port <= 65535) {
+      return { state, port };
+    }
+    return null;
+  })();
+
+  // The handshake must survive the sign-in detour: params are stashed in
+  // localStorage and restored here even after the auth round-trip.
+  useEffect(() => {
+    if (fromUrl) {
+      setLink(fromUrl);
+      try {
+        window.localStorage.removeItem("rook-connect-pending");
+      } catch { }
+      return;
+    }
+    if (Platform.OS === "web") {
+      try {
+        const stored = window.localStorage.getItem("rook-connect-pending");
+        if (stored) {
+          const parsed = JSON.parse(stored) as { state?: string; port?: number };
+          if (parsed.state && typeof parsed.port === "number") setLink({ state: parsed.state, port: parsed.port });
+        }
+      } catch { }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const validLink = Boolean(link);
 
   useEffect(() => {
     if (isAuthenticated && status === "ready" && validLink && Platform.OS === "web") {
@@ -42,7 +72,7 @@ export default function ConnectNodeScreen() {
       setError("Open this connect link in your computer's browser, not on your phone.");
       return;
     }
-    if (!validLink) {
+    if (!link) {
       setError("This connect link is invalid or incomplete. Press “Connect account” in the Rook Node app and try again.");
       return;
     }
@@ -50,7 +80,10 @@ export default function ConnectNodeScreen() {
     try {
       const { token } = await createPairing.mutateAsync();
       setStatus("redirecting");
-      window.location.href = `http://localhost:${port}/pair?token=${encodeURIComponent(token)}&state=${encodeURIComponent(state!)}`;
+      try {
+        window.localStorage.removeItem("rook-connect-pending");
+      } catch { }
+      window.location.href = `http://localhost:${link.port}/pair?token=${encodeURIComponent(token)}&state=${encodeURIComponent(link.state)}`;
     } catch {
       setStatus("error");
       setError("Rook could not start the pairing handshake right now. Please try again in a moment.");
@@ -82,9 +115,20 @@ export default function ConnectNodeScreen() {
                 <Text style={{ color: colors.text, fontSize: 14, lineHeight: 20 }}>
                   Sign in to Rook first — then this page will hand the connection straight to your computer.
                 </Text>
-                <PrimaryButton label="Sign in to Rook" onPress={() => router.push("/sign-in")} />
+                <PrimaryButton
+                  label="Sign in to Rook"
+                  onPress={() => {
+                    // Stash the handshake so the return from sign-in resumes it.
+                    if (link && Platform.OS === "web") {
+                      try {
+                        window.localStorage.setItem("rook-connect-pending", JSON.stringify(link));
+                      } catch { }
+                    }
+                    router.push("/sign-in");
+                  }}
+                />
                 <Text style={{ color: colors.textFaint, fontSize: 12, lineHeight: 17 }}>
-                  After signing in, press “Connect account” in the Rook Node app once more.
+                  After signing in you'll come right back here automatically.
                 </Text>
               </>
             ) : (
