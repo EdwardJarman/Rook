@@ -125,8 +125,18 @@ jobs:
         id: tauribuild
         shell: bash
         run: |
-          pnpm dlx @tauri-apps/cli@2 build --target ${{ matrix.rust-target }} 2>&1 | tee /tmp/tauri-build.log
-          exit ${PIPESTATUS[0]}
+          set -o pipefail
+          for attempt in 1 2; do
+            if pnpm dlx @tauri-apps/cli@2 build --target ${{ matrix.rust-target }} 2>&1 | tee /tmp/tauri-build.log; then
+              exit 0
+            fi
+            if [ "$attempt" = "2" ]; then
+              exit 1
+            fi
+            echo "Tauri bundle attempt failed; retrying once to recover transient platform packaging failures."
+            rm -rf "src-tauri/target/${{ matrix.rust-target }}/release/bundle/dmg" \
+              "src-tauri/target/${{ matrix.rust-target }}/release/bundle/appimage"
+          done
         continue-on-error: true
 
       - name: Surface Tauri build errors

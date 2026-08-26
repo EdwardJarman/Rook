@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Rook Node",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "identifier": "com.rook.node",
   "build": {
     "frontendDist": "../web"
@@ -25,7 +25,14 @@
   },
   "bundle": {
     "active": true,
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.png", "icons/icon.icns", "icons/icon.ico"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
     "targets": ["nsis", "appimage", "dmg"],
     "category": "Utility",
     "shortDescription": "Rook Node — the forever-free computer runner for your Bots.",
