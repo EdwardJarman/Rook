@@ -5,6 +5,7 @@ import {
   defaultModelForProvider,
   modelMatchesProvider,
   modelsForProvider,
+  providerForModel,
   providerLabel,
 } from "../lib/ai-provider";
 
@@ -24,6 +25,12 @@ describe("AI provider preference", () => {
     expect(modelsForProvider(models, "tokenrouter").map((model) => model.id)).toEqual(["tokenrouter:qwen/qwen3.8-max-free"]);
     expect(modelMatchesProvider("chatgpt:gpt-5", "chatgpt")).toBe(true);
     expect(modelMatchesProvider("chatgpt:gpt-5", "openrouter")).toBe(false);
+  });
+
+  it("honors a Bot's explicit model provider over the global fallback", () => {
+    expect(providerForModel("chatgpt:gpt-5.5", "openrouter")).toBe("chatgpt");
+    expect(providerForModel("orcarouter:deepseek/free", "openrouter")).toBe("orcarouter");
+    expect(providerForModel("openrouter/free", "tokenrouter")).toBe("tokenrouter");
   });
 
   it("chooses OpenRouter auto and the first connected ChatGPT model as safe defaults", () => {

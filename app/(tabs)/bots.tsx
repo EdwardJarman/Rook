@@ -16,6 +16,7 @@ import {
   useRookTheme,
 } from "@/components/rook-primitives";
 import { ScreenContainer } from "@/components/screen-container";
+import { providerForModel } from "@/lib/ai-provider";
 import { useDockScroll } from "@/lib/dock-visibility";
 import { tint } from "@/lib/ui";
 import { useWorkroom, type Bot } from "@/lib/workroom-store";
@@ -127,7 +128,7 @@ export default function BotsScreen() {
             <View style={{ gap: 12, marginTop: 18 }}>
               <AiModelSelector
                 value={openBot.model || "openrouter/free"}
-                provider={aiProvider}
+                provider={providerForModel(openBot.model, aiProvider)}
                 onChange={(model) => {
                   updateBotModel(openBot.id, model);
                   setOpenBot({ ...openBot, model, lastActive: "Model updated" });

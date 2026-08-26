@@ -41,10 +41,10 @@ const env = {
 const config: ExpoConfig = {
   name: env.appName,
   slug: env.appSlug,
-  version: "0.1.2",
+  version: "0.1.3",
   runtimeVersion: { policy: "appVersion" },
   orientation: "portrait",
-  icon: "./assets/images/icon.png",
+  icon: "./assets/images/rook-logo.png",
   scheme: env.scheme,
   userInterfaceStyle: "light",
   newArchEnabled: true,
@@ -57,15 +57,16 @@ const config: ExpoConfig = {
   },
   android: {
     adaptiveIcon: {
-      backgroundColor: "#E6F4FE",
-      foregroundImage: "./assets/images/android-icon-foreground.png",
-      backgroundImage: "./assets/images/android-icon-background.png",
-      monochromeImage: "./assets/images/android-icon-monochrome.png",
+      // Use the same current Rook mark as the in-app header rather than the
+      // legacy generic Android asset family.
+      backgroundColor: "#F5F6F3",
+      foregroundImage: "./assets/images/rook-logo.png",
+      monochromeImage: "./assets/images/rook-logo.png",
     },
     edgeToEdgeEnabled: true,
     predictiveBackGestureEnabled: false,
     package: env.androidPackage,
-    versionCode: 3,
+    versionCode: 4,
     permissions: ["POST_NOTIFICATIONS", "RECORD_AUDIO"],
     intentFilters: [
       {
@@ -100,7 +101,7 @@ const config: ExpoConfig = {
     [
       "expo-notifications",
       {
-        icon: "./assets/images/android-icon-foreground.png",
+        icon: "./assets/images/rook-logo.png",
         color: "#77F3C4",
         defaultChannel: "workroom-alerts",
         enableBackgroundRemoteNotifications: false,

@@ -328,7 +328,7 @@ export async function invokeChatGPT(
   const model = chatGPTModelSlug(params.model || "");
   if (!model) throw new Error("Choose a ChatGPT model after connecting your account.");
   const runtime = await runtimeFor(request);
-  const [{ createChatGPTProxyProvider }, { generateText, jsonSchema, tool }] = await Promise.all([
+  const [{ createChatGPTProxyProvider }, { streamText, jsonSchema, tool }] = await Promise.all([
     import("@opencoredev/loginwithchatgpt-ai"),
     import("ai"),
   ]);
@@ -345,7 +345,10 @@ export async function invokeChatGPT(
       inputSchema: jsonSchema(definition.function.parameters ?? { type: "object", properties: {} }),
     }),
   ]));
-  const result = await generateText({
+  // The ChatGPT Codex endpoint emits a richer server-sent-event stream than
+  // its one-shot response. Consuming that stream keeps the actual assistant
+  // text separate from internal safety records such as `User Safety: safe`.
+  const result = streamText({
     model: chatgpt(model),
     system: prompt.system,
     messages: prompt.messages,
@@ -353,7 +356,17 @@ export async function invokeChatGPT(
     toolChoice: params.toolChoice === "none" || params.tool_choice === "none" ? "none" : "auto",
     maxRetries: 1,
   });
-  const toolCalls: ToolCall[] = result.toolCalls.map((call) => ({
+  const [rawText, calls, finishReason, usage] = await Promise.all([
+    result.text,
+    result.toolCalls,
+    result.finishReason,
+    result.usage,
+  ]);
+  const text = userFacingChatGPTText(rawText);
+  if (!text && !calls.length) {
+    throw new Error("ChatGPT returned status metadata without an assistant reply.");
+  }
+  const toolCalls: ToolCall[] = calls.map((call) => ({
     id: call.toolCallId,
     type: "function",
     function: { name: call.toolName, arguments: JSON.stringify(call.input ?? {}) },
@@ -364,15 +377,24 @@ export async function invokeChatGPT(
     model,
     choices: [{
       index: 0,
-      message: { role: "assistant", content: result.text, ...(toolCalls.length ? { tool_calls: toolCalls } : {}) },
-      finish_reason: toolCalls.length ? "tool_calls" : result.finishReason,
+      message: { role: "assistant", content: text, ...(toolCalls.length ? { tool_calls: toolCalls } : {}) },
+      finish_reason: toolCalls.length ? "tool_calls" : finishReason,
     }],
-    usage: result.usage ? {
-      prompt_tokens: result.usage.inputTokens ?? 0,
-      completion_tokens: result.usage.outputTokens ?? 0,
-      total_tokens: result.usage.totalTokens ?? 0,
+    usage: usage ? {
+      prompt_tokens: usage.inputTokens ?? 0,
+      completion_tokens: usage.outputTokens ?? 0,
+      total_tokens: usage.totalTokens ?? 0,
     } : undefined,
   };
+}
+
+/** Removes backend safety bookkeeping that is not a conversational reply. */
+export function userFacingChatGPTText(value: string) {
+  return value
+    .split(/\r?\n/)
+    .filter((line) => !/^(?:user|response)\s+safety:\s*(?:safe|unsafe)\s*$/i.test(line.trim()))
+    .join("\n")
+    .trim();
 }
 
 export const __chatGPTSessionMetadataKeysForTests = {

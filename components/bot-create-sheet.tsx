@@ -1,5 +1,5 @@
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   KeyboardAvoidingView,
@@ -23,6 +23,11 @@ import { BotIdentityMark } from "@/components/bot-orb";
 import { GlassSurface } from "@/components/liquid-glass";
 import { RookLogo } from "@/components/rook-logo";
 import { Field, useRookTheme } from "@/components/rook-primitives";
+import {
+  defaultModelForProvider,
+  providerForModel,
+} from "@/lib/ai-provider";
+import { trpc } from "@/lib/trpc";
 import { tint } from "@/lib/ui";
 import { useWorkroom, type Bot } from "@/lib/workroom-store";
 
@@ -64,6 +69,10 @@ export function BotCreateSheet({
 }) {
   const { colors, dark } = useRookTheme();
   const { aiProvider, createBot } = useWorkroom();
+  const modelCatalog = trpc.ai.models.useQuery(undefined, {
+    staleTime: 5 * 60 * 1000,
+    retry: 1,
+  });
   const { width, height } = useWindowDimensions();
   const [step, setStep] = useState<Step>(1);
   const [name, setName] = useState("");
@@ -74,9 +83,32 @@ export function BotCreateSheet({
   const [icon, setIcon] = useState(DEFAULT_BOT_ICON);
   const [model, setModel] = useState("openrouter/free");
 
-  const panelWidth = Math.min(Math.max(width - 28, 296), 520);
-  const panelHeight = Math.min(height - 48, width < 600 ? 640 : 600);
+  const compactMobile = Platform.OS !== "web" && width < 600;
+  // Keep the native creator as a deliberate floating dialog rather than an
+  // almost full-screen panel layered over the tab header.
+  const panelWidth = compactMobile
+    ? Math.min(Math.max(width - 48, 304), 360)
+    : Math.min(Math.max(width - 40, 360), 520);
+  const panelHeight = compactMobile
+    ? Math.min(Math.max(height - 260, 456), 536)
+    : Math.min(height - 72, 600);
   const copy = step === 1 ? null : STEP_COPY[step];
+  const suggestedModel = useMemo(() => {
+    const models = modelCatalog.data?.models ?? [];
+    // A connected ChatGPT 5.5 route wins for new Bots. If it is not offered by
+    // this account, preserve the selected Rook provider and its own fallback.
+    return models.find((entry) => entry.id === "chatgpt:gpt-5.5") ??
+      models.find((entry) => entry.id.startsWith("chatgpt:") && /gpt[- ]?5\.5/i.test(`${entry.id} ${entry.name}`)) ??
+      defaultModelForProvider(models, aiProvider) ??
+      models.find((entry) => entry.id === "openrouter/free") ??
+      models[0];
+  }, [aiProvider, modelCatalog.data?.models]);
+  const modelProvider = providerForModel(model, aiProvider);
+
+  useEffect(() => {
+    if (!visible) return;
+    setModel(suggestedModel?.id ?? "openrouter/free");
+  }, [suggestedModel?.id, visible]);
 
   const reset = () => {
     setStep(1);
@@ -137,11 +169,14 @@ export function BotCreateSheet({
     >
       <Pressable
         accessibilityLabel="Dismiss Bot maker"
-        style={styles.scrim}
+        style={[
+          styles.scrim,
+          { backgroundColor: dark ? "rgba(3, 5, 8, 0.64)" : "rgba(15, 19, 24, 0.32)" },
+        ]}
         onPress={close}
       >
         <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
           style={styles.keyboardLayer}
           pointerEvents="box-none"
         >
@@ -153,7 +188,14 @@ export function BotCreateSheet({
               radius={28}
               blur={30}
               flat
-              style={[styles.panel, { width: panelWidth, height: panelHeight }]}
+              style={[
+                styles.panel,
+                {
+                  width: panelWidth,
+                  height: panelHeight,
+                  ...(compactMobile ? styles.compactPanel : {}),
+                },
+              ]}
               contentStyle={styles.panelContent}
             >
               <View style={styles.topRow}>
@@ -298,7 +340,7 @@ export function BotCreateSheet({
                         borderColor: colors.lineStrong,
                       }}
                     />
-                    <AiModelSelector value={model} provider={aiProvider} onChange={setModel} />
+                    <AiModelSelector value={model} provider={modelProvider} onChange={setModel} />
                     <View
                       style={[
                         styles.summaryCard,
@@ -399,6 +441,13 @@ const styles = StyleSheet.create({
   },
   panel: {
     overflow: "hidden",
+  },
+  compactPanel: {
+    shadowColor: "#000000",
+    shadowOpacity: 0.24,
+    shadowRadius: 30,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 14,
   },
   panelContent: {
     minHeight: 0,

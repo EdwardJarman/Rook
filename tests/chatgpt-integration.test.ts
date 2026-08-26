@@ -8,6 +8,7 @@ import {
   __chatGPTUserSessionKeyForTests,
   chatGPTModelSlug,
   isChatGPTModel,
+  userFacingChatGPTText,
 } from "../server/ai/chatgpt";
 
 describe("Login with ChatGPT integration", () => {
@@ -32,6 +33,11 @@ describe("Login with ChatGPT integration", () => {
       session: "rookChatGPTSession",
       rate: "rookChatGPTRate",
     });
+  });
+
+  it("removes Codex safety bookkeeping from the user-facing reply", () => {
+    expect(userFacingChatGPTText("User Safety: safe\nResponse Safety: safe\nHello from ChatGPT.")).toBe("Hello from ChatGPT.");
+    expect(userFacingChatGPTText("User Safety: safe\nResponse Safety: safe")).toBe("");
   });
 
   it("compresses and encrypts refreshable session material before metadata storage", () => {

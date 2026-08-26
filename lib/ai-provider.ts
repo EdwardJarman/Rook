@@ -33,6 +33,18 @@ export const modelMatchesProvider = (
   return modelId.startsWith(PREFIXES[provider]);
 };
 
+/** Uses a Bot's explicit model route when it differs from the global default. */
+export const providerForModel = (
+  modelId: string | undefined,
+  fallback: AiProvider,
+): AiProvider => {
+  const resolved = modelId?.trim() ?? "";
+  if (resolved.startsWith(PREFIXES.chatgpt)) return "chatgpt";
+  if (resolved.startsWith(PREFIXES.orcarouter)) return "orcarouter";
+  if (resolved.startsWith(PREFIXES.tokenrouter)) return "tokenrouter";
+  return fallback;
+};
+
 export const canonicalModelForProvider = (
   modelId: string,
   provider: AiProvider,

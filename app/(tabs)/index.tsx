@@ -45,6 +45,7 @@ import {
   canonicalModelForProvider,
   defaultModelForProvider,
   modelMatchesProvider,
+  providerForModel,
   providerLabel,
 } from "@/lib/ai-provider";
 import { approvalReason, fileSizeLabel, requiresApproval } from "@/lib/workroom-helpers";
@@ -86,15 +87,19 @@ export default function ChatScreen() {
     () => chatBots.find((bot) => bot.id === activeChatBotId) ?? chatBots[0] ?? null,
     [activeChatBotId, chatBots],
   );
+  const activeProvider = useMemo(
+    () => providerForModel(activeBot?.model, workroom.aiProvider),
+    [activeBot?.model, workroom.aiProvider],
+  );
   const resolvedModel = useMemo(() => {
     if (!activeBot) return undefined;
     const models = modelCatalog.data?.models ?? [];
-    const canonical = canonicalModelForProvider(activeBot.model, workroom.aiProvider);
-    const selected = models.find((model) => model.id === canonical && modelMatchesProvider(model.id, workroom.aiProvider));
+    const canonical = canonicalModelForProvider(activeBot.model, activeProvider);
+    const selected = models.find((model) => model.id === canonical && modelMatchesProvider(model.id, activeProvider));
     if (selected) return selected;
-    return defaultModelForProvider(models, workroom.aiProvider) ??
-      (workroom.aiProvider === "openrouter" ? { id: "openrouter/free" } : undefined);
-  }, [activeBot, modelCatalog.data?.models, workroom.aiProvider]);
+    return defaultModelForProvider(models, activeProvider) ??
+      (activeProvider === "openrouter" ? { id: "openrouter/free" } : undefined);
+  }, [activeBot, activeProvider, modelCatalog.data?.models]);
 
   /* The whole room reads as one conversation: every message from a Bot that is present. */
   const visibleMessages = useMemo(
@@ -117,9 +122,9 @@ export default function ChatScreen() {
     if (!resolvedModel) {
       Alert.alert(
         "No model available",
-        workroom.aiProvider === "chatgpt"
+        activeProvider === "chatgpt"
           ? "Reconnect ChatGPT or switch to OpenRouter from Account."
-          : `Rook could not load a ${providerLabel(workroom.aiProvider)} model. Check its server key or switch providers from Account.`,
+          : `Rook could not load a ${providerLabel(activeProvider)} model. Check its connection or switch providers from Account.`,
       );
       return;
     }
@@ -659,7 +664,7 @@ export default function ChatScreen() {
                     />
                     <ComposerModelPicker
                       value={resolvedModel?.id || activeBot?.model || ""}
-                      provider={workroom.aiProvider}
+                      provider={activeProvider}
                       onChange={(model) => activeBot && workroom.updateBotModel(activeBot.id, model)}
                     />
                   </View>
