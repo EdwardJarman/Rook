@@ -92,18 +92,26 @@ type AndroidDownloadResult =
  */
 async function resolveAndroidDownload(): Promise<AndroidDownloadResult> {
   try {
-    const response = await fetch(ANDROID_DOWNLOAD_URL, {
-      method: "HEAD",
-      redirect: "manual",
-      signal: AbortSignal.timeout(8_000),
-    });
-
-    if (response.status >= 300 && response.status < 400) {
-      const location = response.headers.get("location");
-      if (location) return { available: true, url: new URL(location, ANDROID_DOWNLOAD_URL).toString() };
+    let currentUrl = ANDROID_DOWNLOAD_URL;
+    // `releases/latest` first redirects to the versioned GitHub release, then
+    // that page redirects to the attachment object. Resolve both hops so the
+    // browser starts with the final binary delivery URL.
+    for (let hop = 0; hop < 3; hop += 1) {
+      const response = await fetch(currentUrl, {
+        method: "HEAD",
+        redirect: "manual",
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get("location");
+        if (!location) break;
+        currentUrl = new URL(location, currentUrl).toString();
+        continue;
+      }
+      if (response.ok) return { available: true, url: currentUrl };
+      return { available: false, message: "The Rook Android app is not published yet. Please try again shortly." };
     }
-    if (response.ok) return { available: true, url: ANDROID_DOWNLOAD_URL };
-    return { available: false, message: "The Rook Android app is not published yet. Please try again shortly." };
+    return { available: false, message: "Rook could not resolve the Android download link. Please try again shortly." };
   } catch {
     return { available: false, message: "Rook could not verify the Android download right now. Please try again shortly." };
   }

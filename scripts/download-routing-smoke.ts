@@ -20,10 +20,16 @@ async function close(server: http.Server): Promise<void> {
 async function main(): Promise<void> {
   const mode = process.env.DOWNLOAD_ROUTING_MODE ?? "available";
   const assetHost = express();
-  assetHost.head("/Rook.apk", (_request, response) => response.status(200).end());
+  assetHost.head("/versioned/Rook.apk", (_request, response) => response.redirect(302, "/binary/Rook.apk"));
+  assetHost.head("/binary/Rook.apk", (_request, response) => response.status(200).end());
   const asset = await listen(assetHost);
+
+  const releaseHost = express();
+  releaseHost.head("/latest/Rook.apk", (_request, response) => response.redirect(302, `${asset.origin}/versioned/Rook.apk`));
+  const release = await listen(releaseHost);
+
   process.env.ROOK_ANDROID_DOWNLOAD_URL = mode === "available"
-    ? `${asset.origin}/Rook.apk`
+    ? `${release.origin}/latest/Rook.apk`
     : `${asset.origin}/not-published.apk`;
 
   const { pickNodeAssetForUserAgent, registerNodeDownloadRoutes } = await import("../server/download-routes.js");
@@ -36,12 +42,13 @@ async function main(): Promise<void> {
   try {
     const android = await fetch(`${download.origin}/api/download/android`, { redirect: "manual" });
     if (mode === "available") {
+      const finalUrl = `${asset.origin}/binary/Rook.apk`;
       assert.equal(android.status, 302);
-      assert.equal(android.headers.get("location"), `${asset.origin}/Rook.apk`);
+      assert.equal(android.headers.get("location"), finalUrl);
 
       const androidJson = await fetch(`${download.origin}/api/download/android?format=json`);
       assert.equal(androidJson.status, 200);
-      assert.deepEqual(await androidJson.json(), { available: true, url: `${asset.origin}/Rook.apk` });
+      assert.deepEqual(await androidJson.json(), { available: true, url: finalUrl });
     } else {
       assert.equal(android.status, 503);
       assert.deepEqual(await android.json(), {
@@ -58,6 +65,7 @@ async function main(): Promise<void> {
     assert.equal(androidNode.headers.get("location"), "/download");
   } finally {
     await close(download.server);
+    await close(release.server);
     await close(asset.server);
   }
 
