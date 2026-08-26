@@ -18,10 +18,13 @@ async function close(server: http.Server): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  const mode = process.env.DOWNLOAD_ROUTING_MODE ?? "available";
   const assetHost = express();
   assetHost.head("/Rook.apk", (_request, response) => response.status(200).end());
   const asset = await listen(assetHost);
-  process.env.ROOK_ANDROID_DOWNLOAD_URL = `${asset.origin}/Rook.apk`;
+  process.env.ROOK_ANDROID_DOWNLOAD_URL = mode === "available"
+    ? `${asset.origin}/Rook.apk`
+    : `${asset.origin}/not-published.apk`;
 
   const { pickNodeAssetForUserAgent, registerNodeDownloadRoutes } = await import("../server/download-routes.js");
   assert.equal(pickNodeAssetForUserAgent("Mozilla/5.0 (Linux; Android 15)"), "page");
@@ -32,8 +35,16 @@ async function main(): Promise<void> {
   const download = await listen(app);
   try {
     const android = await fetch(`${download.origin}/api/download/android`, { redirect: "manual" });
-    assert.equal(android.status, 302);
-    assert.equal(android.headers.get("location"), `${asset.origin}/Rook.apk`);
+    if (mode === "available") {
+      assert.equal(android.status, 302);
+      assert.equal(android.headers.get("location"), `${asset.origin}/Rook.apk`);
+    } else {
+      assert.equal(android.status, 503);
+      assert.deepEqual(await android.json(), {
+        available: false,
+        message: "The Rook Android app is not published yet. Please try again shortly.",
+      });
+    }
 
     const androidNode = await fetch(`${download.origin}/api/download/node`, {
       headers: { "User-Agent": "Mozilla/5.0 (Linux; Android 15)" },
@@ -46,7 +57,7 @@ async function main(): Promise<void> {
     await close(asset.server);
   }
 
-  console.log("Download routing smoke checks passed.");
+  console.log(`Download routing smoke checks passed (${mode}).`);
 }
 
 void main().catch((error) => {

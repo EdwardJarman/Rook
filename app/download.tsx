@@ -1,4 +1,5 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
+import { useState } from "react";
 import { Platform, Pressable, Text, View } from "react-native";
 
 import { Card, ScreenHeader, StatusPill, useRookTheme } from "@/components/rook-primitives";
@@ -72,6 +73,39 @@ export default function DownloadScreen() {
   const target = downloadTarget();
   const detail = target === "unsupported" ? null : DETAILS[target];
   const isAndroid = target === "android";
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [checkingDownload, setCheckingDownload] = useState(false);
+
+  const beginDownload = async () => {
+    if (!detail || checkingDownload) return;
+    const url = `${serverOrigin()}${detail.endpoint}`;
+    setDownloadError(null);
+
+    // Android visitors get an observable result. On web, verify the same-origin
+    // endpoint before leaving this route; an unpublished APK stays here with a
+    // clear message instead of taking the browser through an app fallback.
+    if (target === "android" && Platform.OS === "web") {
+      setCheckingDownload(true);
+      try {
+        const response = await fetch(url, { redirect: "manual" });
+        if (response.status >= 300 && response.status < 400) {
+          const location = response.headers.get("location");
+          if (!location) throw new Error("Rook did not return an Android download link.");
+          window.location.assign(new URL(location, url).toString());
+          return;
+        }
+        const payload = await response.json().catch(() => null) as { message?: string } | null;
+        setDownloadError(payload?.message ?? "The Rook Android app is not published yet. Please try again shortly.");
+      } catch (error) {
+        setDownloadError(error instanceof Error ? error.message : "Rook could not start the Android download. Please try again shortly.");
+      } finally {
+        setCheckingDownload(false);
+      }
+      return;
+    }
+
+    open(url);
+  };
 
   return (
     <ScreenContainer containerClassName="bg-background" className="flex-1" edges={["top", "left", "right"]}>
@@ -91,22 +125,30 @@ export default function DownloadScreen() {
             </Card>
           ) : null}
 
+          {downloadError ? (
+            <Card style={{ gap: 6, flexDirection: "row", alignItems: "center" }}>
+              <StatusPill label="Not available yet" tone="amber" />
+              <Text style={{ color: colors.text, fontSize: 12.5, flex: 1 }}>{downloadError}</Text>
+            </Card>
+          ) : null}
+
           {detail ? (
             <Card style={{ gap: 8 }}>
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={detail.label}
-                onPress={() => open(`${serverOrigin()}${detail.endpoint}`)}
+                onPress={() => void beginDownload()}
+                disabled={checkingDownload}
                 style={({ pressed }) => ({
                   minHeight: 54,
                   justifyContent: "center",
                   borderRadius: 14,
                   backgroundColor: colors.ink,
                   paddingHorizontal: 16,
-                  opacity: pressed ? 0.78 : 1,
+                  opacity: checkingDownload ? 0.55 : pressed ? 0.78 : 1,
                 })}
               >
-                <Text style={{ color: colors.onInk, fontWeight: "700", fontSize: 15 }}>{detail.label}</Text>
+                <Text style={{ color: colors.onInk, fontWeight: "700", fontSize: 15 }}>{checkingDownload ? "Checking Android download…" : detail.label}</Text>
                 <Text style={{ color: colors.onInk, opacity: 0.74, fontSize: 12, marginTop: 3, lineHeight: 17 }}>{detail.note}</Text>
               </Pressable>
             </Card>

@@ -84,12 +84,18 @@ async function serveAndroidDownload(res: import("express").Response): Promise<vo
   try {
     const head = await fetch(ANDROID_DOWNLOAD_URL, { method: "HEAD", redirect: "follow", signal: AbortSignal.timeout(8_000) });
     if (!head.ok) {
-      res.redirect(302, `${DOWNLOAD_PAGE}?pending=android`);
+      res.status(503).json({
+        available: false,
+        message: "The Rook Android app is not published yet. Please try again shortly.",
+      });
       return;
     }
   } catch {
-    // If the configured host is temporarily unavailable, let the caller try
-    // the direct Android URL rather than presenting an unrelated desktop build.
+    res.status(503).json({
+      available: false,
+      message: "Rook could not verify the Android download right now. Please try again shortly.",
+    });
+    return;
   }
   res.redirect(302, ANDROID_DOWNLOAD_URL);
 }
