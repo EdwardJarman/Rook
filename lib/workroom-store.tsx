@@ -44,7 +44,10 @@ export function WorkroomProvider({ children }: { children: ReactNode }) {
   const [notifications, setNotifications] = useState<WorkNotification[]>([]);
   const [activity, setActivity] = useState<Activity[]>([]);
   const localStorageKey = useMemo(() => `${STORAGE_KEY_PREFIX}-${user?.id ?? "signed-out"}`, [user?.id]);
-  const cloudQuery = trpc.cloud.load.useQuery(undefined, { enabled: isAuthenticated && Boolean(user?.id), retry: 1, refetchOnWindowFocus: false });
+  const cloudQuery = trpc.cloud.load.useQuery(
+    user?.id ? { accountScope: user.id } : undefined,
+    { enabled: isAuthenticated && Boolean(user?.id), retry: 2, refetchOnWindowFocus: true },
+  );
   const saveCloud = trpc.cloud.save.useMutation();
   const saveCloudRef = useRef(saveCloud.mutateAsync);
   saveCloudRef.current = saveCloud.mutateAsync;
@@ -55,7 +58,27 @@ export function WorkroomProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => { cloudHydrated.current = false; setReady(false); setLocalLoaded(false); applySnapshot(emptyWorkroomSnapshot()); void (async () => { try { const raw = await AsyncStorage.getItem(localStorageKey); if (raw) applySnapshot(JSON.parse(raw)); } catch { /* A damaged fallback cache must never block the workroom. */ } finally { setLocalLoaded(true); } })(); }, [applySnapshot, localStorageKey]);
-  useEffect(() => { if (!localLoaded) return; if (!isAuthenticated) { cloudHydrated.current = false; setReady(true); return; } if (cloudQuery.isLoading) return; if (!cloudHydrated.current) { if (cloudQuery.data?.snapshot) applySnapshot(cloudQuery.data.snapshot); cloudHydrated.current = true; setReady(true); } }, [applySnapshot, cloudQuery.data, cloudQuery.isLoading, isAuthenticated, localLoaded]);
+  useEffect(() => {
+    if (!localLoaded) return;
+    if (!isAuthenticated) {
+      cloudHydrated.current = false;
+      setReady(true);
+      return;
+    }
+    if (cloudQuery.isLoading) return;
+    if (cloudQuery.isError) {
+      // Keep the account-specific local cache usable while offline, but never
+      // allow it to save over a cloud snapshot we could not load.
+      cloudHydrated.current = false;
+      setReady(true);
+      return;
+    }
+    if (!cloudHydrated.current) {
+      if (cloudQuery.data?.snapshot) applySnapshot(cloudQuery.data.snapshot);
+      cloudHydrated.current = true;
+      setReady(true);
+    }
+  }, [applySnapshot, cloudQuery.data, cloudQuery.isError, cloudQuery.isLoading, isAuthenticated, localLoaded]);
 
   const snapshot = useMemo<WorkroomCloudSnapshot>(() => normalizeWorkroomSnapshot({ selectedBotId, onboardingComplete, aiProvider, bots, messages, tasks, skills, routines, approvals, files, notifications, activity }), [selectedBotId, onboardingComplete, aiProvider, bots, messages, tasks, skills, routines, approvals, files, notifications, activity]);
   useEffect(() => { if (!ready) return; void AsyncStorage.setItem(localStorageKey, JSON.stringify(snapshot)); }, [localStorageKey, ready, snapshot]);

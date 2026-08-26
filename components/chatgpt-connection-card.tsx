@@ -149,13 +149,14 @@ export function ChatGPTConnectionCard() {
     try {
       const data = await request<LoginResponse>("/login", { method: "POST" });
       if (!data.userCode || !data.verificationUrl) throw new Error("OpenAI did not return an authorization code.");
-      setLogin(data);
+      const verificationUrl = requireSecureVerificationUrl(data.verificationUrl);
+      setLogin({ ...data, verificationUrl });
       await Clipboard.setStringAsync(data.userCode).catch(() => undefined);
       if (Platform.OS === "web" && popup) {
-        popup.location.href = data.verificationUrl;
+        popup.location.href = verificationUrl;
         popup.focus();
       } else {
-        await Linking.openURL(data.verificationUrl);
+        await Linking.openURL(verificationUrl);
       }
       void poll(data.interval ?? 3);
     } catch (cause) {
@@ -256,6 +257,19 @@ export function ChatGPTConnectionCard() {
       {error ? <Text style={{ color: colors.coral, fontSize: 11.5, lineHeight: 16 }}>{error}</Text> : null}
     </Card>
   );
+}
+
+function requireSecureVerificationUrl(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("ChatGPT returned an invalid verification address. Please try again.");
+  }
+  if (url.protocol !== "https:") {
+    throw new Error("ChatGPT returned an insecure verification address. Please try again.");
+  }
+  return url.toString();
 }
 
 function ConsentLine({ text }: { text: string }) {

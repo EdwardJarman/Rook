@@ -199,10 +199,15 @@ export const appRouter = router({
     }),
   }),
   cloud: router({
-    load: protectedProcedure.query(async ({ ctx }) => {
-      const record = await db.getWorkroomSnapshot(ctx.user.id);
-      return { snapshot: record?.snapshot ?? null, updatedAt: record?.updatedAt?.toISOString() ?? null };
-    }),
+    // `accountScope` deliberately becomes part of the client query key. The
+    // server still derives authorization exclusively from `ctx.user.id`, so a
+    // cached workroom can never cross from one Clerk account to another.
+    load: protectedProcedure
+      .input(z.object({ accountScope: z.string().min(1).max(128) }).optional())
+      .query(async ({ ctx }) => {
+        const record = await db.getWorkroomSnapshot(ctx.user.id);
+        return { snapshot: record?.snapshot ?? null, updatedAt: record?.updatedAt?.toISOString() ?? null };
+      }),
     save: protectedProcedure.input(z.object({ snapshot: z.record(z.string(), z.unknown()) })).mutation(async ({ ctx, input }) => {
       const snapshot = normalizeWorkroomSnapshot(input.snapshot);
       return { saved: await db.saveWorkroomState(ctx.user.id, snapshot) };
