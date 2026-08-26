@@ -1,7 +1,8 @@
 import { useHostedAuth } from "@clerk/expo/hosted-auth";
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
+import * as Linking from "expo-linking";
 import { useState } from "react";
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { RookLogo } from "@/components/rook-logo";
 import { useRookTheme } from "@/components/rook-primitives";
@@ -17,9 +18,17 @@ export default function SignInScreen() {
   const begin = async (nextMode: AuthMode) => {
     setMode(nextMode);
     try {
-      await startHostedAuth({ mode: nextMode });
+      // Use an explicit application route instead of a bare scheme (`manusrook:///`).
+      // Expo Router can resume this route, after which Clerk activates the session and
+      // the session navigator immediately opens the user's workroom.
+      const redirectUrl = Platform.OS === "web" ? undefined : Linking.createURL("/sign-in");
+      await startHostedAuth({
+        mode: nextMode,
+        ...(redirectUrl ? { redirectUrl } : {}),
+        authSessionOptions: { showInRecents: false },
+      });
     } catch {
-      Alert.alert("Sign-in unavailable", "Rook could not open the secure Clerk sign-in page. Please check your connection and try again.");
+      Alert.alert("Sign-in unavailable", "Rook could not complete secure sign-in. Please check your connection and try again.");
     } finally {
       setMode(null);
     }

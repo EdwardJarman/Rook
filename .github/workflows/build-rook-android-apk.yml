@@ -37,6 +37,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Verify Android sign-in callback configuration
+        run: |
+          pnpm exec expo config --type public --json > rook-expo-config.json
+          node scripts/assert-android-config.cjs rook-expo-config.json
+          node scripts/assert-hosted-auth-callback.cjs
+
       - name: Generate Android project
         run: pnpm exec expo prebuild --platform android --clean --no-install
 

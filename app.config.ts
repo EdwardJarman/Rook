@@ -41,7 +41,7 @@ const env = {
 const config: ExpoConfig = {
   name: env.appName,
   slug: env.appSlug,
-  version: "1.0.0",
+  version: "0.1.1",
   runtimeVersion: { policy: "appVersion" },
   orientation: "portrait",
   icon: "./assets/images/icon.png",
@@ -65,16 +65,17 @@ const config: ExpoConfig = {
     edgeToEdgeEnabled: true,
     predictiveBackGestureEnabled: false,
     package: env.androidPackage,
-    versionCode: 1,
+    versionCode: 2,
     permissions: ["POST_NOTIFICATIONS", "RECORD_AUDIO"],
     intentFilters: [
       {
         action: "VIEW",
         autoVerify: true,
+        // Expo Router callback URLs such as `manusrook:///sign-in` use an
+        // empty host, so the scheme must accept both empty and named hosts.
         data: [
           {
             scheme: env.scheme,
-            host: "*",
           },
         ],
         category: ["BROWSABLE", "DEFAULT"],
