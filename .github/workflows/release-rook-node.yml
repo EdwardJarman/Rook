@@ -212,7 +212,7 @@ jobs:
         id: find
         shell: pwsh
         run: |
-          $exe = Get-ChildItem installer -Filter *.exe | Select-Object -First 1
+          $exe = Get-ChildItem installer -Recurse -Filter *.exe | Select-Object -First 1
           if (-not $exe) { Write-Host "::error::no installer in artifact"; exit 1 }
           echo "path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
 
