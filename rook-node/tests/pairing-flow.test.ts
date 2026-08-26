@@ -75,9 +75,9 @@ afterAll(async () => {
   }
 });
 
-async function get(pathAndQuery: string): Promise<{ status: number; body: string }> {
+async function get(pathAndQuery: string): Promise<{ status: number; body: string; headers: Headers }> {
   const response = await fetch(new URL(pathAndQuery, baseUrl));
-  return { status: response.status, body: await response.text() };
+  return { status: response.status, body: await response.text(), headers: response.headers };
 }
 
 describe("browser pairing", () => {
@@ -132,5 +132,13 @@ describe("browser pairing", () => {
     const { status, body } = await get("/healthz");
     expect(status).toBe(200);
     expect(JSON.parse(body)).toMatchObject({ ok: true, paired: true });
+  });
+
+  it("exposes healthz with CORS headers so the shell window can poll it directly", async () => {
+    const { status, body, headers } = await get("/healthz");
+    expect(status).toBe(200);
+    expect(JSON.parse(body)).toMatchObject({ ok: true, paired: true });
+    expect(headers.get("access-control-allow-origin")).toBe("*");
+    expect(headers.get("cache-control")).toBe("no-store");
   });
 });

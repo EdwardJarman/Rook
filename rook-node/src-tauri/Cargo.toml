@@ -1,6 +1,6 @@
 [package]
 name = "rook-node"
-version = "0.1.0"
+version = "0.1.6"
 description = "Rook Node — supervised local Chromium runner sidecar supervisor."
 edition = "2021"
 

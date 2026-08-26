@@ -166,6 +166,8 @@ jobs:
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          # Explicit label so releases never inherit a confusing default name.
+          name: Rook Node ${{ github.ref_name }}
           files: rook-node/release-assets/*
           draft: false
           make_latest: true

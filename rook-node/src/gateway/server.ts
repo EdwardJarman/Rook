@@ -89,7 +89,14 @@ export class Gateway {
         return;
       }
       if (url.pathname === "/healthz") {
-        response.writeHead(200, { "Content-Type": "application/json" });
+        // Permissive CORS is safe here (the gateway refuses non-loopback
+        // connections): the desktop shell's own window polls this endpoint
+        // cross-origin as a fallback when the Tauri bridge is unavailable.
+        response.writeHead(200, {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+          "Cache-Control": "no-store",
+        });
         response.end(JSON.stringify({ ok: true, paired: Boolean(this.node.db.getCloudIdentity()) }));
         return;
       }
