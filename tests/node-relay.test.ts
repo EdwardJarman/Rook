@@ -129,7 +129,7 @@ describe("browser pairing links", () => {
 
   it("builds a loopback callback URL with encoded params", () => {
     const url = buildPairCallbackUrl({ port: 37831, token: "rkp-a b", state: "s".repeat(48) });
-    expect(url.startsWith("http://localhost:37831/pair?token=rkp-a%20b&state=")).toBe(true);
+    expect(url.startsWith("http://127.0.0.1:37831/pair?token=rkp-a%20b&state=")).toBe(true);
   });
 
   it("parses only well-formed callbacks", () => {

@@ -37,7 +37,10 @@ export function buildConnectNodeUrl(input: { serverUrl: string; state: string; p
 
 /** The loopback callback the browser is redirected to after pairing is minted. */
 export function buildPairCallbackUrl(input: { port: number; token: string; state: string }): string {
-  return `http://localhost:${input.port}/pair?token=${encodeURIComponent(input.token)}&state=${encodeURIComponent(input.state)}`;
+  // 127.0.0.1, not `localhost`: the node's gateway binds only the IPv4
+  // loopback. Browsers resolve `localhost` to ::1 too, and hitting [::1]
+  // would fail the handoff, so point the redirect at the IPv4 loopback.
+  return `http://127.0.0.1:${input.port}/pair?token=${encodeURIComponent(input.token)}&state=${encodeURIComponent(input.state)}`;
 }
 
 /** Validates the callback query the node receives from the browser redirect. */

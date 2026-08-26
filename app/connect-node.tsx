@@ -100,7 +100,8 @@ export default function ConnectNodeScreen() {
       try {
         window.localStorage.removeItem(PENDING_KEY);
       } catch { }
-      window.location.href = `http://localhost:${link.port}/pair?token=${encodeURIComponent(token)}&state=${encodeURIComponent(link.state)}`;
+      window.location.href =
+        `http://127.0.0.1:${link.port}/pair?token=${encodeURIComponent(token)}&state=${encodeURIComponent(link.state)}`;
     } catch (mutationError) {
       const message = mutationError instanceof Error ? mutationError.message : String(mutationError);
       if (/UNAUTHORIZED|not authenticated|401/i.test(message)) {

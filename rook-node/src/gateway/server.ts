@@ -43,6 +43,10 @@ export interface GatewayHooks {
 export class Gateway {
   private readonly wss: WebSocketServer;
   private readonly http: http.Server;
+  /** IPv6 loopback twin of `http`, so browsers resolving `localhost` to ::1
+   * still reach the pairing endpoints. Loopback-only is preserved by
+   * `isLoopbackAddress`. */
+  private readonly http6: http.Server;
   private readonly clients = new Map<WebSocket, { deviceId: string; authenticated: boolean }>();
   /** state -> created at; single-use, pruned by TTL. */
   private readonly connectStates = new Map<string, number>();
@@ -58,15 +62,23 @@ export class Gateway {
     });
     this.wss = new WebSocketServer({ noServer: true });
 
-    this.http.on("upgrade", (request, socket, head) => {
-      const remote: string | undefined = request.socket.remoteAddress ?? undefined;
-      if (!isLoopbackAddress(remote)) {
-        socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
-        socket.destroy();
-        return;
-      }
-      this.wss.handleUpgrade(request, socket, head, (ws) => this.onConnection(ws, remote ?? ""));
+    this.http.on("upgrade", (request, socket, head) => this.onUpgrade(request, socket, head));
+    // Second loopback listener on ::1 with the same handlers. `ipv6Only` keeps
+    // it from claiming the IPv4-mapped space already used by `http`.
+    this.http6 = http.createServer((request, response) => {
+      void this.onHttpRequest(request, response);
     });
+    this.http6.on("upgrade", (request, socket, head) => this.onUpgrade(request, socket, head));
+  }
+
+  private onUpgrade(request: http.IncomingMessage, socket: import("node:stream").Duplex, head: Buffer): void {
+    const remote: string | undefined = request.socket.remoteAddress ?? undefined;
+    if (!isLoopbackAddress(remote)) {
+      socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    this.wss.handleUpgrade(request, socket, head, (ws) => this.onConnection(ws, remote ?? ""));
   }
 
   /** ---- browser pairing (loopback HTTP) ---- */
@@ -320,6 +332,15 @@ export class Gateway {
       this.http.once("error", reject);
       this.http.listen(this.config.gatewayPort, "127.0.0.1", () => resolve());
     });
+    // Best-effort IPv6 loopback twin: browsers resolving `localhost` to ::1
+    // reach the node here too. Never blocks startup and never crashes a node
+    // on a machine with IPv6 disabled — degrade gracefully to IPv4-only.
+    (() => {
+      this.http6.once("error", (error) => {
+        console.warn(`[gateway] IPv6 loopback unavailable — serving IPv4-only: ${(error as Error).message}`);
+      });
+      this.http6.listen({ port: this.config.gatewayPort || 0, host: "::1", ipv6Only: true });
+    })();
   }
 
   /** The actual bound loopback port (useful when configured as 0 for tests). */
@@ -335,7 +356,10 @@ export class Gateway {
       ws.close();
     }
     await new Promise<void>((resolve) => this.wss.close(() => resolve()));
-    await new Promise<void>((resolve) => this.http.close(() => resolve()));
+    await Promise.all([
+      new Promise<void>((resolve) => this.http.close(() => resolve())),
+      new Promise<void>((resolve) => this.http6.close(() => resolve())),
+    ]);
   }
 }
 
