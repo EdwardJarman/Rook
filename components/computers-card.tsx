@@ -13,12 +13,17 @@ function serverOrigin(): string {
   return process.env.EXPO_PUBLIC_API_ORIGIN?.replace(/\/$/, "") || "https://www.rook.lighting";
 }
 
+function isAndroidClient(): boolean {
+  if (Platform.OS === "android") return true;
+  return Platform.OS === "web" && typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
+}
+
 /**
- * Primary download action: the server 302s to the right installer for the
- * caller's OS (see server/download-routes.ts). Users never see GitHub.
+ * Primary download action: Android receives the mobile app; desktop clients
+ * receive the platform-matched Rook Node installer. Users never see GitHub.
  */
 function startDownload(): void {
-  const url = `${serverOrigin()}/api/download/node`;
+  const url = `${serverOrigin()}${isAndroidClient() ? "/api/download/android" : "/api/download/node"}`;
   if (Platform.OS === "web") {
     window.location.href = url;
     return;
@@ -61,6 +66,7 @@ export function ComputersCard() {
   const [showCodeFlow, setShowCodeFlow] = useState(false);
 
   const pendingApprovals = (commands.data ?? []).filter((command) => command.state === "awaiting_approval");
+  const isAndroid = isAndroidClient();
 
   // Queries failing usually means the computers schema was never pushed to
   // the InstantDB backend; show it instead of pretending nothing is wrong.
@@ -108,10 +114,10 @@ export function ComputersCard() {
   return (
     <View style={{ gap: 12 }}>
       <SectionHeader
-        title="Your computers"
-        caption="Run Bots on your own machine. Download Rook Node, press Connect — done."
+        title={isAndroid ? "Rook for Android" : "Your computers"}
+        caption={isAndroid ? "Take your workroom, approvals, files, and Bot updates with you." : "Run Bots on your own machine. Download Rook Node, press Connect — done."}
         action={
-          <PrimaryButton label="Download Rook Node" icon="computer" onPress={startDownload} />
+          <PrimaryButton label={isAndroid ? "Download Rook for Android" : "Download Rook Node"} icon={isAndroid ? "phone-android" : "computer"} onPress={startDownload} />
         }
       />
 

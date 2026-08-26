@@ -1,7 +1,8 @@
 /**
  * Rook Node download endpoints.
  *
- *   GET /api/download/node        → 302 to the right installer for the caller's OS
+ *   GET /api/download/node        → 302 to the right desktop installer for the caller's OS
+ *   GET /api/download/android     → 302 to the published Android application build
  *   GET /api/download/node/latest → JSON manifest (feeds the future auto-updater)
  *
  * Assets live on GitHub Releases under FIXED names (Rook-Node-Setup.exe,
@@ -14,6 +15,9 @@
 const RELEASES_DOWNLOAD_BASE = "https://github.com/EdwardJarman/Rook/releases/latest/download";
 const RELEASES_API_LATEST = "https://api.github.com/repos/EdwardJarman/Rook/releases/latest";
 const DOWNLOAD_PAGE = "/download";
+// Set ROOK_ANDROID_DOWNLOAD_URL to the production Play Store, EAS, or signed
+// APK URL. The stable GitHub asset remains a sensible release-pipeline default.
+const ANDROID_DOWNLOAD_URL = process.env.ROOK_ANDROID_DOWNLOAD_URL?.trim() || `${RELEASES_DOWNLOAD_BASE}/Rook.apk`;
 
 export const NODE_ASSETS = {
   windows: "Rook-Node-Setup.exe",
@@ -45,6 +49,10 @@ export function registerNodeDownloadRoutes(app: import("express").Express): void
   app.get("/api/download/node/latest", (_req, res) => {
     void serveLatestManifest(res);
   });
+
+  app.get("/api/download/android", (_req, res) => {
+    void serveAndroidDownload(res);
+  });
 }
 
 /**
@@ -70,6 +78,20 @@ async function serveDownload(req: import("express").Request, res: import("expres
     // their browser may reach it fine.
   }
   res.redirect(302, assetUrl);
+}
+
+async function serveAndroidDownload(res: import("express").Response): Promise<void> {
+  try {
+    const head = await fetch(ANDROID_DOWNLOAD_URL, { method: "HEAD", redirect: "follow", signal: AbortSignal.timeout(8_000) });
+    if (!head.ok) {
+      res.redirect(302, `${DOWNLOAD_PAGE}?pending=android`);
+      return;
+    }
+  } catch {
+    // If the configured host is temporarily unavailable, let the caller try
+    // the direct Android URL rather than presenting an unrelated desktop build.
+  }
+  res.redirect(302, ANDROID_DOWNLOAD_URL);
 }
 
 let manifestCache: { body: unknown; expiresAt: number } | null = null;
