@@ -61,7 +61,7 @@ export async function handlePair(req: Request, res: Response, store: NodeRelaySt
     res.status(401).json({ error: "This pairing code is invalid or has expired." });
     return;
   }
-  const { generateNodeId, generateNodeSecret, hashToken } = await import("../shared/node-relay");
+  const { generateNodeId, generateNodeSecret, hashToken } = await import("../shared/node-relay.js");
   const nodeId = generateNodeId();
   const nodeSecret = generateNodeSecret();
   await store.createRookNode({
@@ -97,7 +97,7 @@ export async function handleDesktopPairingComplete(req: Request, res: Response, 
     return;
   }
   const nodeId = generateNodeId();
-  const { generateNodeSecret, hashToken } = await import("../shared/node-relay");
+  const { generateNodeSecret, hashToken } = await import("../shared/node-relay.js");
   const nodeSecret = generateNodeSecret();
   const claim = await store.consumeDesktopPairingCode({
     requestId: input.requestId,
