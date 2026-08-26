@@ -50,8 +50,8 @@ export function registerNodeDownloadRoutes(app: import("express").Express): void
     void serveLatestManifest(res);
   });
 
-  app.get("/api/download/android", (_req, res) => {
-    void serveAndroidDownload(res);
+  app.get("/api/download/android", (req, res) => {
+    void serveAndroidDownload(req, res);
   });
 }
 
@@ -80,24 +80,49 @@ async function serveDownload(req: import("express").Request, res: import("expres
   res.redirect(302, assetUrl);
 }
 
-async function serveAndroidDownload(res: import("express").Response): Promise<void> {
+type AndroidDownloadResult =
+  | { available: true; url: string }
+  | { available: false; message: string };
+
+/**
+ * GitHub's release URL includes an extra github.com page redirect before the
+ * Azure release object. Some Android browsers can leave that handoff in a
+ * completed-but-pending state. Resolve one hop here so the phone receives the
+ * signed, attachment-ready object URL directly.
+ */
+async function resolveAndroidDownload(): Promise<AndroidDownloadResult> {
   try {
-    const head = await fetch(ANDROID_DOWNLOAD_URL, { method: "HEAD", redirect: "follow", signal: AbortSignal.timeout(8_000) });
-    if (!head.ok) {
-      res.status(503).json({
-        available: false,
-        message: "The Rook Android app is not published yet. Please try again shortly.",
-      });
-      return;
-    }
-  } catch {
-    res.status(503).json({
-      available: false,
-      message: "Rook could not verify the Android download right now. Please try again shortly.",
+    const response = await fetch(ANDROID_DOWNLOAD_URL, {
+      method: "HEAD",
+      redirect: "manual",
+      signal: AbortSignal.timeout(8_000),
     });
+
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get("location");
+      if (location) return { available: true, url: new URL(location, ANDROID_DOWNLOAD_URL).toString() };
+    }
+    if (response.ok) return { available: true, url: ANDROID_DOWNLOAD_URL };
+    return { available: false, message: "The Rook Android app is not published yet. Please try again shortly." };
+  } catch {
+    return { available: false, message: "Rook could not verify the Android download right now. Please try again shortly." };
+  }
+}
+
+async function serveAndroidDownload(req: import("express").Request, res: import("express").Response): Promise<void> {
+  const result = await resolveAndroidDownload();
+  if (!result.available) {
+    res.status(503).json(result);
     return;
   }
-  res.redirect(302, ANDROID_DOWNLOAD_URL);
+
+  if (req.query.format === "json") {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(result);
+    return;
+  }
+
+  res.redirect(302, result.url);
 }
 
 let manifestCache: { body: unknown; expiresAt: number } | null = null;

@@ -87,15 +87,23 @@ export default function DownloadScreen() {
     if (target === "android" && Platform.OS === "web") {
       setCheckingDownload(true);
       try {
-        const response = await fetch(url, { redirect: "manual" });
-        if (response.status >= 300 && response.status < 400) {
-          const location = response.headers.get("location");
-          if (!location) throw new Error("Rook did not return an Android download link.");
-          window.location.assign(new URL(location, url).toString());
+        const response = await fetch(`${url}?format=json`, { headers: { Accept: "application/json" } });
+        const payload = await response.json().catch(() => null) as { available?: boolean; url?: string; message?: string } | null;
+        if (!response.ok || !payload?.available || !payload.url) {
+          setDownloadError(payload?.message ?? "The Rook Android app is not published yet. Please try again shortly.");
           return;
         }
-        const payload = await response.json().catch(() => null) as { message?: string } | null;
-        setDownloadError(payload?.message ?? "The Rook Android app is not published yet. Please try again shortly.");
+
+        // A real anchor click preserves the browser's download semantics. The
+        // resolved release-asset URL skips the intermediate GitHub document
+        // that leaves some Android browsers showing a stuck completed file.
+        const link = document.createElement("a");
+        link.href = payload.url;
+        link.download = "Rook.apk";
+        link.rel = "noopener";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
       } catch (error) {
         setDownloadError(error instanceof Error ? error.message : "Rook could not start the Android download. Please try again shortly.");
       } finally {

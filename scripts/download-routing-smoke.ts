@@ -38,6 +38,10 @@ async function main(): Promise<void> {
     if (mode === "available") {
       assert.equal(android.status, 302);
       assert.equal(android.headers.get("location"), `${asset.origin}/Rook.apk`);
+
+      const androidJson = await fetch(`${download.origin}/api/download/android?format=json`);
+      assert.equal(androidJson.status, 200);
+      assert.deepEqual(await androidJson.json(), { available: true, url: `${asset.origin}/Rook.apk` });
     } else {
       assert.equal(android.status, 503);
       assert.deepEqual(await android.json(), {
