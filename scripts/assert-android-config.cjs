@@ -1,4 +1,12 @@
-const config = require(process.argv[2]);
+const path = require("node:path");
+
+const configPath = process.argv[2];
+if (!configPath) {
+  console.error("Pass the generated Expo configuration file path.");
+  process.exit(1);
+}
+
+const config = require(path.resolve(process.cwd(), configPath));
 
 const requiredPermissions = ["POST_NOTIFICATIONS", "RECORD_AUDIO"];
 const permissions = config.android?.permissions ?? [];
