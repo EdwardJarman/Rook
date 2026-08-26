@@ -1,6 +1,6 @@
 {
   "name": "@rook/node",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "private": true,
   "type": "module",
   "description": "Rook Node sidecar: supervised local Chromium, Bot tab registry, control gateway, durable local state. Phase 1 — Local computer core.",

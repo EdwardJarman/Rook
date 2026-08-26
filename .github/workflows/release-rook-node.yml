@@ -152,7 +152,7 @@ jobs:
           name: rook-node-${{ matrix.rust-target }}
           path: |
             rook-node/release-assets/*
-            src-tauri/target/${{ matrix.rust-target }}/release/bundle/nsis/*.exe
+            rook-node/src-tauri/target/${{ matrix.rust-target }}/release/bundle/nsis/*.exe
           if-no-files-found: warn
 
       - name: Stage release assets under stable names
