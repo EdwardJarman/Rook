@@ -86,11 +86,15 @@ export function BotCreateSheet({
   const compactMobile = Platform.OS !== "web" && width < 600;
   // Keep the native creator as a deliberate floating dialog rather than an
   // almost full-screen panel layered over the tab header.
+  // The first page deliberately mirrors the web finish chooser: a compact
+  // centered identity surface, rather than a form stretched to fill the phone.
   const panelWidth = compactMobile
-    ? Math.min(Math.max(width - 48, 304), 360)
+    ? Math.min(Math.max(width - 64, 304), 344)
     : Math.min(Math.max(width - 40, 360), 520);
   const panelHeight = compactMobile
-    ? Math.min(Math.max(height - 260, 456), 536)
+    ? step === 1
+      ? Math.min(Math.max(height - 300, 432), 486)
+      : Math.min(Math.max(height - 230, 486), 550)
     : Math.min(height - 72, 600);
   const copy = step === 1 ? null : STEP_COPY[step];
   const suggestedModel = useMemo(() => {
@@ -127,14 +131,7 @@ export function BotCreateSheet({
   };
 
   const continueForward = () => {
-    if (step === 1 && !name.trim()) {
-      Alert.alert(
-        "Name your Bot",
-        "Choose a short name that makes this teammate easy to recognize.",
-      );
-      return;
-    }
-    if (step === 2 && (!role.trim() || !purpose.trim())) {
+    if (step === 2 && (!name.trim() || !role.trim() || !purpose.trim())) {
       Alert.alert(
         "Describe the work",
         "Add a primary job and a clear description of what this Bot should own.",
@@ -274,6 +271,11 @@ export function BotCreateSheet({
                       onColorChange={setColor}
                       onIconChange={setIcon}
                     />
+                  </View>
+                ) : null}
+
+                {step === 2 ? (
+                  <View style={styles.stepContent}>
                     <Field
                       label="Name"
                       value={name}
@@ -281,7 +283,6 @@ export function BotCreateSheet({
                       placeholder="Atlas, Ledger, Scout…"
                       autoFocus
                       returnKeyType="next"
-                      onSubmitEditing={continueForward}
                       style={{
                         backgroundColor: dark
                           ? "rgba(11, 15, 21, 0.52)"
@@ -289,11 +290,6 @@ export function BotCreateSheet({
                         borderColor: tint(color, dark ? 0.42 : 0.28),
                       }}
                     />
-                  </View>
-                ) : null}
-
-                {step === 2 ? (
-                  <View style={styles.stepContent}>
                     <Field
                       label="Primary job"
                       value={role}
@@ -491,8 +487,8 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingHorizontal: 22,
-    paddingTop: 18,
-    paddingBottom: 18,
+    paddingTop: 12,
+    paddingBottom: 14,
   },
   scroller: {
     flex: 1,

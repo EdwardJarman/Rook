@@ -59,7 +59,7 @@ export function BotIdentityPicker({
           <BotOrb
             color={color}
             material={material}
-            size={116}
+            size={136}
             interactive
             blink
           />
@@ -125,8 +125,8 @@ export function BotIdentityPicker({
                 <BotOrb
                   color={color}
                   material={option}
-                  size={42}
-                  interactive
+                  size={54}
+                  interactive={false}
                   blink
                 />
                 <View style={styles.materialCopy}>
@@ -150,52 +150,52 @@ export function BotIdentityPicker({
 
 const styles = StyleSheet.create({
   wrap: {
-    gap: 13,
+    gap: 20,
   },
   previewWrap: {
-    height: 124,
+    height: 150,
     alignItems: "center",
     justifyContent: "center",
   },
   group: {
-    gap: 6,
+    gap: 10,
   },
   label: {
-    fontSize: 10.5,
-    fontWeight: "700",
-    letterSpacing: 1,
+    fontSize: 12,
+    fontWeight: "800",
+    letterSpacing: 1.45,
   },
   options: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 3,
+    gap: 4,
   },
   colorOption: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     borderWidth: 1.5,
     alignItems: "center",
     justifyContent: "center",
   },
   colorDot: {
-    width: 19,
-    height: 19,
+    width: 20,
+    height: 20,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.55)",
   },
   materials: {
     flexDirection: "row",
-    gap: 8,
+    gap: 10,
   },
   materialOption: {
     flex: 1,
-    minHeight: 64,
-    borderRadius: 15,
-    borderWidth: 1,
-    paddingHorizontal: 11,
-    paddingVertical: 8,
+    minHeight: 88,
+    borderRadius: 18,
+    borderWidth: 1.5,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
@@ -204,11 +204,14 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   materialTitle: {
-    fontSize: 12.5,
+    fontSize: 16,
+    lineHeight: 19,
     fontWeight: "700",
+    letterSpacing: -0.25,
   },
   materialDetail: {
-    fontSize: 10.5,
-    marginTop: 1,
+    fontSize: 12.5,
+    lineHeight: 16,
+    marginTop: 2,
   },
 });

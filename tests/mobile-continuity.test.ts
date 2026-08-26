@@ -30,10 +30,11 @@ describe("mobile account continuity and live bot identity", () => {
     expect(source).toContain("Linking.openURL(verificationUrl)");
   });
 
-  it("retains the moving prism finish for Android bot creation", () => {
+  it("uses the web shader, gaze, blink, and Prism finish for Android bot creation", () => {
     const source = projectFile("components/live-orb.tsx");
-    expect(source).toContain("withRepeat");
+    expect(source).toContain("getContext('webgl'");
+    expect(source).toContain("pointermove");
+    expect(source).toContain("cfg.blink");
     expect(source).toContain('variant === "webgl"');
-    expect(source).toContain("Animated.View");
   });
 });

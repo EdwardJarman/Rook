@@ -36,6 +36,7 @@ import {
   SheetEyebrow,
   useRookTheme,
 } from "@/components/rook-primitives";
+import { MathNotation } from "@/components/math-notation";
 import { ScreenContainer } from "@/components/screen-container";
 import { botDropTargetProps, useBotDrag } from "@/lib/bot-drag";
 import { useRookNotifications } from "@/lib/rook-notifications";
@@ -49,6 +50,7 @@ import {
   providerLabel,
 } from "@/lib/ai-provider";
 import { parseChatMarkdown, type ChatMarkdownInline } from "@/lib/chat-markdown";
+import { splitMathNotation } from "@/lib/math-notation";
 import { approvalReason, fileSizeLabel, requiresApproval } from "@/lib/workroom-helpers";
 import { useWorkroom, type Bot } from "@/lib/workroom-store";
 
@@ -876,29 +878,50 @@ function ChatMarkdown({
           return (
             <View key={`${block.type}-${index}`} style={{ flexDirection: "row", gap: 7, alignItems: "flex-start" }}>
               <Text style={[lineStyle, { minWidth: block.type === "ordered" ? 18 : 10 }]}>{block.type === "ordered" ? `${block.ordinal}.` : "•"}</Text>
-              <Text style={[lineStyle, { flex: 1 }]}>{renderInlineMarkdown(block.content, color)}</Text>
+              <View style={{ flex: 1, flexDirection: "row", flexWrap: "wrap", alignItems: "center" }}>
+                {renderInlineMarkdown(block.content, color, lineStyle.fontSize, lineStyle.fontWeight)}
+              </View>
             </View>
           );
         }
-        return <Text key={`${block.type}-${index}`} style={lineStyle}>{renderInlineMarkdown(block.content, color)}</Text>;
+        return (
+          <View key={`${block.type}-${index}`} style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center" }}>
+            {renderInlineMarkdown(block.content, color, lineStyle.fontSize, lineStyle.fontWeight)}
+          </View>
+        );
       })}
     </View>
   );
 }
 
-function renderInlineMarkdown(parts: ChatMarkdownInline[], color: string) {
-  return parts.map((part, index) => (
-    <Text
-      key={`${part.text}-${index}`}
-      style={{
-        color,
-        fontWeight: part.bold ? "700" : undefined,
-        fontFamily: part.code ? "monospace" : undefined,
-      }}
-    >
-      {part.text}
-    </Text>
- ));
+function renderInlineMarkdown(
+  parts: ChatMarkdownInline[],
+  color: string,
+  fontSize: number,
+  baseWeight: "400" | "700",
+) {
+  return parts.flatMap((part, partIndex) =>
+    splitMathNotation(part.text).map((segment, segmentIndex) => {
+      const key = `${partIndex}-${segmentIndex}-${segment.type}`;
+      if (segment.type === "math") {
+        return <MathNotation key={key} latex={segment.latex} color={color} fontSize={fontSize} display={segment.display} />;
+      }
+      return (
+        <Text
+          key={key}
+          style={{
+            color,
+            fontSize,
+            lineHeight: fontSize + 7,
+            fontWeight: part.bold ? "700" : baseWeight,
+            fontFamily: part.code ? "monospace" : undefined,
+          }}
+        >
+          {segment.text}
+        </Text>
+      );
+    }),
+  );
 }
 
 function FileChip({ name }: { name: string }) {
