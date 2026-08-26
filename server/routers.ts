@@ -242,6 +242,13 @@ export const appRouter = router({
       if (!created) throw new Error("Pairing is temporarily unavailable.");
       return { token: created.token, expiresAt: created.expiresAt.toISOString() };
     }),
+    issueDesktopPairingCode: protectedProcedure
+      .input(z.object({ requestId: z.string().regex(/^rkd-[a-f0-9]{48}$/i) }))
+      .mutation(async ({ ctx, input }) => {
+        const issued = await db.issueDesktopPairingCode(ctx.user.id, input.requestId.toLowerCase());
+        if (!issued) throw new Error("This desktop connection has expired or is unavailable. Start again from Rook Node.");
+        return { code: issued.code, expiresAt: issued.expiresAt.toISOString(), name: issued.name };
+      }),
     rename: protectedProcedure.input(z.object({
       nodeId: z.string().min(4).max(80),
       name: z.string().min(1).max(80),

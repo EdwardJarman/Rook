@@ -4,10 +4,16 @@ import { randomBytes } from "node:crypto";
 import {
   APPROVAL_GRANT_TTL_MS,
   COMMAND_TTL_MS,
+  DESKTOP_PAIRING_MAX_ATTEMPTS,
+  DESKTOP_PAIRING_REQUEST_TTL_MS,
   PAIRING_TOKEN_TTL_MS,
+  desktopPairingCodeDigest,
   generateApprovalId,
+  generateDesktopPairingCode,
+  generateDesktopPairingRequestId,
   generatePairingToken,
   hashToken,
+  secretsMatch,
 } from "../shared/node-relay";
 import schema from "../instant.schema";
 import type {
@@ -129,6 +135,27 @@ type PairingTokenRow = {
   usedByNodeId?: string;
   expiresAt: Date;
   createdAt: Date;
+};
+type DesktopPairingRequestRow = {
+  id: string;
+  requestId: string;
+  codeHash?: string;
+  userId?: string;
+  name: string;
+  version: string;
+  attempts: number;
+  state: string;
+  usedByNodeId?: string;
+  expiresAt: Date;
+  createdAt: Date;
+  updatedAt: Date;
+};
+export type DesktopPairingRequest = {
+  requestId: string;
+  name: string;
+  version: string;
+  state: "pending" | "code-issued" | "consumed" | "expired" | "locked";
+  expiresAt: Date;
 };
 const withTimestamps = <T extends { createdAt: Date; updatedAt: Date }>(
   entity: T,
@@ -898,6 +925,120 @@ export async function markPairingTokenUsed(token: string, nodeId: string): Promi
       usedByNodeId: nodeId,
     }),
   );
+}
+
+export async function createDesktopPairingRequest(input: { name: string; version: string }): Promise<DesktopPairingRequest | undefined> {
+  const database = await getDb();
+  if (!database) return undefined;
+  const now = new Date();
+  const requestId = generateDesktopPairingRequestId();
+  const expiresAt = new Date(now.getTime() + DESKTOP_PAIRING_REQUEST_TTL_MS);
+  await database.transact(
+    database.tx.desktopPairingRequests[id()].update({
+      requestId,
+      name: input.name,
+      version: input.version,
+      attempts: 0,
+      state: "pending",
+      expiresAt,
+      createdAt: now,
+      updatedAt: now,
+    }),
+  );
+  return { requestId, name: input.name, version: input.version, state: "pending", expiresAt };
+}
+
+async function findDesktopPairingRequest(requestId: string): Promise<DesktopPairingRequestRow | undefined> {
+  const database = await getDb();
+  if (!database) return undefined;
+  const { desktopPairingRequests } = (await database.query({
+    desktopPairingRequests: { $: { where: { requestId }, limit: 1 } },
+  })) as { desktopPairingRequests: DesktopPairingRequestRow[] };
+  return desktopPairingRequests[0];
+}
+
+function desktopRequestActive(record: DesktopPairingRequestRow): boolean {
+  return asDate(record.expiresAt).getTime() > Date.now() && !["consumed", "locked", "expired"].includes(record.state);
+}
+
+/** Called by the authenticated Rook web session; raw codes are never persisted. */
+export async function issueDesktopPairingCode(userId: string, requestId: string): Promise<{ code: string; expiresAt: Date; name: string } | undefined> {
+  const database = await getDb();
+  const record = await findDesktopPairingRequest(requestId);
+  if (!database || !record) return undefined;
+  if (!desktopRequestActive(record)) {
+    if (record.state !== "expired") {
+      await database.transact(database.tx.desktopPairingRequests.lookup("requestId", requestId).update({ state: "expired", updatedAt: new Date() }));
+    }
+    return undefined;
+  }
+  if (record.userId && record.userId !== userId) return undefined;
+  const code = generateDesktopPairingCode();
+  const codeHash = desktopPairingCodeDigest(code);
+  if (!codeHash) return undefined;
+  await database.transact(
+    database.tx.desktopPairingRequests.lookup("requestId", requestId).update({
+      userId,
+      codeHash,
+      attempts: 0,
+      state: "code-issued",
+      updatedAt: new Date(),
+    }),
+  );
+  return { code, expiresAt: asDate(record.expiresAt), name: record.name };
+}
+
+/**
+ * Atomically reserves one request id with a uniqueness-backed claim. The
+ * winning caller may create the durable Node; concurrent and replayed callers
+ * receive no owner identity and therefore cannot issue another credential.
+ */
+export async function consumeDesktopPairingCode(input: { requestId: string; code: string; nodeId: string; secretHash: string }): Promise<{ userId: string; name: string; version: string } | undefined> {
+  const database = await getDb();
+  const record = await findDesktopPairingRequest(input.requestId);
+  if (!database || !record || !desktopRequestActive(record) || record.state !== "code-issued" || !record.userId || !record.codeHash) return undefined;
+  const digest = desktopPairingCodeDigest(input.code);
+  if (!digest || !secretsMatch(digest, record.codeHash)) {
+    const attempts = Math.min((Number(record.attempts) || 0) + 1, DESKTOP_PAIRING_MAX_ATTEMPTS);
+    await database.transact(
+      database.tx.desktopPairingRequests.lookup("requestId", input.requestId).update({
+        attempts,
+        state: attempts >= DESKTOP_PAIRING_MAX_ATTEMPTS ? "locked" : "code-issued",
+        updatedAt: new Date(),
+      }),
+    );
+    return undefined;
+  }
+  try {
+    const now = new Date();
+    await database.transact([
+      database.tx.desktopPairingClaims[id()].update({
+        requestId: input.requestId,
+        nodeId: input.nodeId,
+        userId: record.userId,
+        createdAt: now,
+      }),
+      database.tx.desktopPairingRequests.lookup("requestId", input.requestId).update({
+        state: "consumed",
+        usedByNodeId: input.nodeId,
+        updatedAt: now,
+      }),
+      database.tx.rookNodes[id()].update({
+        nodeId: input.nodeId,
+        userId: record.userId,
+        name: record.name,
+        secretHash: input.secretHash,
+        status: "online",
+        version: record.version,
+        lastSeenAt: now,
+        createdAt: now,
+        updatedAt: now,
+      }),
+    ]);
+  } catch {
+    return undefined;
+  }
+  return { userId: record.userId, name: record.name, version: record.version };
 }
 
 export async function createRookNode(input: {

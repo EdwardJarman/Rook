@@ -56,6 +56,8 @@ export function createApp() {
   registerNodeRelayRoutes(app, {
     consumePairingToken: (token) => db.consumePairingToken(token),
     markPairingTokenUsed: (token, nodeId) => db.markPairingTokenUsed(token, nodeId),
+    createDesktopPairingRequest: (input) => db.createDesktopPairingRequest(input),
+    consumeDesktopPairingCode: (input) => db.consumeDesktopPairingCode(input),
     createRookNode: (input) => db.createRookNode(input),
     getRookNode: async (nodeId) => {
       const auth = await db.getRookNodeAuth(nodeId);

@@ -12,7 +12,10 @@ import type { Request, Response } from "express";
 
 import {
   DEFAULT_POLL_AFTER_MS,
+  generateNodeId,
   parseUplinkAuth,
+  validateDesktopPairingComplete,
+  validateDesktopPairingStart,
   validatePairRequest,
   validateSyncRequest,
   verifyStoredSecret,
@@ -23,6 +26,8 @@ import {
 export interface NodeRelayStore {
   consumePairingToken(token: string): Promise<string | undefined>;
   markPairingTokenUsed(token: string, nodeId: string): Promise<void>;
+  createDesktopPairingRequest(input: { name: string; version: string }): Promise<{ requestId: string; expiresAt: Date } | undefined>;
+  consumeDesktopPairingCode(input: { requestId: string; code: string; nodeId: string; secretHash: string }): Promise<{ userId: string; name: string; version: string } | undefined>;
   createRookNode(input: { nodeId: string; userId: string; name: string; secretHash: string; version: string }): Promise<unknown>;
   getRookNode(nodeId: string): Promise<{ secretHash: string; status: string } | undefined>;
   touchRookNode(nodeId: string, version: string): Promise<void>;
@@ -33,6 +38,12 @@ export interface NodeRelayStore {
 export function registerNodeRelayRoutes(app: import("express").Express, store: NodeRelayStore): void {
   app.post("/api/node/pair", (req, res) => {
     void handlePair(req, res, store);
+  });
+  app.post("/api/node/desktop-pairing/start", (req, res) => {
+    void handleDesktopPairingStart(req, res, store);
+  });
+  app.post("/api/node/desktop-pairing/complete", (req, res) => {
+    void handleDesktopPairingComplete(req, res, store);
   });
   app.post("/api/node/sync", (req, res) => {
     void handleSync(req, res, store);
@@ -62,6 +73,43 @@ export async function handlePair(req: Request, res: Response, store: NodeRelaySt
   });
   await store.markPairingTokenUsed(input.pairingToken, nodeId).catch(() => undefined);
   const body: PairResponse = { nodeId, nodeSecret, userId };
+  res.json(body);
+}
+
+export async function handleDesktopPairingStart(req: Request, res: Response, store: NodeRelayStore): Promise<void> {
+  const input = validateDesktopPairingStart(req.body);
+  if (!input) {
+    res.status(400).json({ error: "Invalid desktop pairing request." });
+    return;
+  }
+  const request = await store.createDesktopPairingRequest(input).catch(() => undefined);
+  if (!request) {
+    res.status(503).json({ error: "Pairing is temporarily unavailable. Please try again." });
+    return;
+  }
+  res.status(201).json({ requestId: request.requestId, expiresAt: request.expiresAt.toISOString() });
+}
+
+export async function handleDesktopPairingComplete(req: Request, res: Response, store: NodeRelayStore): Promise<void> {
+  const input = validateDesktopPairingComplete(req.body);
+  if (!input) {
+    res.status(400).json({ error: "Enter the eight-character code shown on Rook." });
+    return;
+  }
+  const nodeId = generateNodeId();
+  const { generateNodeSecret, hashToken } = await import("../shared/node-relay");
+  const nodeSecret = generateNodeSecret();
+  const claim = await store.consumeDesktopPairingCode({
+    requestId: input.requestId,
+    code: input.code,
+    nodeId,
+    secretHash: hashToken(nodeSecret),
+  }).catch(() => undefined);
+  if (!claim) {
+    res.status(401).json({ error: "This code is invalid, expired, or has already been used." });
+    return;
+  }
+  const body: PairResponse = { nodeId, nodeSecret, userId: claim.userId };
   res.json(body);
 }
 

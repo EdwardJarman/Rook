@@ -18,7 +18,6 @@ import { randomBytes } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
 
 import {
-  buildConnectNodeUrl,
   CONNECT_STATE_TTL_MS,
   parsePairCallback,
 } from "../../../shared/node-relay.js";
@@ -26,7 +25,7 @@ import {
 import type { RookConfig } from "../config.js";
 import { ROOK_NODE_VERSION } from "../config.js";
 import type { RookNode } from "../core/node.js";
-import { pairWithServer, type CloudIdentity } from "../uplink/uplink.js";
+import { beginDesktopPairing, completeDesktopPairing, pairWithServer, type CloudIdentity } from "../uplink/uplink.js";
 import type { CommandRejectCode, CommandResult } from "../types.js";
 
 export interface GatewayEvent {
@@ -48,8 +47,10 @@ export class Gateway {
    * `isLoopbackAddress`. */
   private readonly http6: http.Server;
   private readonly clients = new Map<WebSocket, { deviceId: string; authenticated: boolean }>();
-  /** state -> created at; single-use, pruned by TTL. */
+  /** Legacy callback states kept only for older browser-pairing links. */
   private readonly connectStates = new Map<string, number>();
+  /** Local page session -> opaque HTTPS request id, never exposed outside this computer. */
+  private readonly desktopPairings = new Map<string, { requestId: string; expiresAt: number }>();
   private closed = false;
 
   constructor(
@@ -93,7 +94,8 @@ export class Gateway {
     const url = new URL(request.url ?? "/", `http://127.0.0.1:${this.config.gatewayPort}`);
     try {
       if (url.pathname === "/connect") {
-        this.serveConnectPage(response);
+        if (request.method === "POST") await this.completeDesktopCode(request, response);
+        else await this.serveConnectPage(response);
         return;
       }
       if (url.pathname === "/pair") {
@@ -119,23 +121,74 @@ export class Gateway {
     }
   }
 
-  /** Local landing page with the single "Connect account" button. */
-  private serveConnectPage(response: http.ServerResponse): void {
-    const state = this.beginConnectState();
-    const connectUrl = buildConnectNodeUrl({
-      serverUrl: this.config.serverUrl,
-      state,
-      port: this.address().port,
-    });
+  /**
+   * Primary desktop pairing page. It opens the signed-in Rook web page, then
+   * accepts the short-lived code back here. No browser redirect to localhost is
+   * required after sign-in.
+   */
+  private async serveConnectPage(response: http.ServerResponse): Promise<void> {
+    let session;
+    try {
+      session = await beginDesktopPairing({
+        serverUrl: this.config.serverUrl,
+        name: hostName(),
+        version: ROOK_NODE_VERSION,
+      });
+    } catch {
+      this.html(response, 503, "Pairing unavailable", "Rook could not prepare a secure connection right now. Please refresh and try again.");
+      return;
+    }
+    const localSessionId = randomBytes(18).toString("hex");
+    this.pruneDesktopPairings();
+    this.desktopPairings.set(localSessionId, { requestId: session.requestId, expiresAt: new Date(session.expiresAt).getTime() });
     this.html(
       response,
       200,
       "Connect Rook Node",
-      `
-      <p>This computer wants to join your Rook account.</p>
-      <p class="muted">You'll sign in on ${escapeHtml(this.config.serverUrl)} and come right back.</p>
-      <a class="btn" href="${escapeHtml(connectUrl)}">Connect account</a>`,
+      `<p>This computer wants to join your Rook account.</p>
+       <p class="muted">1. Sign in on Rook web. 2. Copy the one-time code. 3. Paste it below.</p>
+       <a class="btn" href="${escapeHtml(session.connectUrl)}" target="_blank" rel="noopener">Connect account</a>
+       <form method="post" action="/connect" class="code-form">
+         <input type="hidden" name="session" value="${localSessionId}">
+         <label for="code">One-time code</label>
+         <input id="code" name="code" inputmode="text" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" maxlength="9" placeholder="ABCD-EFGH" required autofocus>
+         <button class="btn" type="submit">Connect this computer</button>
+       </form>
+       <p class="muted">The code is single-use and expires in a few minutes. Never share it.</p>`,
     );
+  }
+
+  private async completeDesktopCode(request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
+    const form = new URLSearchParams(await readBody(request));
+    const sessionId = form.get("session") ?? "";
+    const code = form.get("code") ?? "";
+    this.pruneDesktopPairings();
+    const session = this.desktopPairings.get(sessionId);
+    if (!session || session.expiresAt <= Date.now()) {
+      this.html(response, 400, "Code expired", "This connection has expired. Return to Rook Node and click Connect account again.");
+      return;
+    }
+    try {
+      const identity = await completeDesktopPairing({
+        serverUrl: this.config.serverUrl,
+        requestId: session.requestId,
+        code,
+        name: hostName(),
+        version: ROOK_NODE_VERSION,
+      });
+      this.desktopPairings.delete(sessionId);
+      this.node.db.saveCloudIdentity(identity);
+      this.html(response, 200, "Connected", `<p><strong>${escapeHtml(hostName())}</strong> is now connected to your Rook account.</p><p class="muted">You can close this window.</p>`);
+      this.hooks.onPaired?.(identity);
+    } catch (error) {
+      this.html(response, 401, "Code not accepted", `<p>${escapeHtml((error as Error).message.includes("eight-character") ? "Enter the eight-character code shown on Rook." : "This code is invalid, expired, or already used.")}</p><p class="muted">Return to the Rook web page to generate a new code, then try again.</p>`);
+    }
+  }
+
+  private pruneDesktopPairings(): void {
+    for (const [sessionId, session] of this.desktopPairings) {
+      if (session.expiresAt <= Date.now()) this.desktopPairings.delete(sessionId);
+    }
   }
 
   /** The redirect target after the web app mints a pairing token. */
@@ -176,7 +229,8 @@ export class Gateway {
   h1{font-size:20px;margin:0 0 10px}
   p{font-size:14.5px;line-height:1.5;margin:8px 0}
   .muted{color:#8a887f;font-size:12.5px}
-  .btn{display:inline-block;margin-top:14px;background:#1a1d23;color:#fff;text-decoration:none;padding:11px 22px;border-radius:12px;font-weight:600;font-size:14px}
+  .btn{display:inline-block;margin-top:14px;background:#1a1d23;color:#fff;text-decoration:none;border:0;padding:11px 22px;border-radius:12px;font-weight:600;font-size:14px;cursor:pointer}
+  .code-form{display:grid;gap:9px;margin-top:20px}.code-form label{font-size:12px;font-weight:700;color:#555}.code-form input{font:700 19px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:2px;text-transform:uppercase;border:1px solid #d8d6cf;border-radius:12px;padding:12px 14px;outline:none}.code-form input:focus{border-color:#1a1d23}.code-form .btn{margin-top:2px}
 </style></head><body><div class="card"><h1>${escapeHtml(title)}</h1>${bodyHtml}</div></body></html>`);
   }
 
@@ -361,6 +415,18 @@ export class Gateway {
       new Promise<void>((resolve) => this.http6.close(() => resolve())),
     ]);
   }
+}
+
+async function readBody(request: http.IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    const part = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += part.length;
+    if (size > 4_096) throw new Error("Request body is too large.");
+    chunks.push(part);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 function isLoopbackAddress(address: string | undefined): boolean {

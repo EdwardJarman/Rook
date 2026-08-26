@@ -14,6 +14,9 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
 export const PAIRING_TOKEN_TTL_MS = 10 * 60_000;
+/** Maximum time from desktop request creation to successful code exchange. */
+export const DESKTOP_PAIRING_REQUEST_TTL_MS = 10 * 60_000;
+export const DESKTOP_PAIRING_MAX_ATTEMPTS = 6;
 export const COMMAND_TTL_MS = 15 * 60_000;
 export const APPROVAL_GRANT_TTL_MS = 5 * 60_000;
 export const DEFAULT_POLL_AFTER_MS = 3_000;
@@ -27,7 +30,14 @@ export function normalizeServerUrl(serverUrl: string): string {
   return trimmed;
 }
 
-/** The web-app page that authenticates the owner and redirects back to the node. */
+/** The web page that authenticates the owner and shows a one-time desktop code. */
+export function buildDesktopPairingUrl(input: { serverUrl: string; requestId: string }): string {
+  const url = new URL("/connect-node", normalizeServerUrl(input.serverUrl));
+  url.searchParams.set("request", input.requestId);
+  return url.toString();
+}
+
+/** Legacy browser callback URL builder, retained only for older Node installations. */
 export function buildConnectNodeUrl(input: { serverUrl: string; state: string; port: number }): string {
   const url = new URL("/connect-node", normalizeServerUrl(input.serverUrl));
   url.searchParams.set("state", input.state);
@@ -63,6 +73,34 @@ export function validateConnectPort(port: unknown): number | undefined {
 /** One-time pairing token shown in the app; the node exchanges it for a credential. */
 export function generatePairingToken(): string {
   return `rkp-${randomBytes(24).toString("hex")}`;
+}
+
+/** Opaque identifier handed from a desktop install to the authenticated web page. */
+export function generateDesktopPairingRequestId(): string {
+  return `rkd-${randomBytes(24).toString("hex")}`;
+}
+
+const DESKTOP_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+/** Eight easy-to-type characters, displayed as ABCD-EFGH. */
+export function generateDesktopPairingCode(): string {
+  const bytes = randomBytes(8);
+  const characters = Array.from(bytes, (byte) => DESKTOP_CODE_ALPHABET[byte % DESKTOP_CODE_ALPHABET.length]);
+  return `${characters.slice(0, 4).join("")}-${characters.slice(4).join("")}`;
+}
+
+/** Accept spaces and dashes but never ambiguous characters or arbitrary input. */
+export function normalizeDesktopPairingCode(value: string): string | undefined {
+  const normalized = value.trim().toUpperCase().replace(/[\s-]/g, "");
+  if (normalized.length !== 8) return undefined;
+  return [...normalized].every((character) => DESKTOP_CODE_ALPHABET.includes(character))
+    ? normalized
+    : undefined;
+}
+
+export function desktopPairingCodeDigest(code: string): string | undefined {
+  const normalized = normalizeDesktopPairingCode(code);
+  return normalized ? hashToken(`desktop-code:${normalized}`) : undefined;
 }
 
 export function hashToken(token: string): string {
@@ -161,6 +199,18 @@ export type PairResponse = {
   userId: string;
 };
 
+/** Desktop → server request to begin a browser-login / code-entry pairing flow. */
+export type DesktopPairingStartBody = { name: string; version: string };
+export type DesktopPairingStartResponse = { requestId: string; expiresAt: string; connectUrl: string };
+
+/** Desktop → server request to exchange one user-entered code for a credential. */
+export type DesktopPairingCompleteBody = {
+  requestId: string;
+  code: string;
+  name: string;
+  version: string;
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -247,4 +297,24 @@ export function validatePairRequest(body: unknown): PairRequestBody | undefined 
     name: body.name.trim(),
     version: body.version,
   };
+}
+
+function pairingDevice(input: unknown): { name: string; version: string } | undefined {
+  if (!isRecord(input)) return undefined;
+  if (typeof input.name !== "string" || input.name.trim().length === 0 || input.name.trim().length > 80) return undefined;
+  if (typeof input.version !== "string" || input.version.trim().length === 0 || input.version.trim().length > 32) return undefined;
+  return { name: input.name.trim(), version: input.version.trim() };
+}
+
+export function validateDesktopPairingStart(body: unknown): DesktopPairingStartBody | undefined {
+  return pairingDevice(body);
+}
+
+export function validateDesktopPairingComplete(body: unknown): DesktopPairingCompleteBody | undefined {
+  const device = pairingDevice(body);
+  if (!device || !isRecord(body) || typeof body.requestId !== "string" || typeof body.code !== "string") return undefined;
+  if (!/^rkd-[a-f0-9]{48}$/i.test(body.requestId)) return undefined;
+  const code = normalizeDesktopPairingCode(body.code);
+  if (!code) return undefined;
+  return { requestId: body.requestId.toLowerCase(), code, ...device };
 }

@@ -11,6 +11,8 @@ import dns from "node:dns";
 
 import {
   DEFAULT_POLL_AFTER_MS,
+  buildDesktopPairingUrl,
+  normalizeDesktopPairingCode,
   normalizeServerUrl,
   type CloudApprovalGrant,
   type QueuedRelayCommand,
@@ -37,6 +39,50 @@ export interface CloudIdentity {
   nodeId: string;
   nodeSecret: string;
   pairedAt: string;
+}
+
+export interface DesktopPairingSession {
+  requestId: string;
+  expiresAt: string;
+  connectUrl: string;
+}
+
+/** Creates an opaque browser-login request. No credential or pairing code is returned here. */
+export async function beginDesktopPairing(input: { serverUrl: string; name: string; version: string }): Promise<DesktopPairingSession> {
+  const serverUrl = normalizeServerUrl(input.serverUrl);
+  const response = await fetch(new URL("/api/node/desktop-pairing/start", serverUrl), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: input.name, version: input.version }),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) throw new UplinkError(`Desktop connection could not start (${response.status}).`);
+  const body = (await response.json()) as { requestId?: string; expiresAt?: string };
+  if (typeof body.requestId !== "string" || !/^rkd-[a-f0-9]{48}$/i.test(body.requestId) || typeof body.expiresAt !== "string") {
+    throw new UplinkError("Desktop connection response was malformed.");
+  }
+  return { requestId: body.requestId.toLowerCase(), expiresAt: body.expiresAt, connectUrl: buildDesktopPairingUrl({ serverUrl, requestId: body.requestId }) };
+}
+
+/** Exchanges a user-entered short code for the same durable identity used by the uplink. */
+export async function completeDesktopPairing(input: { serverUrl: string; requestId: string; code: string; name: string; version: string }): Promise<CloudIdentity> {
+  const code = normalizeDesktopPairingCode(input.code);
+  if (!code) throw new UplinkError("Enter the eight-character code shown on Rook.");
+  const response = await fetch(new URL("/api/node/desktop-pairing/complete", normalizeServerUrl(input.serverUrl)), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ requestId: input.requestId, code, name: input.name, version: input.version }),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new UplinkError(`Desktop code was not accepted (${response.status}): ${detail.slice(0, 200)}`);
+  }
+  const body = (await response.json()) as { nodeId?: string; nodeSecret?: string; userId?: string };
+  if (typeof body.nodeId !== "string" || typeof body.nodeSecret !== "string" || typeof body.userId !== "string") {
+    throw new UplinkError("Desktop connection response was malformed.");
+  }
+  return { serverUrl: normalizeServerUrl(input.serverUrl), userId: body.userId, nodeId: body.nodeId, nodeSecret: body.nodeSecret, pairedAt: new Date().toISOString() };
 }
 
 /** Exchanges a one-time pairing token for a durable node credential. */

@@ -2,19 +2,27 @@
  * Shared relay protocol helpers: token lifecycle, credential verification,
  * envelope construction, and payload validation.
  */
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
   buildCommandEnvelope,
+  buildDesktopPairingUrl,
   buildConnectNodeUrl,
   buildPairCallbackUrl,
+  generateDesktopPairingCode,
+  generateDesktopPairingRequestId,
   generateNodeId,
   generatePairingToken,
   hashToken,
   isSensitiveCapability,
   parsePairCallback,
+  normalizeDesktopPairingCode,
   parseUplinkAuth,
   validateConnectPort,
+  validateDesktopPairingComplete,
   validatePairRequest,
   validateSyncRequest,
   verifyStoredSecret,
@@ -35,6 +43,37 @@ describe("pairing tokens", () => {
     expect(verifyStoredSecret(secret, digest)).toBe(true);
     expect(verifyStoredSecret("rks-wrong", digest)).toBe(false);
     expect(verifyStoredSecret("", "")).toBe(false);
+  });
+});
+
+describe("desktop one-time codes", () => {
+  it("generates opaque request ids and readable grouped codes", () => {
+    const requestId = generateDesktopPairingRequestId();
+    const code = generateDesktopPairingCode();
+    expect(requestId).toMatch(/^rkd-[a-f0-9]{48}$/);
+    expect(code).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+    expect(normalizeDesktopPairingCode(code.toLowerCase())).toBe(code.replace("-", ""));
+    expect(normalizeDesktopPairingCode("ABCD EFGH")).toBe("ABCDEFGH");
+    expect(normalizeDesktopPairingCode("ABCD-01IO")).toBeUndefined();
+  });
+
+  it("builds the web handoff without a localhost callback or secret", () => {
+    const requestId = generateDesktopPairingRequestId();
+    expect(buildDesktopPairingUrl({ serverUrl: "https://www.rook.lighting/", requestId })).toBe(`https://www.rook.lighting/connect-node?request=${requestId}`);
+  });
+
+  it("uses the same persisted request key as the authenticated navigation gate", () => {
+    const connectScreen = readFileSync(resolve(process.cwd(), "app/connect-node.tsx"), "utf8");
+    const layout = readFileSync(resolve(process.cwd(), "app/_layout.tsx"), "utf8");
+    expect(connectScreen).toContain('const PENDING_KEY = "rook-connect-pending"');
+    expect(layout).toContain('window.localStorage.getItem("rook-connect-pending")');
+  });
+
+  it("validates only a normalized well-formed desktop completion body", () => {
+    const requestId = generateDesktopPairingRequestId();
+    expect(validateDesktopPairingComplete({ requestId, code: "ABCD-EFGH", name: "Laptop", version: "0.1.0" })).toMatchObject({ requestId, code: "ABCDEFGH" });
+    expect(validateDesktopPairingComplete({ requestId, code: "bad", name: "Laptop", version: "0.1.0" })).toBeUndefined();
+    expect(validateDesktopPairingComplete({ requestId: "nope", code: "ABCD-EFGH", name: "Laptop", version: "0.1.0" })).toBeUndefined();
   });
 });
 
