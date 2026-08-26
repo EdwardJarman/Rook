@@ -1,6 +1,5 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
-import { BotGlyph } from "@/components/bot-glyph";
 import {
   BOT_ORB_MATERIALS,
   BotOrb,
@@ -123,11 +122,12 @@ export function BotIdentityPicker({
                   },
                 ]}
               >
-                <BotGlyph
-                  shape="orb"
-                  color={option === "matte" ? color : "#8977F4"}
-                  size={30}
-                  showEyes={false}
+                <BotOrb
+                  color={color}
+                  material={option}
+                  size={42}
+                  interactive
+                  blink
                 />
                 <View style={styles.materialCopy}>
                   <Text style={[styles.materialTitle, { color: colors.text }]}>
@@ -191,7 +191,7 @@ const styles = StyleSheet.create({
   },
   materialOption: {
     flex: 1,
-    minHeight: 52,
+    minHeight: 64,
     borderRadius: 15,
     borderWidth: 1,
     paddingHorizontal: 11,

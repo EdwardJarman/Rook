@@ -48,6 +48,7 @@ import {
   providerForModel,
   providerLabel,
 } from "@/lib/ai-provider";
+import { parseChatMarkdown, type ChatMarkdownInline } from "@/lib/chat-markdown";
 import { approvalReason, fileSizeLabel, requiresApproval } from "@/lib/workroom-helpers";
 import { useWorkroom, type Bot } from "@/lib/workroom-store";
 
@@ -561,7 +562,7 @@ export default function ChatScreen() {
                             }}
                           >
                             <MaterialIcons name="shield" size={17} color={colors.amber} />
-                            <Text style={{ flex: 1, color: colors.text, fontSize: 13.5, lineHeight: 19.5 }}>{message.body}</Text>
+                            <ChatMarkdown text={message.body} color={colors.text} baseSize={13.5} />
                           </View>
                         );
                       }
@@ -571,7 +572,7 @@ export default function ChatScreen() {
                             <Avatar label={source?.avatar ?? "?"} color={source?.color} icon={source?.icon} size={28} />
                           </View>
                           <View style={{ flex: 1, minWidth: 0 }}>
-                            <Text style={{ color: colors.text, fontSize: 15, lineHeight: 22 }}>{message.body}</Text>
+                            <ChatMarkdown text={message.body} color={colors.text} baseSize={15} />
                             {message.attachmentName ? <FileChip name={message.attachmentName} /> : null}
                             <Text style={{ color: colors.textFaint, fontSize: 10.5, marginTop: 5 }}>{message.createdAt}</Text>
                           </View>
@@ -849,6 +850,55 @@ function RoomBotChip({
       ) : null}
     </View>
   );
+}
+
+function ChatMarkdown({
+  text,
+  color,
+  baseSize,
+}: {
+  text: string;
+  color: string;
+  baseSize: number;
+}) {
+  const blocks = parseChatMarkdown(text);
+  return (
+    <View style={{ gap: Math.max(4, Math.round(baseSize * 0.36)) }}>
+      {blocks.map((block, index) => {
+        const heading = block.type === "heading";
+        const lineStyle = {
+          color,
+          fontSize: heading ? baseSize + (block.level === 1 ? 4 : 2) : baseSize,
+          lineHeight: heading ? baseSize + (block.level === 1 ? 10 : 8) : baseSize + 7,
+          fontWeight: heading ? "700" as const : "400" as const,
+        };
+        if (block.type === "bullet" || block.type === "ordered") {
+          return (
+            <View key={`${block.type}-${index}`} style={{ flexDirection: "row", gap: 7, alignItems: "flex-start" }}>
+              <Text style={[lineStyle, { minWidth: block.type === "ordered" ? 18 : 10 }]}>{block.type === "ordered" ? `${block.ordinal}.` : "•"}</Text>
+              <Text style={[lineStyle, { flex: 1 }]}>{renderInlineMarkdown(block.content, color)}</Text>
+            </View>
+          );
+        }
+        return <Text key={`${block.type}-${index}`} style={lineStyle}>{renderInlineMarkdown(block.content, color)}</Text>;
+      })}
+    </View>
+  );
+}
+
+function renderInlineMarkdown(parts: ChatMarkdownInline[], color: string) {
+  return parts.map((part, index) => (
+    <Text
+      key={`${part.text}-${index}`}
+      style={{
+        color,
+        fontWeight: part.bold ? "700" : undefined,
+        fontFamily: part.code ? "monospace" : undefined,
+      }}
+    >
+      {part.text}
+    </Text>
+ ));
 }
 
 function FileChip({ name }: { name: string }) {
