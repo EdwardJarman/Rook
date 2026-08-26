@@ -60,7 +60,9 @@ export function ExcelConnectionCard() {
 
   const returnTo = useMemo(() => {
     if (Platform.OS === "web" && typeof window !== "undefined") return `${window.location.origin}/account`;
-    return Linking.createURL("/account", { scheme: "manusrook" });
+    // Let Expo resolve the configured application scheme. A hard-coded scheme
+    // breaks Android OAuth returns whenever the production package changes.
+    return Linking.createURL("/account");
   }, []);
 
   const connectMicrosoft = async () => {

@@ -280,6 +280,7 @@ export default function ChatScreen() {
 
   const canSend = Boolean(composer.trim()) && !recorderState.isRecording && !replyMutation.isPending && !voiceMutation.isPending;
   const roomHasBots = chatBots.length > 0;
+  const isPhoneExperience = Platform.OS !== "web";
   const stageDropProps = botDropTargetProps({
     onEnter: () => setDropActive(true),
     onLeave: () => setDropActive(false),
@@ -377,7 +378,7 @@ export default function ChatScreen() {
                 <PrimaryButton label="Make a Bot" icon="add" onPress={() => setCreateOpen(true)} />
               </View>
               <Text style={{ color: colors.textFaint, fontSize: 12, lineHeight: 17, textAlign: "center", maxWidth: 280, marginTop: 18 }}>
-                Drag it from the sidebar when you are ready, or add it from here.
+                {isPhoneExperience ? "Use this button whenever you are ready to bring it into the chat." : "Drag it from the sidebar when you are ready, or add it from here."}
               </Text>
             </View>
           ) : (
@@ -402,7 +403,7 @@ export default function ChatScreen() {
                 Bring a teammate into the room.
               </Text>
               <Text style={{ color: colors.textSoft, fontSize: 14, lineHeight: 21, textAlign: "center", maxWidth: 320, marginTop: 10 }}>
-                Drag a Bot from the sidebar onto the chat, or add one here and it joins the room.
+                {isPhoneExperience ? "Use Add a Bot to bring one into this conversation." : "Drag a Bot from the sidebar onto the chat, or add one here and it joins the room."}
               </Text>
               <View style={{ marginTop: 24 }}>
                 <PrimaryButton label="Add a Bot" icon="add" onPress={() => setPickerOpen(true)} />
