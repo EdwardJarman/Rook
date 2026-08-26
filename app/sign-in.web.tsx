@@ -1,19 +1,25 @@
 import { SignIn } from "@clerk/expo/web";
-import { useEffect, useState } from "react";
 
 import { AuthWebShell } from "@/components/auth-web-shell";
 import { authWebAppearance } from "@/constants/auth-web";
 
-export default function WebSignInScreen() {
-  const [redirectUrl, setRedirectUrl] = useState("/");
+const PENDING_PAIRING_KEY = "rook-connect-pending";
 
-  useEffect(() => {
-    try {
-      if (window.localStorage.getItem("rook-connect-pending")) {
-        setRedirectUrl("/connect-node");
-      }
-    } catch {}
-  }, []);
+/**
+ * Clerk reads forceRedirectUrl during its initial render. Resolve the pending
+ * pairing state synchronously so a user who signs in from Rook Node returns
+ * to the loopback handoff instead of briefly being sent to the workroom.
+ */
+function initialRedirectUrl(): string {
+  try {
+    return window.localStorage.getItem(PENDING_PAIRING_KEY) ? "/connect-node" : "/";
+  } catch {
+    return "/";
+  }
+}
+
+export default function WebSignInScreen() {
+  const redirectUrl = initialRedirectUrl();
 
   return (
     <AuthWebShell

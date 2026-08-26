@@ -12,8 +12,11 @@
 // produced "path not found" inside installed builds, so we don't rely on it.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpStream};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
+use std::time::Duration;
 use tauri::{Manager, State};
 
 struct SidecarState {
@@ -31,6 +34,82 @@ fn health(state: State<'_, SidecarState>) -> Result<String, String> {
         None => serde_json::json!({ "running": false, "error": error }),
     };
     Ok(body.to_string())
+}
+
+/// Reports whether the supervised sidecar is reachable and whether the
+/// browser callback has paired this computer. The local gateway owns the
+/// durable pairing state, so the shell asks it directly instead of assuming
+/// that a running child process means the account connection is complete.
+#[tauri::command]
+fn node_status(state: State<'_, SidecarState>) -> Result<String, String> {
+    let guard = state.child.lock().map_err(|_| "lock")?;
+    let error = state.last_error.lock().map_err(|_| "lock")?.clone();
+    let Some(child) = guard.as_ref() else {
+        return Ok(serde_json::json!({
+            "running": false,
+            "gateway": false,
+            "paired": false,
+            "error": error,
+        })
+        .to_string());
+    };
+
+    match fetch_gateway_status() {
+        Ok(paired) => Ok(serde_json::json!({
+            "running": true,
+            "pid": child.id(),
+            "gateway": true,
+            "paired": paired,
+            "error": error,
+        })
+        .to_string()),
+        Err(gateway_error) => Ok(serde_json::json!({
+            "running": true,
+            "pid": child.id(),
+            "gateway": false,
+            "paired": false,
+            "error": error.or(Some(gateway_error)),
+        })
+        .to_string()),
+    }
+}
+
+fn fetch_gateway_status() -> Result<bool, String> {
+    let address: SocketAddr = "127.0.0.1:37831"
+        .parse()
+        .map_err(|error| format!("invalid gateway address: {error}"))?;
+    let timeout = Duration::from_millis(800);
+    let mut stream = TcpStream::connect_timeout(&address, timeout)
+        .map_err(|error| format!("gateway unavailable: {error}"))?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|error| format!("gateway read timeout: {error}"))?;
+    stream
+        .set_write_timeout(Some(timeout))
+        .map_err(|error| format!("gateway write timeout: {error}"))?;
+    stream
+        .write_all(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        .map_err(|error| format!("gateway request failed: {error}"))?;
+
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .map_err(|error| format!("gateway response failed: {error}"))?;
+    let (head, body) = response
+        .split_once("\r\n\r\n")
+        .ok_or_else(|| "gateway returned malformed HTTP".to_string())?;
+    if !head.starts_with("HTTP/1.1 200") {
+        return Err(format!(
+            "gateway returned {}",
+            head.lines().next().unwrap_or("an invalid status")
+        ));
+    }
+    let payload: serde_json::Value = serde_json::from_str(body)
+        .map_err(|error| format!("gateway returned invalid JSON: {error}"))?;
+    Ok(payload
+        .get("paired")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false))
 }
 
 #[tauri::command]
@@ -54,19 +133,28 @@ fn open_connect(app: tauri::AppHandle) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
-        std::process::Command::new("cmd")
-            .args(["/c", "start", "", url])
+        // Explorer delegates the URL to the registered browser without
+        // starting cmd.exe, so the installed application never flashes a
+        // terminal window during account connection.
+        std::process::Command::new("explorer.exe")
+            .arg(url)
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .spawn()
             .map_err(|e| e.to_string())?;
     }
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("open").arg(url).spawn().map_err(|e| e.to_string())?;
+        std::process::Command::new("open")
+            .arg(url)
+            .spawn()
+            .map_err(|e| e.to_string())?;
     }
     #[cfg(target_os = "linux")]
     {
-        std::process::Command::new("xdg-open").arg(url).spawn().map_err(|e| e.to_string())?;
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .map_err(|e| e.to_string())?;
     }
     let _ = &app;
     Ok(())
@@ -75,7 +163,9 @@ fn open_connect(app: tauri::AppHandle) -> Result<(), String> {
 /// The sidecar ships next to the app executable (Tauri externalBin).
 fn sidecar_path() -> Result<std::path::PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {}", e))?;
-    let dir = exe.parent().ok_or_else(|| "executable has no directory".to_string())?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| "executable has no directory".to_string())?;
     #[cfg(target_os = "windows")]
     let name = "rook-node-sidecar.exe";
     #[cfg(not(target_os = "windows"))]
@@ -135,7 +225,11 @@ fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
 
         let mut child = {
             let mut cmd = Command::new(&sidecar);
+            // The desktop shell owns the visible Connect button. Prevent the
+            // sidecar's CLI fallback from opening a second local browser page
+            // when it starts inside the installed application.
             cmd.arg("--headless")
+                .arg("--no-open")
                 .env("PLAYWRIGHT_BROWSERS_PATH", &browsers_dir)
                 .current_dir(
                     sidecar
@@ -149,14 +243,16 @@ fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
                 use std::os::windows::process::CommandExt;
                 cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW — no terminal flash
             }
-            cmd.spawn()
-                .map_err(|e| format!("spawn failed: {}", e))?
+            cmd.spawn().map_err(|e| format!("spawn failed: {}", e))?
         };
 
         if let Some(stdout) = child.stdout.take() {
             std::thread::spawn(move || {
                 use std::io::BufRead;
-                for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+                for line in std::io::BufReader::new(stdout)
+                    .lines()
+                    .map_while(Result::ok)
+                {
                     log::info!("[sidecar] {}", line);
                 }
             });
@@ -164,7 +260,10 @@ fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
         if let Some(stderr) = child.stderr.take() {
             std::thread::spawn(move || {
                 use std::io::BufRead;
-                for line in std::io::BufReader::new(stderr).lines().map_while(Result::ok) {
+                for line in std::io::BufReader::new(stderr)
+                    .lines()
+                    .map_while(Result::ok)
+                {
                     log::error!("[sidecar] {}", line);
                 }
             });
@@ -190,6 +289,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             health,
+            node_status,
             start_sidecar,
             stop_sidecar,
             open_connect

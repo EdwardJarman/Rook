@@ -35,54 +35,98 @@
       .pill { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px; margin-top: 10px; }
       .on { background: #e4f3ea; color: #1d7a46; }
       .off { background: #efeee9; color: #6b6a63; }
+      .wait { background: #fff3db; color: #986b14; }
     </style>
   </head>
   <body>
     <div class="card">
       <h1>Rook Node</h1>
       <p>Your computer, as a Bot computer for Rook. Forever free.</p>
-      <span id="status" class="pill off">Starting…</span>
+      <span id="status" class="pill off" aria-live="polite">Starting…</span>
       <div><button id="connect" class="btn" disabled>Connect account</button></div>
-      <p class="muted" id="error"></p>
-      <p class="muted" id="hint">Connecting opens your browser and comes right back.</p>
+      <p class="muted" id="error" aria-live="polite"></p>
+      <p class="muted" id="hint">Starting your private Bot computer…</p>
     </div>
     <script>
       const { invoke } = window.__TAURI__.core;
       const statusEl = document.getElementById("status");
       const connectBtn = document.getElementById("connect");
       const errorEl = document.getElementById("error");
+      const hintEl = document.getElementById("hint");
+      let latestStatus = { running: false, gateway: false, paired: false };
+
+      function setPill(label, tone) {
+        statusEl.textContent = label;
+        statusEl.className = "pill " + tone;
+      }
 
       async function refresh() {
         try {
-          const health = JSON.parse(await invoke("health"));
-          if (health.running) {
-            statusEl.textContent = "Running";
-            statusEl.className = "pill on";
+          const status = JSON.parse(await invoke("node_status"));
+          latestStatus = status;
+          if (!status.running) {
+            setPill("Not running", "off");
             connectBtn.disabled = false;
-            errorEl.textContent = "";
-          } else {
-            statusEl.textContent = "Not running";
-            statusEl.className = "pill off";
-            errorEl.textContent = health.error ? "Reason: " + health.error : "";
-            connectBtn.disabled = false;
+            connectBtn.textContent = "Start Rook Node";
+            hintEl.textContent = "Start the local Bot computer, then connect it to your account.";
+            errorEl.textContent = status.error ? "Reason: " + status.error : "";
+            return;
           }
-        } catch (e) {
-          statusEl.textContent = "Shell error";
-          statusEl.className = "pill off";
-          errorEl.textContent = String(e);
+
+          if (!status.gateway) {
+            setPill("Starting…", "wait");
+            connectBtn.disabled = true;
+            connectBtn.textContent = "Connect account";
+            hintEl.textContent = "Starting your private Bot computer…";
+            errorEl.textContent = "";
+            return;
+          }
+
+          if (status.paired) {
+            setPill("Connected", "on");
+            connectBtn.disabled = true;
+            connectBtn.textContent = "Connected";
+            hintEl.textContent = "This computer is connected to your Rook account and ready for your Bots.";
+            errorEl.textContent = "";
+            return;
+          }
+
+          setPill("Ready to connect", "wait");
+          connectBtn.disabled = false;
+          connectBtn.textContent = "Connect account";
+          hintEl.textContent = "Connect your account in the browser. This window will update automatically when you finish.";
+          errorEl.textContent = "";
+        } catch (error) {
+          setPill("Shell error", "off");
+          connectBtn.disabled = false;
+          connectBtn.textContent = "Start Rook Node";
+          errorEl.textContent = String(error);
         }
       }
 
       connectBtn.addEventListener("click", async () => {
         connectBtn.disabled = true;
         try {
-          await invoke("open_connect");
-        } catch (e) {}
-        setTimeout(() => { connectBtn.disabled = false; }, 1500);
+          if (!latestStatus.running) {
+            await invoke("start_sidecar");
+            setPill("Starting…", "wait");
+            hintEl.textContent = "Starting your private Bot computer…";
+          } else {
+            await invoke("open_connect");
+            setPill("Waiting for sign-in", "wait");
+            hintEl.textContent = "Finish signing in in your browser. This window will update automatically.";
+          }
+          await refresh();
+        } catch (error) {
+          errorEl.textContent = latestStatus.running
+            ? "Could not open the browser: " + String(error)
+            : "Could not start Rook Node: " + String(error);
+          connectBtn.disabled = false;
+        }
       });
 
       refresh();
-      setInterval(refresh, 3000);
+      setInterval(refresh, 1500);
     </script>
   </body>
 </html>

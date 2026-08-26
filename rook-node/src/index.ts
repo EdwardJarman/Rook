@@ -163,7 +163,10 @@ function hostLabel(): string {
 function openInBrowser(url: string): void {
   try {
     if (process.platform === "win32") {
-      spawn("cmd", ["/c", "start", "", url], {
+      // Avoid `cmd /c start`: even with windowsHide it can flash a console on
+      // installed builds. rundll32 delegates the URL to the registered browser
+      // without involving a command shell.
+      spawn("rundll32.exe", ["url.dll,FileProtocolHandler", url], {
         detached: true,
         stdio: "ignore",
         shell: false,
