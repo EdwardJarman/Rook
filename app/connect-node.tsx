@@ -125,7 +125,9 @@ export default function ConnectNodeScreen() {
     if (requestId && Platform.OS === "web") {
       try { window.localStorage.setItem(PENDING_KEY, requestId); } catch { }
     }
-    router.push("/sign-in");
+    // Preserve the opaque request in the sign-in route as well as storage.
+    // This survives router hydration and storage-restricted browser contexts.
+    router.push({ pathname: "/sign-in", params: { request: requestId } });
   }, [requestId, router]);
 
   const busy = phase === "issuing";

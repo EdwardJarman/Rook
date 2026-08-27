@@ -62,11 +62,16 @@ describe("desktop one-time codes", () => {
     expect(buildDesktopPairingUrl({ serverUrl: "https://www.rook.lighting/", requestId })).toBe(`https://www.rook.lighting/connect-node?request=${requestId}`);
   });
 
-  it("uses the same persisted request key as the authenticated navigation gate", () => {
+  it("preserves the pairing request through browser hydration and sign-in", () => {
     const connectScreen = readFileSync(resolve(process.cwd(), "app/connect-node.tsx"), "utf8");
     const layout = readFileSync(resolve(process.cwd(), "app/_layout.tsx"), "utf8");
+    const signIn = readFileSync(resolve(process.cwd(), "app/sign-in.web.tsx"), "utf8");
     expect(connectScreen).toContain('const PENDING_KEY = "rook-connect-pending"');
-    expect(layout).toContain('window.localStorage.getItem("rook-connect-pending")');
+    expect(connectScreen).toContain('params: { request: requestId }');
+    expect(layout).toContain("usePathname");
+    expect(layout).toContain('pathname.split("/").filter(Boolean)[0]');
+    expect(signIn).toContain('new URLSearchParams(window.location.search).get("request")');
+    expect(signIn).toContain('return `/connect-node?request=${encodeURIComponent(requestId.toLowerCase())}`');
   });
 
   it("validates only a normalized well-formed desktop completion body", () => {

@@ -2,7 +2,7 @@ import { ClerkProvider, useAuth as useClerkAuth } from "@clerk/expo";
 import { tokenCache } from "@clerk/expo/token-cache";
 import "@/global.css";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Stack, useRouter, useSegments } from "expo-router";
+import { Stack, usePathname, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Platform, Text, View } from "react-native";
@@ -44,12 +44,17 @@ export const unstable_settings = { anchor: "(tabs)" };
 function SessionNavigator() {
   const router = useRouter();
   const segments = useSegments();
+  const pathname = usePathname();
   const { loading, isAuthenticated } = useAuth();
   const { ready: workroomReady, onboardingComplete } = useWorkroom();
   const { colors } = useRookTheme();
 
   useEffect(() => {
-    const route = segments[0] as string | undefined;
+    // On an external browser navigation, Expo Router can briefly expose no
+    // segments while it hydrates. The pathname is already authoritative then;
+    // using it prevents the default workroom route from replacing a desktop
+    // pairing handoff before this screen reads its request id.
+    const route = (segments[0] ?? pathname.split("/").filter(Boolean)[0]) as string | undefined;
     const isAuthRoute = route === "sign-in" || route === "sign-up";
     const isOnboardingRoute = route === "onboarding";
     // Rook Node pairing pages handle their own sign-in prompt.
@@ -78,9 +83,9 @@ function SessionNavigator() {
     if (!workroomReady) return;
     if (!onboardingComplete && !isOnboardingRoute) router.replace("/onboarding" as never);
     if (onboardingComplete && (isAuthRoute || isOnboardingRoute)) router.replace("/(tabs)" as never);
-  }, [isAuthenticated, loading, onboardingComplete, router, segments, workroomReady]);
+  }, [isAuthenticated, loading, onboardingComplete, pathname, router, segments, workroomReady]);
 
-  const routeForGate = segments[0] as string | undefined;
+  const routeForGate = (segments[0] ?? pathname.split("/").filter(Boolean)[0]) as string | undefined;
   const isSelfManagedRouteForGate = routeForGate === "connect-node" || routeForGate === "download";
   if (loading || (isAuthenticated && !workroomReady && !isSelfManagedRouteForGate)) {
     return (
