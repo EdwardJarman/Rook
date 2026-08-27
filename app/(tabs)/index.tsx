@@ -46,6 +46,7 @@ import {
   matchingBotsForMention,
   trailingBotMentionQuery,
 } from "@/lib/bot-mentions";
+import { useDesktopSidebar } from "@/lib/desktop-sidebar-state";
 import { useRookNotifications } from "@/lib/rook-notifications";
 import { trpc } from "@/lib/trpc";
 import { tint } from "@/lib/ui";
@@ -83,6 +84,8 @@ export default function ChatScreen() {
   const router = useRouter();
   const { width } = useWindowDimensions();
   const { colors } = useRookTheme();
+  const { visible: desktopSidebarVisible, show: showDesktopSidebar } =
+    useDesktopSidebar();
   const workroom = useWorkroom();
   const { bots, messages, approvals } = workroom;
   const {
@@ -118,6 +121,7 @@ export default function ChatScreen() {
   const threadRef = useRef<ScrollView>(null);
 
   const isCompactLayout = width < 960;
+  const isDesktopWeb = Platform.OS === "web" && !isCompactLayout;
   const chatBots = useMemo(
     () => bots.filter((bot) => chatBotIds.includes(bot.id)),
     [bots, chatBotIds],
@@ -497,6 +501,12 @@ export default function ChatScreen() {
                 icon="menu"
                 label="Open your Bots"
                 onPress={() => setDrawerOpen(true)}
+              />
+            ) : isDesktopWeb && !desktopSidebarVisible ? (
+              <IconButton
+                icon="menu"
+                label="Open your Bots"
+                onPress={showDesktopSidebar}
               />
             ) : null}
             <View
@@ -1106,7 +1116,7 @@ export default function ChatScreen() {
                   accessibilityLabel={`Message ${activeBot?.name ?? "your Bot"}`}
                 />
 
-                {isCompactLayout && activeMention ? (
+                {activeMention ? (
                   <View
                     accessibilityLabel="Bot mention suggestions"
                     style={{

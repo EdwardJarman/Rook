@@ -9,13 +9,19 @@ import {
   DESKTOP_STAGE_INSET,
   RookDesktopSidebar,
 } from "@/components/rook-desktop-sidebar";
+import {
+  DesktopSidebarProvider,
+  useDesktopSidebar,
+} from "@/lib/desktop-sidebar-state";
 import { DockVisibilityProvider } from "@/lib/dock-visibility";
 import { useRookTheme } from "@/lib/ui";
 
 export default function TabLayout() {
   return (
     <DockVisibilityProvider>
-      <RookTabs />
+      <DesktopSidebarProvider>
+        <RookTabs />
+      </DesktopSidebarProvider>
     </DockVisibilityProvider>
   );
 }
@@ -29,7 +35,9 @@ function RookTabs() {
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const { colors } = useRookTheme();
-  const isDesktopLayout = Platform.OS === "web" && width >= DESKTOP_NAV_BREAKPOINT;
+  const { visible: desktopSidebarVisible } = useDesktopSidebar();
+  const isDesktopLayout =
+    Platform.OS === "web" && width >= DESKTOP_NAV_BREAKPOINT;
   const bottomPadding = Math.max(insets.bottom, 8);
   const mobileTabHeight = 56 + bottomPadding;
 
@@ -37,7 +45,10 @@ function RookTabs() {
     <Tabs
       screenOptions={{
         headerShown: false,
-        sceneStyle: isDesktopLayout ? DESKTOP_STAGE_INSET : undefined,
+        sceneStyle:
+          isDesktopLayout && desktopSidebarVisible
+            ? DESKTOP_STAGE_INSET
+            : undefined,
         tabBarHideOnKeyboard: true,
         tabBarActiveTintColor: colors.ink,
         tabBarInactiveTintColor: colors.textFaint,
@@ -59,14 +70,18 @@ function RookTabs() {
           marginTop: 1,
         },
       }}
-      tabBar={(props) => (isDesktopLayout ? <RookDesktopSidebar {...props} /> : undefined)}
+      tabBar={(props) =>
+        isDesktopLayout ? <RookDesktopSidebar {...props} /> : undefined
+      }
     >
       <Tabs.Screen
         name="index"
         options={{
           title: "Chat",
           tabBarAccessibilityLabel: "Open chat",
-          tabBarIcon: ({ color, size }) => <MaterialIcons name="forum" color={color} size={size} />,
+          tabBarIcon: ({ color, size }) => (
+            <MaterialIcons name="forum" color={color} size={size} />
+          ),
         }}
       />
       <Tabs.Screen
@@ -74,7 +89,9 @@ function RookTabs() {
         options={{
           title: "Bots",
           tabBarAccessibilityLabel: "Open Bots",
-          tabBarIcon: ({ color, size }) => <MaterialIcons name="smart-toy" color={color} size={size} />,
+          tabBarIcon: ({ color, size }) => (
+            <MaterialIcons name="smart-toy" color={color} size={size} />
+          ),
         }}
       />
       <Tabs.Screen
@@ -82,7 +99,9 @@ function RookTabs() {
         options={{
           title: "Library",
           tabBarAccessibilityLabel: "Open Library",
-          tabBarIcon: ({ color, size }) => <MaterialIcons name="folder-open" color={color} size={size} />,
+          tabBarIcon: ({ color, size }) => (
+            <MaterialIcons name="folder-open" color={color} size={size} />
+          ),
         }}
       />
       <Tabs.Screen
@@ -91,7 +110,13 @@ function RookTabs() {
           title: "Updates",
           tabBarAccessibilityLabel: "Open Updates",
           tabBarBadge: undefined,
-          tabBarIcon: ({ color, size }) => <MaterialIcons name="notifications-none" color={color} size={size} />,
+          tabBarIcon: ({ color, size }) => (
+            <MaterialIcons
+              name="notifications-none"
+              color={color}
+              size={size}
+            />
+          ),
         }}
       />
       <Tabs.Screen
@@ -99,7 +124,9 @@ function RookTabs() {
         options={{
           title: "Account",
           tabBarAccessibilityLabel: "Open account",
-          tabBarIcon: ({ color, size }) => <MaterialIcons name="person-outline" color={color} size={size} />,
+          tabBarIcon: ({ color, size }) => (
+            <MaterialIcons name="person-outline" color={color} size={size} />
+          ),
         }}
       />
     </Tabs>
