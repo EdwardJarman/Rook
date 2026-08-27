@@ -227,6 +227,7 @@ jobs:
         shell: pwsh
         run: |
           $candidates = @(
+            "$env:LOCALAPPDATA\Rook Node",
             "$env:LOCALAPPDATA\Programs\Rook Node",
             "$env:ProgramFiles\Rook Node"
           ) | Where-Object { Test-Path $_ }
