@@ -1,140 +1,201 @@
 import { useEffect, useRef } from "react";
-import { Image, Platform } from "react-native";
-import * as THREE from "three";
-
 const EARTH_TEXTURE = require("@/assets/images/rook-earth-texture.jpg");
+
+const VERTEX_SHADER_SOURCE = `#version 300 es
+in vec3 aPosition;
+in vec2 aUv;
+
+uniform float uAspect;
+uniform float uRotationY;
+uniform float uTilt;
+
+out vec2 vUv;
+out vec3 vNormal;
+
+vec3 rotateY(vec3 value, float angle) {
+  float sine = sin(angle);
+  float cosine = cos(angle);
+  return vec3(
+    cosine * value.x + sine * value.z,
+    value.y,
+    -sine * value.x + cosine * value.z
+  );
+}
+
+vec3 rotateX(vec3 value, float angle) {
+  float sine = sin(angle);
+  float cosine = cos(angle);
+  return vec3(
+    value.x,
+    cosine * value.y - sine * value.z,
+    sine * value.y + cosine * value.z
+  );
+}
+
+void main() {
+  vec3 position = rotateX(rotateY(aPosition, uRotationY), uTilt);
+  vNormal = normalize(rotateX(rotateY(aPosition, uRotationY), uTilt));
+  vUv = aUv;
+
+  vec4 viewPosition = vec4(position, 1.0);
+  viewPosition.z -= 4.8;
+
+  float near = 0.1;
+  float far = 100.0;
+  float focalLength = 3.7320508;
+  gl_Position = vec4(
+    (focalLength * viewPosition.x) / uAspect,
+    focalLength * viewPosition.y,
+    ((far + near) / (near - far)) * viewPosition.z +
+      ((2.0 * far * near) / (near - far)),
+    -viewPosition.z
+  );
+}`;
+
+const FRAGMENT_SHADER_SOURCE = `#version 300 es
+precision highp float;
+
+uniform sampler2D uEarth;
+
+in vec2 vUv;
+in vec3 vNormal;
+
+out vec4 outputColor;
+
+void main() {
+  vec3 sampled = texture(uEarth, vUv).rgb;
+  float luminance = dot(sampled, vec3(0.2126, 0.7152, 0.0722));
+  vec3 lightDirection = normalize(vec3(1.3, 0.65, 2.2));
+  float diffuse = max(dot(normalize(vNormal), lightDirection), 0.0);
+  float ambient = 0.055;
+  float light = ambient + diffuse * 0.95;
+  float edgeLight = pow(1.0 - max(vNormal.z, 0.0), 3.0) * 0.045;
+  vec3 monochrome = vec3(luminance * light + edgeLight);
+  outputColor = vec4(monochrome, 1.0);
+}`;
 
 export function EarthGlobe() {
   const hostRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (
-      Platform.OS !== "web" ||
-      typeof window === "undefined" ||
-      !hostRef.current
-    ) {
-      return;
-    }
+    if (typeof window === "undefined" || !hostRef.current) return;
 
     const host = hostRef.current;
     let disposed = false;
-    let cleanupScene: (() => void) | undefined;
+    let frameId = 0;
+    let cleanup: (() => void) | undefined;
 
     const initialiseGlobe = async () => {
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("webgl2", {
+        alpha: true,
+        antialias: true,
+        powerPreference: "high-performance",
+      });
+      if (!context) return;
+
       try {
+        const vertexShader = compileShader(
+          context,
+          context.VERTEX_SHADER,
+          VERTEX_SHADER_SOURCE,
+        );
+        const fragmentShader = compileShader(
+          context,
+          context.FRAGMENT_SHADER,
+          FRAGMENT_SHADER_SOURCE,
+        );
+        const program = createProgram(context, vertexShader, fragmentShader);
+        const mesh = createSphereMesh(88, 112);
+        const textureImage = await loadEarthTexture();
         if (disposed) return;
 
-        const renderer = new THREE.WebGLRenderer({
-          alpha: true,
-          antialias: true,
-          powerPreference: "high-performance",
-        });
-        renderer.setClearColor(0x000000, 0);
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
-        renderer.outputColorSpace = THREE.SRGBColorSpace;
-        renderer.domElement.style.cssText =
+        const positionBuffer = context.createBuffer();
+        const uvBuffer = context.createBuffer();
+        const indexBuffer = context.createBuffer();
+        const texture = context.createTexture();
+        if (!positionBuffer || !uvBuffer || !indexBuffer || !texture) {
+          throw new Error("WebGL resources could not be allocated.");
+        }
+
+        const positionLocation = context.getAttribLocation(
+          program,
+          "aPosition",
+        );
+        const uvLocation = context.getAttribLocation(program, "aUv");
+        const aspectLocation = context.getUniformLocation(program, "uAspect");
+        const rotationLocation = context.getUniformLocation(
+          program,
+          "uRotationY",
+        );
+        const tiltLocation = context.getUniformLocation(program, "uTilt");
+        const earthLocation = context.getUniformLocation(program, "uEarth");
+        if (
+          positionLocation < 0 ||
+          uvLocation < 0 ||
+          !aspectLocation ||
+          !rotationLocation ||
+          !tiltLocation ||
+          !earthLocation
+        ) {
+          throw new Error("WebGL shader locations could not be resolved.");
+        }
+
+        context.bindBuffer(context.ARRAY_BUFFER, positionBuffer);
+        context.bufferData(
+          context.ARRAY_BUFFER,
+          mesh.positions,
+          context.STATIC_DRAW,
+        );
+        context.bindBuffer(context.ARRAY_BUFFER, uvBuffer);
+        context.bufferData(context.ARRAY_BUFFER, mesh.uvs, context.STATIC_DRAW);
+        context.bindBuffer(context.ELEMENT_ARRAY_BUFFER, indexBuffer);
+        context.bufferData(
+          context.ELEMENT_ARRAY_BUFFER,
+          mesh.indices,
+          context.STATIC_DRAW,
+        );
+
+        context.bindTexture(context.TEXTURE_2D, texture);
+        context.pixelStorei(context.UNPACK_FLIP_Y_WEBGL, false);
+        context.texParameteri(
+          context.TEXTURE_2D,
+          context.TEXTURE_WRAP_S,
+          context.REPEAT,
+        );
+        context.texParameteri(
+          context.TEXTURE_2D,
+          context.TEXTURE_WRAP_T,
+          context.CLAMP_TO_EDGE,
+        );
+        context.texParameteri(
+          context.TEXTURE_2D,
+          context.TEXTURE_MIN_FILTER,
+          context.LINEAR_MIPMAP_LINEAR,
+        );
+        context.texParameteri(
+          context.TEXTURE_2D,
+          context.TEXTURE_MAG_FILTER,
+          context.LINEAR,
+        );
+        context.texImage2D(
+          context.TEXTURE_2D,
+          0,
+          context.RGBA,
+          context.RGBA,
+          context.UNSIGNED_BYTE,
+          textureImage,
+        );
+        context.generateMipmap(context.TEXTURE_2D);
+
+        canvas.style.cssText =
           "display:block;width:100%;height:100%;cursor:grab;touch-action:none;";
-        host.replaceChildren(renderer.domElement);
+        host.replaceChildren(canvas);
 
-        const scene = new THREE.Scene();
-        const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
-        camera.position.set(0, 0, 4.8);
-
-        const globeGroup = new THREE.Group();
-        globeGroup.rotation.set(-0.18, -0.72, 0.13);
-        scene.add(globeGroup);
-
-        const textureSource = Image.resolveAssetSource(EARTH_TEXTURE);
-        const texture = await new Promise<THREE.Texture>((resolve, reject) => {
-          const loader = new THREE.TextureLoader();
-          loader.load(textureSource.uri, resolve, undefined, reject);
-        });
-        if (disposed) {
-          texture.dispose();
-          renderer.dispose();
-          return;
-        }
-
-        texture.colorSpace = THREE.SRGBColorSpace;
-        texture.anisotropy = Math.min(
-          4,
-          renderer.capabilities.getMaxAnisotropy(),
-        );
-
-        const globeMaterial = new THREE.MeshStandardMaterial({
-          map: texture,
-          roughness: 0.92,
-          metalness: 0.02,
-        });
-        globeMaterial.onBeforeCompile = (shader) => {
-          shader.fragmentShader = shader.fragmentShader.replace(
-            "#include <map_fragment>",
-            `
-              #ifdef USE_MAP
-                vec4 sampledDiffuseColor = texture2D(map, vMapUv);
-                float luminance = dot(sampledDiffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722));
-                diffuseColor *= vec4(vec3(luminance * 0.9), sampledDiffuseColor.a);
-              #endif
-            `,
-          );
-        };
-
-        const globe = new THREE.Mesh(
-          new THREE.SphereGeometry(1.54, 80, 56),
-          globeMaterial,
-        );
-        globeGroup.add(globe);
-
-        const atmosphere = new THREE.Mesh(
-          new THREE.SphereGeometry(1.575, 80, 56),
-          new THREE.MeshBasicMaterial({
-            color: 0xe9e7df,
-            transparent: true,
-            opacity: 0.035,
-            side: THREE.BackSide,
-            blending: THREE.AdditiveBlending,
-          }),
-        );
-        globeGroup.add(atmosphere);
-
-        const keyLight = new THREE.DirectionalLight(0xffffff, 2.35);
-        keyLight.position.set(4, 1.8, 4);
-        scene.add(keyLight);
-        const fillLight = new THREE.DirectionalLight(0x7d7b74, 0.38);
-        fillLight.position.set(-4, -1.5, 2);
-        scene.add(fillLight);
-        scene.add(new THREE.AmbientLight(0x20201e, 0.27));
-
-        const starCount = 170;
-        const starPositions = new Float32Array(starCount * 3);
-        for (let index = 0; index < starCount; index += 1) {
-          const radius = 4.4 + ((index * 37) % 100) / 30;
-          const theta = ((index * 137.5) % 360) * (Math.PI / 180);
-          const phi = ((index * 71.3) % 180) * (Math.PI / 180);
-          starPositions[index * 3] = radius * Math.sin(phi) * Math.cos(theta);
-          starPositions[index * 3 + 1] = radius * Math.cos(phi);
-          starPositions[index * 3 + 2] =
-            radius * Math.sin(phi) * Math.sin(theta);
-        }
-        const starGeometry = new THREE.BufferGeometry();
-        starGeometry.setAttribute(
-          "position",
-          new THREE.BufferAttribute(starPositions, 3),
-        );
-        const stars = new THREE.Points(
-          starGeometry,
-          new THREE.PointsMaterial({
-            color: 0xb8b6af,
-            size: 0.013,
-            sizeAttenuation: true,
-            transparent: true,
-            opacity: 0.48,
-          }),
-        );
-        scene.add(stars);
-
-        let frameId = 0;
-        let targetRotation = globeGroup.rotation.y;
+        let width = 1;
+        let height = 1;
+        let targetRotation = -0.72;
+        let rotation = targetRotation;
         let isDragging = false;
         let lastX = 0;
         const reduceMotion = window.matchMedia(
@@ -143,14 +204,12 @@ export function EarthGlobe() {
 
         const resize = () => {
           const bounds = host.getBoundingClientRect();
-          renderer.setSize(
-            Math.max(1, bounds.width),
-            Math.max(1, bounds.height),
-            false,
-          );
-          camera.aspect =
-            Math.max(1, bounds.width) / Math.max(1, bounds.height);
-          camera.updateProjectionMatrix();
+          const pixelRatio = Math.min(window.devicePixelRatio || 1, 1.5);
+          width = Math.max(1, Math.round(bounds.width * pixelRatio));
+          height = Math.max(1, Math.round(bounds.height * pixelRatio));
+          canvas.width = width;
+          canvas.height = height;
+          context.viewport(0, 0, width, height);
         };
         resize();
         const resizeObserver = new ResizeObserver(resize);
@@ -159,8 +218,8 @@ export function EarthGlobe() {
         const onPointerDown = (event: PointerEvent) => {
           isDragging = true;
           lastX = event.clientX;
-          renderer.domElement.setPointerCapture?.(event.pointerId);
-          renderer.domElement.style.cursor = "grabbing";
+          canvas.setPointerCapture?.(event.pointerId);
+          canvas.style.cursor = "grabbing";
         };
         const onPointerMove = (event: PointerEvent) => {
           if (!isDragging) return;
@@ -169,42 +228,77 @@ export function EarthGlobe() {
         };
         const onPointerUp = (event: PointerEvent) => {
           isDragging = false;
-          renderer.domElement.releasePointerCapture?.(event.pointerId);
-          renderer.domElement.style.cursor = "grab";
+          canvas.releasePointerCapture?.(event.pointerId);
+          canvas.style.cursor = "grab";
         };
-        const animate = () => {
+        const render = () => {
           if (disposed) return;
           if (!document.hidden) {
-            if (!isDragging && !reduceMotion) targetRotation += 0.0014;
-            globeGroup.rotation.y +=
-              (targetRotation - globeGroup.rotation.y) * 0.065;
-            stars.rotation.y -= 0.00012;
-            renderer.render(scene, camera);
+            if (!isDragging && !reduceMotion) targetRotation += 0.00125;
+            rotation += (targetRotation - rotation) * 0.07;
+
+            context.clearColor(0, 0, 0, 0);
+            context.clear(context.COLOR_BUFFER_BIT | context.DEPTH_BUFFER_BIT);
+            context.enable(context.DEPTH_TEST);
+            context.useProgram(program);
+            context.uniform1f(aspectLocation, width / height);
+            context.uniform1f(rotationLocation, rotation);
+            context.uniform1f(tiltLocation, -0.18);
+            context.uniform1i(earthLocation, 0);
+
+            context.bindBuffer(context.ARRAY_BUFFER, positionBuffer);
+            context.enableVertexAttribArray(positionLocation);
+            context.vertexAttribPointer(
+              positionLocation,
+              3,
+              context.FLOAT,
+              false,
+              0,
+              0,
+            );
+            context.bindBuffer(context.ARRAY_BUFFER, uvBuffer);
+            context.enableVertexAttribArray(uvLocation);
+            context.vertexAttribPointer(
+              uvLocation,
+              2,
+              context.FLOAT,
+              false,
+              0,
+              0,
+            );
+            context.bindBuffer(context.ELEMENT_ARRAY_BUFFER, indexBuffer);
+            context.activeTexture(context.TEXTURE0);
+            context.bindTexture(context.TEXTURE_2D, texture);
+            context.drawElements(
+              context.TRIANGLES,
+              mesh.indices.length,
+              context.UNSIGNED_SHORT,
+              0,
+            );
           }
-          frameId = window.requestAnimationFrame(animate);
+          frameId = window.requestAnimationFrame(render);
         };
 
-        renderer.domElement.addEventListener("pointerdown", onPointerDown);
-        renderer.domElement.addEventListener("pointermove", onPointerMove);
-        renderer.domElement.addEventListener("pointerup", onPointerUp);
-        renderer.domElement.addEventListener("pointercancel", onPointerUp);
-        animate();
+        canvas.addEventListener("pointerdown", onPointerDown);
+        canvas.addEventListener("pointermove", onPointerMove);
+        canvas.addEventListener("pointerup", onPointerUp);
+        canvas.addEventListener("pointercancel", onPointerUp);
+        render();
 
-        cleanupScene = () => {
+        cleanup = () => {
           window.cancelAnimationFrame(frameId);
           resizeObserver.disconnect();
-          renderer.domElement.removeEventListener("pointerdown", onPointerDown);
-          renderer.domElement.removeEventListener("pointermove", onPointerMove);
-          renderer.domElement.removeEventListener("pointerup", onPointerUp);
-          renderer.domElement.removeEventListener("pointercancel", onPointerUp);
-          globe.geometry.dispose();
-          globeMaterial.dispose();
-          atmosphere.geometry.dispose();
-          (atmosphere.material as THREE.Material).dispose();
-          starGeometry.dispose();
-          (stars.material as THREE.Material).dispose();
-          texture.dispose();
-          renderer.dispose();
+          canvas.removeEventListener("pointerdown", onPointerDown);
+          canvas.removeEventListener("pointermove", onPointerMove);
+          canvas.removeEventListener("pointerup", onPointerUp);
+          canvas.removeEventListener("pointercancel", onPointerUp);
+          context.deleteBuffer(positionBuffer);
+          context.deleteBuffer(uvBuffer);
+          context.deleteBuffer(indexBuffer);
+          context.deleteTexture(texture);
+          context.deleteProgram(program);
+          context.deleteShader(vertexShader);
+          context.deleteShader(fragmentShader);
           host.replaceChildren();
         };
       } catch (error) {
@@ -216,9 +310,99 @@ export function EarthGlobe() {
     void initialiseGlobe();
     return () => {
       disposed = true;
-      cleanupScene?.();
+      cleanup?.();
     };
   }, []);
 
   return <div ref={hostRef} style={{ width: "100%", height: "100%" }} />;
+}
+
+function compileShader(
+  context: WebGL2RenderingContext,
+  type: number,
+  source: string,
+) {
+  const shader = context.createShader(type);
+  if (!shader) throw new Error("WebGL shader allocation failed.");
+  context.shaderSource(shader, source);
+  context.compileShader(shader);
+  if (!context.getShaderParameter(shader, context.COMPILE_STATUS)) {
+    const details = context.getShaderInfoLog(shader);
+    context.deleteShader(shader);
+    throw new Error(
+      `WebGL shader compilation failed: ${details ?? "unknown error"}`,
+    );
+  }
+  return shader;
+}
+
+function createProgram(
+  context: WebGL2RenderingContext,
+  vertexShader: WebGLShader,
+  fragmentShader: WebGLShader,
+) {
+  const program = context.createProgram();
+  if (!program) throw new Error("WebGL program allocation failed.");
+  context.attachShader(program, vertexShader);
+  context.attachShader(program, fragmentShader);
+  context.linkProgram(program);
+  if (!context.getProgramParameter(program, context.LINK_STATUS)) {
+    const details = context.getProgramInfoLog(program);
+    context.deleteProgram(program);
+    throw new Error(
+      `WebGL program linking failed: ${details ?? "unknown error"}`,
+    );
+  }
+  return program;
+}
+
+function createSphereMesh(latitudeSegments: number, longitudeSegments: number) {
+  const positions: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+
+  for (let latitude = 0; latitude <= latitudeSegments; latitude += 1) {
+    const theta = (latitude / latitudeSegments) * Math.PI;
+    const sinTheta = Math.sin(theta);
+    const cosTheta = Math.cos(theta);
+
+    for (let longitude = 0; longitude <= longitudeSegments; longitude += 1) {
+      const phi = (longitude / longitudeSegments) * Math.PI * 2;
+      positions.push(
+        sinTheta * Math.cos(phi),
+        cosTheta,
+        sinTheta * Math.sin(phi),
+      );
+      uvs.push(longitude / longitudeSegments, 1 - latitude / latitudeSegments);
+    }
+  }
+
+  for (let latitude = 0; latitude < latitudeSegments; latitude += 1) {
+    for (let longitude = 0; longitude < longitudeSegments; longitude += 1) {
+      const first = latitude * (longitudeSegments + 1) + longitude;
+      const second = first + longitudeSegments + 1;
+      indices.push(first, second, first + 1, second, second + 1, first + 1);
+    }
+  }
+
+  return {
+    positions: new Float32Array(positions),
+    uvs: new Float32Array(uvs),
+    indices: new Uint16Array(indices),
+  };
+}
+
+async function loadEarthTexture() {
+  const image = new window.Image();
+  image.decoding = "async";
+  image.src = EARTH_TEXTURE.uri;
+
+  await new Promise<void>((resolve, reject) => {
+    image.onload = () => resolve();
+    image.onerror = () =>
+      reject(new Error("Earth texture could not be loaded."));
+  });
+
+  if (image.decode) await image.decode();
+  return image;
 }
