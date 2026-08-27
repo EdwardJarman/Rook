@@ -17,7 +17,9 @@ describe("Login with ChatGPT integration", () => {
     expect(isChatGPTModel("chatgpt:gpt-5.5")).toBe(true);
     expect(isChatGPTModel("openrouter/free")).toBe(false);
     expect(isChatGPTModel(undefined)).toBe(false);
-    expect(chatGPTModelSlug("chatgpt:gpt-5.5-codex-fast")).toBe("gpt-5.5-codex-fast");
+    expect(chatGPTModelSlug("chatgpt:gpt-5.5-codex-fast")).toBe(
+      "gpt-5.5-codex-fast",
+    );
   });
 
   it("isolates encrypted sessions by stable, opaque Clerk user keys", () => {
@@ -36,8 +38,14 @@ describe("Login with ChatGPT integration", () => {
   });
 
   it("removes Codex safety bookkeeping from the user-facing reply", () => {
-    expect(userFacingChatGPTText("User Safety: safe\nResponse Safety: safe\nHello from ChatGPT.")).toBe("Hello from ChatGPT.");
-    expect(userFacingChatGPTText("User Safety: safe\nResponse Safety: safe")).toBe("");
+    expect(
+      userFacingChatGPTText(
+        "User Safety: safe\nResponse Safety: safe\nHello from ChatGPT.",
+      ),
+    ).toBe("Hello from ChatGPT.");
+    expect(
+      userFacingChatGPTText("User Safety: safe\nResponse Safety: safe"),
+    ).toBe("");
   });
 
   it("compresses and encrypts refreshable session material before metadata storage", () => {
@@ -57,7 +65,9 @@ describe("Login with ChatGPT integration", () => {
       expect(Buffer.byteLength(sealed, "utf8")).toBeLessThan(7_200);
       expect(__openChatGPTMetadataForTests(sealed)).toEqual(value);
 
-      const tampered = `${sealed.slice(0, -1)}${sealed.endsWith("A") ? "B" : "A"}`;
+      const tamperIndex = Math.floor(sealed.length / 2);
+      const original = sealed[tamperIndex] ?? "A";
+      const tampered = `${sealed.slice(0, tamperIndex)}${original === "A" ? "B" : "A"}${sealed.slice(tamperIndex + 1)}`;
       expect(__openChatGPTMetadataForTests(tampered)).toBeUndefined();
     } finally {
       if (previousSecret === undefined) delete process.env.CLERK_SECRET_KEY;

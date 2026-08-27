@@ -76,17 +76,28 @@ export function registerNodeDownloadRoutes(
     void serveCliDownload(req, res);
   });
 
-  app.get("/install.sh", (_req, res) => {
+  const servePosixInstaller = (
+    _req: import("express").Request,
+    res: import("express").Response,
+  ) => {
     res.setHeader("Cache-Control", "no-store");
     res.type("text/plain").send(buildPosixCliInstaller(PUBLIC_ROOK_ORIGIN));
-  });
-
-  app.get("/install.ps1", (_req, res) => {
+  };
+  const servePowerShellInstaller = (
+    _req: import("express").Request,
+    res: import("express").Response,
+  ) => {
     res.setHeader("Cache-Control", "no-store");
     res
       .type("text/plain")
       .send(buildPowerShellCliInstaller(PUBLIC_ROOK_ORIGIN));
-  });
+  };
+  // API paths always reach the serverless handler. The top-level aliases are
+  // retained for a clean terminal command and are explicitly routed in vercel.json.
+  app.get("/api/install.sh", servePosixInstaller);
+  app.get("/api/install.ps1", servePowerShellInstaller);
+  app.get("/install.sh", servePosixInstaller);
+  app.get("/install.ps1", servePowerShellInstaller);
 
   app.get("/api/download/android", (req, res) => {
     void serveAndroidDownload(req, res);
@@ -142,12 +153,10 @@ async function serveCliDownload(
     ? requested
     : pickCliAssetForUserAgent(req.headers["user-agent"]);
   if (picked === "page") {
-    res
-      .status(400)
-      .json({
-        error:
-          "Rook CLI currently supports Windows, macOS, and Linux x64 desktops.",
-      });
+    res.status(400).json({
+      error:
+        "Rook CLI currently supports Windows, macOS, and Linux x64 desktops.",
+    });
     return;
   }
 
@@ -159,12 +168,10 @@ async function serveCliDownload(
       signal: AbortSignal.timeout(8_000),
     });
     if (!head.ok) {
-      res
-        .status(503)
-        .json({
-          error:
-            "The Rook CLI release is being published. Please try again shortly.",
-        });
+      res.status(503).json({
+        error:
+          "The Rook CLI release is being published. Please try again shortly.",
+      });
       return;
     }
   } catch {
