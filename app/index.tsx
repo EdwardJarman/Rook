@@ -456,7 +456,7 @@ export default function RookLandingPage() {
                   maxWidth: 680,
                 }}
               >
-                The installer downloads the current signed release, installs
+                The installer downloads the current published release, installs
                 only for your user account, and verifies the CLI before it
                 finishes. Run <Text style={{ fontWeight: "800" }}>rook</Text> to
                 start your local Rook Node.
