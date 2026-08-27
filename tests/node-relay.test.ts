@@ -96,8 +96,8 @@ describe("desktop one-time codes", () => {
     );
     expect(layout).toContain('"request",');
     expect(layout).toContain("if (pairingRequest) return;");
-    expect(signIn).toContain(
-      'new URLSearchParams(window.location.search).get("request")',
+    expect(signIn).toMatch(
+      /new URLSearchParams\(window\.location\.search\)\.get\(\s*"request"\s*,?\s*\)/,
     );
     expect(signIn).toContain(
       "return `/connect-node?request=${encodeURIComponent(requestId.toLowerCase())}`",

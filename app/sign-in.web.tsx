@@ -14,10 +14,13 @@ const PAIRING_REQUEST_PATTERN = /^rkd-[a-f0-9]{48}$/i;
  */
 function initialRedirectUrl(): string {
   try {
-    const requested = new URLSearchParams(window.location.search).get("request");
-    const requestId = requested && PAIRING_REQUEST_PATTERN.test(requested)
-      ? requested.toLowerCase()
-      : window.localStorage.getItem(PENDING_PAIRING_KEY);
+    const requested = new URLSearchParams(window.location.search).get(
+      "request",
+    );
+    const requestId =
+      requested && PAIRING_REQUEST_PATTERN.test(requested)
+        ? requested.toLowerCase()
+        : window.localStorage.getItem(PENDING_PAIRING_KEY);
 
     if (requestId && PAIRING_REQUEST_PATTERN.test(requestId)) {
       window.localStorage.setItem(PENDING_PAIRING_KEY, requestId.toLowerCase());
@@ -38,7 +41,14 @@ export default function WebSignInScreen() {
       title="Your workroom is ready."
       detail="Sign in securely to return to your Bots, tasks, and private Rook workspace."
     >
-      <SignIn routing="path" path="/sign-in" signUpUrl="/sign-up" forceRedirectUrl={redirectUrl} appearance={authWebAppearance} />
+      <SignIn
+        routing="path"
+        path="/sign-in"
+        signUpUrl="/sign-up"
+        forceRedirectUrl={redirectUrl}
+        oauthFlow="redirect"
+        appearance={authWebAppearance}
+      />
     </AuthWebShell>
   );
 }
