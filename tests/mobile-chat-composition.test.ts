@@ -28,10 +28,11 @@ describe("compact workroom composition", () => {
     ]);
   });
 
-  it("supports sequential slash mentions without leaving a stale picker open", () => {
+  it("removes a completed slash command without leaving stale composer text", () => {
     expect(trailingBotMentionQuery("Ask /a")).toEqual({ query: "a", start: 4 });
-    expect(insertBotMention("Ask /a", "Atlas")).toBe("Ask /Atlas ");
-    expect(trailingBotMentionQuery("Ask /Atlas ")).toBeNull();
+    expect(insertBotMention("Ask /a", "Atlas")).toBe("Ask ");
+    expect(trailingBotMentionQuery("Ask ")).toBeNull();
+    expect(insertBotMention("/be", "Beta")).toBe("");
     expect(trailingBotMentionQuery("Ask /Atlas then /be")).toEqual({
       query: "be",
       start: 16,

@@ -12,6 +12,7 @@ import {
 
 import { useAuth } from "@/hooks/use-auth";
 import type { AiProvider } from "@/lib/ai-provider";
+import type { AgentTraceStep } from "@/shared/agent-trace";
 import { trpc } from "@/lib/trpc";
 import {
   emptyWorkroomSnapshot,
@@ -57,6 +58,7 @@ export type WorkMessage = {
   kind?: "message" | "activity" | "result" | "approval" | "handoff";
   taskId?: string;
   attachmentName?: string;
+  trace?: AgentTraceStep[];
 };
 export type WorkTask = {
   id: string;

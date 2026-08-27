@@ -24,6 +24,7 @@ import {
 } from "react-native";
 
 import { BotCreateSheet } from "@/components/bot-create-sheet";
+import { AgentActivityTrace } from "@/components/agent-activity-trace";
 import { AiWorkingIndicator } from "@/components/ai-working-indicator";
 import { ComposerConnectorsSheet } from "@/components/composer-connectors-sheet";
 import { ComposerModelPicker } from "@/components/composer-model-picker";
@@ -311,6 +312,7 @@ export default function ChatScreen() {
         conversationId: activeChatId,
         body: response.text,
         kind: response.approvals.length ? "approval" : "message",
+        trace: response.trace,
         taskId: task.id,
       });
       if (
@@ -983,6 +985,12 @@ export default function ChatScreen() {
                             />
                           </View>
                           <View style={{ flex: 1, minWidth: 0 }}>
+                            {message.trace?.length && source ? (
+                              <AgentActivityTrace
+                                bot={source}
+                                trace={message.trace}
+                              />
+                            ) : null}
                             <ChatMarkdown
                               text={message.body}
                               color={colors.text}

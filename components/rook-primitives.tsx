@@ -26,9 +26,6 @@ export { useRookTheme } from "@/lib/ui";
 export type { RookTokens, ToneName } from "@/lib/ui";
 
 type IconName = ComponentProps<typeof MaterialIcons>["name"];
-const materialGlyphMap =
-  (MaterialIcons as unknown as { glyphMap?: Record<string, unknown> })
-    .glyphMap ?? {};
 
 /** Map a semantic tone to concrete colors for the active scheme. */
 export function toneColors(tokens: RookTokens, tone: ToneName) {
@@ -47,7 +44,6 @@ export function toneColors(tokens: RookTokens, tone: ToneName) {
  * with a colored glyph instead of loud saturated fills.
  */
 export function Avatar({
-  label,
   color = "#0E7C59",
   size = 40,
   icon,
@@ -57,58 +53,23 @@ export function Avatar({
   size?: number;
   icon?: string;
 }) {
-  const { dark } = useRookTheme();
-  const shape = getBotShape(icon);
-  const orbMaterial = getBotOrbMaterial(icon);
-  const customIdentity = Boolean(shape || orbMaterial);
-  const supportedMaterialIcon = Boolean(icon && materialGlyphMap[icon]);
-  const glyph = dark ? shade(color, -0.28) : color;
-  const style = useMemo(
-    () => ({
-      width: size,
-      height: size,
-      borderRadius: size * 0.32,
-      backgroundColor: tint(color, dark ? 0.24 : 0.13),
-      borderColor: tint(color, dark ? 0.4 : 0.26),
-      borderWidth: 1,
-    }),
-    [color, dark, size],
-  );
+  const customIdentity = Boolean(getBotShape(icon) || getBotOrbMaterial(icon));
 
   return (
     <View
-      style={
-        customIdentity
-          ? {
-              width: size,
-              height: size,
-              alignItems: "center",
-              justifyContent: "center",
-            }
-          : style
-      }
+      style={{
+        width: size,
+        height: size,
+        alignItems: "center",
+        justifyContent: "center",
+      }}
       accessibilityElementsHidden
     >
-      {customIdentity ? (
-        <BotIdentityMark icon={icon} color={color} size={size} />
-      ) : supportedMaterialIcon ? (
-        <MaterialIcons
-          name={icon as IconName}
-          size={Math.max(14, Math.round(size * 0.46))}
-          color={glyph}
-        />
-      ) : (
-        <Text
-          style={{
-            color: glyph,
-            fontSize: Math.max(11, Math.round(size * 0.38)),
-            fontWeight: "700",
-            letterSpacing: -0.2,
-          }}
-        >
-          {label.slice(0, 1).toUpperCase()}
-        </Text>
-      )}
+      <BotIdentityMark
+        icon={customIdentity ? icon : "bot-orb:matte"}
+        color={color}
+        size={size}
+      />
     </View>
   );
 }

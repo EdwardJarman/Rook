@@ -35,8 +35,8 @@ export function matchingBotsForMention(
     .slice(0, limit);
 }
 
-export function insertBotMention(value: string, botName: string): string {
+export function insertBotMention(value: string, _botName: string): string {
   const mention = trailingBotMentionQuery(value);
   if (!mention) return value;
-  return `${value.slice(0, mention.start)}/${botName} `;
+  return value.slice(0, mention.start);
 }
