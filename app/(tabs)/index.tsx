@@ -20,12 +20,14 @@ import {
   Text,
   TextInput,
   View,
+  useWindowDimensions,
 } from "react-native";
 
 import { BotCreateSheet } from "@/components/bot-create-sheet";
 import { AiWorkingIndicator } from "@/components/ai-working-indicator";
 import { ComposerConnectorsSheet } from "@/components/composer-connectors-sheet";
 import { ComposerModelPicker } from "@/components/composer-model-picker";
+import { MobileBotDrawer } from "@/components/mobile-bot-drawer";
 import { RookLogo } from "@/components/rook-logo";
 import {
   Avatar,
@@ -39,6 +41,11 @@ import {
 import { MathNotation } from "@/components/math-notation";
 import { ScreenContainer } from "@/components/screen-container";
 import { botDropTargetProps, useBotDrag } from "@/lib/bot-drag";
+import {
+  insertBotMention,
+  matchingBotsForMention,
+  trailingBotMentionQuery,
+} from "@/lib/bot-mentions";
 import { useRookNotifications } from "@/lib/rook-notifications";
 import { trpc } from "@/lib/trpc";
 import { tint } from "@/lib/ui";
@@ -49,9 +56,16 @@ import {
   providerForModel,
   providerLabel,
 } from "@/lib/ai-provider";
-import { parseChatMarkdown, type ChatMarkdownInline } from "@/lib/chat-markdown";
+import {
+  parseChatMarkdown,
+  type ChatMarkdownInline,
+} from "@/lib/chat-markdown";
 import { splitMathNotation } from "@/lib/math-notation";
-import { approvalReason, fileSizeLabel, requiresApproval } from "@/lib/workroom-helpers";
+import {
+  approvalReason,
+  fileSizeLabel,
+  requiresApproval,
+} from "@/lib/workroom-helpers";
 import { useWorkroom, type Bot } from "@/lib/workroom-store";
 
 /**
@@ -67,27 +81,58 @@ import { useWorkroom, type Bot } from "@/lib/workroom-store";
  */
 export default function ChatScreen() {
   const router = useRouter();
+  const { width } = useWindowDimensions();
   const { colors } = useRookTheme();
   const workroom = useWorkroom();
   const { bots, messages, approvals } = workroom;
-  const { ready: roomReady, chatBotIds, activeChatBotId, focusChatBot, addBotToChat, removeBotFromChat, draggingBot, dropActive, setDropActive } = useBotDrag();
+  const {
+    ready: roomReady,
+    chatBotIds,
+    activeChatBotId,
+    activeChatId,
+    focusChatBot,
+    addBotToChat,
+    removeBotFromChat,
+    startNewChat,
+    draggingBot,
+    dropActive,
+    setDropActive,
+  } = useBotDrag();
   const [composer, setComposer] = useState("");
   const [composerFocused, setComposerFocused] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [connectorsOpen, setConnectorsOpen] = useState(false);
   const [excelAttached, setExcelAttached] = useState(false);
   const replyMutation = trpc.workroom.reply.useMutation();
   const voiceMutation = trpc.voice.transcribe.useMutation();
-  const modelCatalog = trpc.ai.models.useQuery(undefined, { staleTime: 5 * 60 * 1000, retry: 1 });
+  const modelCatalog = trpc.ai.models.useQuery(undefined, {
+    staleTime: 5 * 60 * 1000,
+    retry: 1,
+  });
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(audioRecorder, 250);
-  const { preferences: notificationPreferences, sendTaskAlert } = useRookNotifications();
+  const { preferences: notificationPreferences, sendTaskAlert } =
+    useRookNotifications();
   const threadRef = useRef<ScrollView>(null);
 
-  const chatBots = useMemo(() => bots.filter((bot) => chatBotIds.includes(bot.id)), [bots, chatBotIds]);
+  const isCompactLayout = width < 960;
+  const chatBots = useMemo(
+    () => bots.filter((bot) => chatBotIds.includes(bot.id)),
+    [bots, chatBotIds],
+  );
+  const activeMention = useMemo(
+    () => trailingBotMentionQuery(composer),
+    [composer],
+  );
+  const mentionMatches = useMemo(
+    () => matchingBotsForMention(bots, composer),
+    [bots, composer],
+  );
   const activeBot = useMemo(
-    () => chatBots.find((bot) => bot.id === activeChatBotId) ?? chatBots[0] ?? null,
+    () =>
+      chatBots.find((bot) => bot.id === activeChatBotId) ?? chatBots[0] ?? null,
     [activeChatBotId, chatBots],
   );
   const activeProvider = useMemo(
@@ -97,26 +142,46 @@ export default function ChatScreen() {
   const resolvedModel = useMemo(() => {
     if (!activeBot) return undefined;
     const models = modelCatalog.data?.models ?? [];
-    const canonical = canonicalModelForProvider(activeBot.model, activeProvider);
-    const selected = models.find((model) => model.id === canonical && modelMatchesProvider(model.id, activeProvider));
+    const canonical = canonicalModelForProvider(
+      activeBot.model,
+      activeProvider,
+    );
+    const selected = models.find(
+      (model) =>
+        model.id === canonical &&
+        modelMatchesProvider(model.id, activeProvider),
+    );
     if (selected) return selected;
-    return defaultModelForProvider(models, activeProvider) ??
-      (activeProvider === "openrouter" ? { id: "openrouter/free" } : undefined);
+    return (
+      defaultModelForProvider(models, activeProvider) ??
+      (activeProvider === "openrouter" ? { id: "openrouter/free" } : undefined)
+    );
   }, [activeBot, activeProvider, modelCatalog.data?.models]);
 
   /* The whole room reads as one conversation: every message from a Bot that is present. */
   const visibleMessages = useMemo(
-    () => messages.filter((message) => chatBotIds.includes(message.botId)),
-    [chatBotIds, messages],
+    () =>
+      messages.filter(
+        (message) =>
+          chatBotIds.includes(message.botId) &&
+          (message.conversationId ?? "chat-legacy") === activeChatId,
+      ),
+    [activeChatId, chatBotIds, messages],
   );
   const pendingApproval = activeBot
-    ? approvals.find((approval) => approval.botId === activeBot.id && approval.state === "Pending")
+    ? approvals.find(
+        (approval) =>
+          approval.botId === activeBot.id && approval.state === "Pending",
+      )
     : undefined;
-  const pendingCount = approvals.filter((approval) => approval.state === "Pending").length;
+  const pendingCount = approvals.filter(
+    (approval) => approval.state === "Pending",
+  ).length;
 
   /* Keep the newest message in view as the thread grows. */
   useEffect(() => {
-    if (visibleMessages.length > 0) threadRef.current?.scrollToEnd({ animated: true });
+    if (visibleMessages.length > 0)
+      threadRef.current?.scrollToEnd({ animated: true });
   }, [visibleMessages.length]);
 
   const handleSend = async () => {
@@ -139,18 +204,34 @@ export default function ChatScreen() {
       summary: requiresReview
         ? "Waiting for your decision before any sensitive step."
         : "Preparing a focused response from your instructions.",
-      nextAction: requiresReview ? "Review the proposed action." : "Review the result and decide what happens next.",
+      nextAction: requiresReview
+        ? "Review the proposed action."
+        : "Review the result and decide what happens next.",
       risk: requiresReview ? "Medium" : "Low",
       steps: [
-        { id: "scope", label: "Understand the result you want", state: "active" },
+        {
+          id: "scope",
+          label: "Understand the result you want",
+          state: "active",
+        },
         { id: "work", label: "Do the safe work", state: "pending" },
         { id: "return", label: "Return the result", state: "pending" },
       ],
     });
-    workroom.addMessage({ botId: activeBot.id, author: "user", body: clean });
+    workroom.addMessage({
+      botId: activeBot.id,
+      author: "user",
+      body: clean,
+      conversationId: activeChatId,
+    });
     setComposer("");
     if (requiresReview) {
-      workroom.addApproval({ botId: activeBot.id, title: task.title, detail: approvalReason(clean), risk: "Medium" });
+      workroom.addApproval({
+        botId: activeBot.id,
+        title: task.title,
+        detail: approvalReason(clean),
+        risk: "Medium",
+      });
       void sendTaskAlert({
         kind: "approval",
         title: "Approval needed in Rook",
@@ -160,6 +241,7 @@ export default function ChatScreen() {
       workroom.addMessage({
         botId: activeBot.id,
         author: "bot",
+        conversationId: activeChatId,
         body: `I can prepare the work, but I need your approval before this step. ${approvalReason(clean)}`,
         kind: "approval",
         taskId: task.id,
@@ -168,7 +250,11 @@ export default function ChatScreen() {
     }
     workroom.updateBotStatus(activeBot.id, "Working");
     try {
-      workroom.updateTaskStatus(task.id, "Working", "Finishing the requested work.");
+      workroom.updateTaskStatus(
+        task.id,
+        "Working",
+        "Finishing the requested work.",
+      );
       const response = await replyMutation.mutateAsync({
         botId: activeBot.id,
         taskId: task.id,
@@ -179,19 +265,27 @@ export default function ChatScreen() {
         message: clean,
         userTimeZone: deviceTimeZone(),
         connectors: excelAttached ? ["microsoft-excel"] : [],
-        recentContext: visibleMessages.slice(-6).map((message) => ({ author: message.author, body: message.body })),
+        recentContext: visibleMessages
+          .slice(-6)
+          .map((message) => ({ author: message.author, body: message.body })),
       });
       setExcelAttached(false);
       if (response.approvals.length) {
-        workroom.updateTaskStatus(task.id, "Approval required", "Review the exact Excel change in Updates.");
-        response.approvals.forEach((approval) => workroom.addApproval({
-          botId: activeBot.id,
-          taskId: task.id,
-          externalActionId: approval.actionId,
-          title: approval.title,
-          detail: approval.detail,
-          risk: approval.risk,
-        }));
+        workroom.updateTaskStatus(
+          task.id,
+          "Approval required",
+          "Review the exact Excel change in Updates.",
+        );
+        response.approvals.forEach((approval) =>
+          workroom.addApproval({
+            botId: activeBot.id,
+            taskId: task.id,
+            externalActionId: approval.actionId,
+            title: approval.title,
+            detail: approval.detail,
+            risk: approval.risk,
+          }),
+        );
         if (!response.pushDelivery.accepted)
           void sendTaskAlert({
             kind: "approval",
@@ -200,17 +294,26 @@ export default function ChatScreen() {
             url: "/activity",
           });
       } else {
-        workroom.updateTaskStatus(task.id, "Completed", "Result returned. You can refine or start a new task.");
+        workroom.updateTaskStatus(
+          task.id,
+          "Completed",
+          "Result returned. You can refine or start a new task.",
+        );
       }
       workroom.updateBotStatus(activeBot.id, "Ready");
       workroom.addMessage({
         botId: activeBot.id,
         author: "bot",
+        conversationId: activeChatId,
         body: response.text,
         kind: response.approvals.length ? "approval" : "message",
         taskId: task.id,
       });
-      if (!response.approvals.length && notificationPreferences.completion && !response.pushDelivery.accepted)
+      if (
+        !response.approvals.length &&
+        notificationPreferences.completion &&
+        !response.pushDelivery.accepted
+      )
         void sendTaskAlert({
           kind: "completion",
           title: `${activeBot.name} completed a task`,
@@ -218,14 +321,16 @@ export default function ChatScreen() {
           url: "/",
         });
     } catch (error) {
-      const message = error instanceof Error && error.message
-        ? error.message
-        : "Free AI capacity is unavailable right now. Please try again shortly.";
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : "Free AI capacity is unavailable right now. Please try again shortly.";
       workroom.updateTaskStatus(task.id, "Partially completed", message);
       workroom.updateBotStatus(activeBot.id, "Ready");
       workroom.addMessage({
         botId: activeBot.id,
         author: "bot",
+        conversationId: activeChatId,
         body: `${message} Nothing external was attempted.`,
         taskId: task.id,
       });
@@ -235,19 +340,32 @@ export default function ChatScreen() {
   const handleAttach = async () => {
     if (!activeBot) return;
     try {
-      const result = await DocumentPicker.getDocumentAsync({ multiple: false, copyToCacheDirectory: true, type: "*/*" });
+      const result = await DocumentPicker.getDocumentAsync({
+        multiple: false,
+        copyToCacheDirectory: true,
+        type: "*/*",
+      });
       if (result.canceled) return;
       const asset = result.assets[0];
-      workroom.addFile({ name: asset.name, size: fileSizeLabel(asset.size), scope: "Bot-private", owner: activeBot.name });
+      workroom.addFile({
+        name: asset.name,
+        size: fileSizeLabel(asset.size),
+        scope: "Bot-private",
+        owner: activeBot.name,
+      });
       workroom.addMessage({
         botId: activeBot.id,
         author: "system",
+        conversationId: activeChatId,
         body: `Attached ${asset.name}. It is available only to ${activeBot.name} in this room.`,
         kind: "activity",
         attachmentName: asset.name,
       });
     } catch {
-      Alert.alert("File attachment unavailable", "Rook could not attach this file. Please try again from the device file picker.");
+      Alert.alert(
+        "File attachment unavailable",
+        "Rook could not attach this file. Please try again from the device file picker.",
+      );
     }
   };
 
@@ -256,18 +374,33 @@ export default function ChatScreen() {
     if (recorderState.isRecording) {
       try {
         await audioRecorder.stop();
-        await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
+        await setAudioModeAsync({
+          allowsRecording: false,
+          playsInSilentMode: true,
+        });
         const uri = audioRecorder.uri;
         if (!uri) throw new Error("The recording file was not created.");
         const data = await audioToBase64(uri);
-        if (data.length > 12_000_000) throw new Error("That voice note is too long. Keep recordings under one minute.");
+        if (data.length > 12_000_000)
+          throw new Error(
+            "That voice note is too long. Keep recordings under one minute.",
+          );
         const result = await voiceMutation.mutateAsync({
           data,
           format: Platform.OS === "web" ? "webm" : "m4a",
         });
-        setComposer((current) => [current.trim(), result.text.trim()].filter(Boolean).join(current.trim() ? " " : ""));
+        setComposer((current) =>
+          [current.trim(), result.text.trim()]
+            .filter(Boolean)
+            .join(current.trim() ? " " : ""),
+        );
       } catch (error) {
-        Alert.alert("Voice input unavailable", error instanceof Error ? error.message : "Rook could not transcribe that recording.");
+        Alert.alert(
+          "Voice input unavailable",
+          error instanceof Error
+            ? error.message
+            : "Rook could not transcribe that recording.",
+        );
       }
       return;
     }
@@ -275,20 +408,51 @@ export default function ChatScreen() {
     try {
       const permission = await requestRecordingPermissionsAsync();
       if (!permission.granted) {
-        Alert.alert("Microphone permission needed", "Allow microphone access to dictate a message to Rook.");
+        Alert.alert(
+          "Microphone permission needed",
+          "Allow microphone access to dictate a message to Rook.",
+        );
         return;
       }
-      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+      });
       await audioRecorder.prepareToRecordAsync();
       audioRecorder.record();
     } catch {
-      Alert.alert("Microphone unavailable", "Rook could not start recording on this device.");
+      Alert.alert(
+        "Microphone unavailable",
+        "Rook could not start recording on this device.",
+      );
     }
   };
 
-  const canSend = Boolean(composer.trim()) && !recorderState.isRecording && !replyMutation.isPending && !voiceMutation.isPending;
-  const roomHasBots = chatBots.length > 0;
-  const isPhoneExperience = Platform.OS !== "web";
+  const handleMentionSelect = (bot: Bot) => {
+    addBotToChat(bot.id);
+    focusChatBot(bot.id);
+    setComposer((current) => insertBotMention(current, bot.name));
+  };
+
+  const handleNewChat = () => {
+    startNewChat();
+    setComposer("");
+    setDrawerOpen(false);
+  };
+
+  const handleDrawerBotSelect = (botId: string) => {
+    addBotToChat(botId);
+    focusChatBot(botId);
+    setDrawerOpen(false);
+  };
+
+  const canSend =
+    Boolean(composer.trim()) &&
+    !recorderState.isRecording &&
+    !replyMutation.isPending &&
+    !voiceMutation.isPending;
+  const roomHasBots = chatBots.length > 0 || activeChatId !== "chat-legacy";
+  const isPhoneExperience = isCompactLayout;
   const stageDropProps = botDropTargetProps({
     onEnter: () => setDropActive(true),
     onLeave: () => setDropActive(false),
@@ -296,8 +460,15 @@ export default function ChatScreen() {
   }) as object;
 
   return (
-    <ScreenContainer containerClassName="bg-background" className="flex-1" edges={["top", "left", "right"]}>
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+    <ScreenContainer
+      containerClassName="bg-background"
+      className="flex-1"
+      edges={["top", "left", "right"]}
+    >
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+      >
         {/* Top bar — the brand, plus quiet actions. The room's identity lives in the strip below. */}
         <View
           style={{
@@ -312,7 +483,22 @@ export default function ChatScreen() {
             backgroundColor: colors.canvas,
           }}
         >
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 9, flex: 1, minWidth: 0 }}>
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 9,
+              flex: 1,
+              minWidth: 0,
+            }}
+          >
+            {isCompactLayout ? (
+              <IconButton
+                icon="menu"
+                label="Open your Bots"
+                onPress={() => setDrawerOpen(true)}
+              />
+            ) : null}
             <View
               style={{
                 width: 32,
@@ -325,11 +511,24 @@ export default function ChatScreen() {
             >
               <RookLogo size={24} color={colors.onInk} />
             </View>
-            <Text style={{ color: colors.text, fontSize: 16, fontWeight: "700", letterSpacing: -0.3 }}>Rook</Text>
+            <Text
+              style={{
+                color: colors.text,
+                fontSize: 16,
+                fontWeight: "700",
+                letterSpacing: -0.3,
+              }}
+            >
+              Rook
+            </Text>
           </View>
           <View style={{ flexDirection: "row", gap: 8 }}>
             <View>
-              <IconButton icon="notifications-none" label="Open updates" onPress={() => router.navigate("/activity" as never)} />
+              <IconButton
+                icon="notifications-none"
+                label="Open updates"
+                onPress={() => router.navigate("/activity" as never)}
+              />
               {pendingCount > 0 ? (
                 <View
                   style={{
@@ -346,14 +545,27 @@ export default function ChatScreen() {
                 />
               ) : null}
             </View>
-            <IconButton icon="person-outline" label="Open account and connected apps" onPress={() => router.navigate("/account" as never)} />
-            <IconButton icon="add" label="Add a Bot" onPress={() => setPickerOpen(true)} tone="accent" />
+            <IconButton
+              icon="person-outline"
+              label="Open account and connected apps"
+              onPress={() => router.navigate("/account" as never)}
+            />
+            <IconButton
+              icon="add"
+              label="Add a Bot"
+              onPress={() => setPickerOpen(true)}
+              tone="accent"
+            />
           </View>
         </View>
 
         {!roomReady || !workroom.ready ? (
-          <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-            <Text style={{ color: colors.textFaint, fontSize: 13 }}>Opening your room…</Text>
+          <View
+            style={{ flex: 1, alignItems: "center", justifyContent: "center" }}
+          >
+            <Text style={{ color: colors.textFaint, fontSize: 13 }}>
+              Opening your room…
+            </Text>
           </View>
         ) : !roomHasBots ? (
           /* Empty room. A brand-new account sees a calm first-run invitation;
@@ -361,7 +573,16 @@ export default function ChatScreen() {
           bots.length === 0 ? (
             <View
               {...stageDropProps}
-              style={{ flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 30, paddingBottom: 40, backgroundColor: dropActive ? tint(colors.accent, 0.05) : colors.canvas }}
+              style={{
+                flex: 1,
+                alignItems: "center",
+                justifyContent: "center",
+                paddingHorizontal: 30,
+                paddingBottom: 40,
+                backgroundColor: dropActive
+                  ? tint(colors.accent, 0.05)
+                  : colors.canvas,
+              }}
             >
               <View
                 style={{
@@ -376,23 +597,66 @@ export default function ChatScreen() {
               >
                 <RookLogo size={56} color={colors.onInk} />
               </View>
-              <Text style={{ color: colors.text, fontSize: 26, lineHeight: 32, fontWeight: "700", letterSpacing: -0.8, textAlign: "center" }}>
+              <Text
+                style={{
+                  color: colors.text,
+                  fontSize: 26,
+                  lineHeight: 32,
+                  fontWeight: "700",
+                  letterSpacing: -0.8,
+                  textAlign: "center",
+                }}
+              >
                 Start with one good Bot.
               </Text>
-              <Text style={{ color: colors.textSoft, fontSize: 14, lineHeight: 21, textAlign: "center", maxWidth: 320, marginTop: 10 }}>
-                Give it a name and a job, then bring it into the room and the conversation begins.
+              <Text
+                style={{
+                  color: colors.textSoft,
+                  fontSize: 14,
+                  lineHeight: 21,
+                  textAlign: "center",
+                  maxWidth: 320,
+                  marginTop: 10,
+                }}
+              >
+                Give it a name and a job, then bring it into the room and the
+                conversation begins.
               </Text>
               <View style={{ marginTop: 24 }}>
-                <PrimaryButton label="Make a Bot" icon="add" onPress={() => setCreateOpen(true)} />
+                <PrimaryButton
+                  label="Make a Bot"
+                  icon="add"
+                  onPress={() => setCreateOpen(true)}
+                />
               </View>
-              <Text style={{ color: colors.textFaint, fontSize: 12, lineHeight: 17, textAlign: "center", maxWidth: 280, marginTop: 18 }}>
-                {isPhoneExperience ? "Use this button whenever you are ready to bring it into the chat." : "Drag it from the sidebar when you are ready, or add it from here."}
+              <Text
+                style={{
+                  color: colors.textFaint,
+                  fontSize: 12,
+                  lineHeight: 17,
+                  textAlign: "center",
+                  maxWidth: 280,
+                  marginTop: 18,
+                }}
+              >
+                {isPhoneExperience
+                  ? "Use this button whenever you are ready to bring it into the chat."
+                  : "Drag it from the sidebar when you are ready, or add it from here."}
               </Text>
             </View>
           ) : (
             <View
               {...stageDropProps}
-              style={{ flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 30, paddingBottom: 40, backgroundColor: dropActive ? tint(colors.accent, 0.05) : colors.canvas }}
+              style={{
+                flex: 1,
+                alignItems: "center",
+                justifyContent: "center",
+                paddingHorizontal: 30,
+                paddingBottom: 40,
+                backgroundColor: dropActive
+                  ? tint(colors.accent, 0.05)
+                  : colors.canvas,
+              }}
             >
               <View
                 style={{
@@ -405,51 +669,96 @@ export default function ChatScreen() {
                   marginBottom: 26,
                 }}
               >
-                <MaterialIcons name="group-add" size={32} color={colors.onInk} />
+                <MaterialIcons
+                  name="group-add"
+                  size={32}
+                  color={colors.onInk}
+                />
               </View>
-              <Text style={{ color: colors.text, fontSize: 26, lineHeight: 32, fontWeight: "700", letterSpacing: -0.8, textAlign: "center" }}>
+              <Text
+                style={{
+                  color: colors.text,
+                  fontSize: 26,
+                  lineHeight: 32,
+                  fontWeight: "700",
+                  letterSpacing: -0.8,
+                  textAlign: "center",
+                }}
+              >
                 Bring a teammate into the room.
               </Text>
-              <Text style={{ color: colors.textSoft, fontSize: 14, lineHeight: 21, textAlign: "center", maxWidth: 320, marginTop: 10 }}>
-                {isPhoneExperience ? "Use Add a Bot to bring one into this conversation." : "Drag a Bot from the sidebar onto the chat, or add one here and it joins the room."}
+              <Text
+                style={{
+                  color: colors.textSoft,
+                  fontSize: 14,
+                  lineHeight: 21,
+                  textAlign: "center",
+                  maxWidth: 320,
+                  marginTop: 10,
+                }}
+              >
+                {isPhoneExperience
+                  ? "Use Add a Bot to bring one into this conversation."
+                  : "Drag a Bot from the sidebar onto the chat, or add one here and it joins the room."}
               </Text>
               <View style={{ marginTop: 24 }}>
-                <PrimaryButton label="Add a Bot" icon="add" onPress={() => setPickerOpen(true)} />
+                <PrimaryButton
+                  label="Add a Bot"
+                  icon="add"
+                  onPress={() => setPickerOpen(true)}
+                />
               </View>
               {draggingBot && dropActive ? (
-                <Text style={{ color: colors.accent, fontSize: 13, fontWeight: "700", marginTop: 18 }}>Drop to add {draggingBot.name}</Text>
+                <Text
+                  style={{
+                    color: colors.accent,
+                    fontSize: 13,
+                    fontWeight: "700",
+                    marginTop: 18,
+                  }}
+                >
+                  Drop to add {draggingBot.name}
+                </Text>
               ) : null}
             </View>
           )
         ) : (
           <>
-            {/* The room strip — one mark per Bot in the room. Focus to talk, hover to remove. */}
-            <View
-              style={{
-                minHeight: 58,
-                flexDirection: "row",
-                alignItems: "center",
-                borderBottomWidth: 1,
-                borderBottomColor: colors.line,
-                backgroundColor: colors.canvas,
-              }}
-            >
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={{ gap: 12, paddingHorizontal: 16, paddingVertical: 9 }}
+            {/* Participant marks appear only after a compact New Chat has Bots. The
+                prior always-visible strip is deliberately absent on mobile. */}
+            {!isCompactLayout ||
+            (activeChatId !== "chat-legacy" && chatBots.length > 0) ? (
+              <View
+                style={{
+                  minHeight: 58,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  borderBottomWidth: 1,
+                  borderBottomColor: colors.line,
+                  backgroundColor: colors.canvas,
+                }}
               >
-                {chatBots.map((bot) => (
-                  <RoomBotChip
-                    key={bot.id}
-                    bot={bot}
-                    active={bot.id === activeBot?.id}
-                    onFocus={() => focusChatBot(bot.id)}
-                    onRemove={() => removeBotFromChat(bot.id)}
-                  />
-                ))}
-              </ScrollView>
-            </View>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={{
+                    gap: 12,
+                    paddingHorizontal: 16,
+                    paddingVertical: 9,
+                  }}
+                >
+                  {chatBots.map((bot) => (
+                    <RoomBotChip
+                      key={bot.id}
+                      bot={bot}
+                      active={bot.id === activeBot?.id}
+                      onFocus={() => focusChatBot(bot.id)}
+                      onRemove={() => removeBotFromChat(bot.id)}
+                    />
+                  ))}
+                </ScrollView>
+              </View>
+            ) : null}
 
             <View
               style={[
@@ -500,36 +809,89 @@ export default function ChatScreen() {
                         justifyContent: "center",
                       }}
                     >
-                      <MaterialIcons name="shield" size={18} color={colors.amber} />
+                      <MaterialIcons
+                        name="shield"
+                        size={18}
+                        color={colors.amber}
+                      />
                     </View>
                     <View style={{ flex: 1, minWidth: 0 }}>
-                      <Text style={{ color: colors.text, fontSize: 13.5, fontWeight: "600" }}>A decision is waiting</Text>
-                      <Text numberOfLines={1} style={{ color: colors.amber, fontSize: 12, marginTop: 2 }}>
+                      <Text
+                        style={{
+                          color: colors.text,
+                          fontSize: 13.5,
+                          fontWeight: "600",
+                        }}
+                      >
+                        A decision is waiting
+                      </Text>
+                      <Text
+                        numberOfLines={1}
+                        style={{
+                          color: colors.amber,
+                          fontSize: 12,
+                          marginTop: 2,
+                        }}
+                      >
                         {pendingApproval.title}
                       </Text>
                     </View>
-                    <MaterialIcons name="chevron-right" size={20} color={colors.amber} />
+                    <MaterialIcons
+                      name="chevron-right"
+                      size={20}
+                      color={colors.amber}
+                    />
                   </Pressable>
                 ) : null}
 
                 {visibleMessages.length ? (
                   <View style={{ gap: 14, paddingTop: 2 }}>
                     {visibleMessages.map((message) => {
-                      const source = bots.find((bot) => bot.id === message.botId);
-                      if (message.author === "system" || message.kind === "activity") {
+                      const source = bots.find(
+                        (bot) => bot.id === message.botId,
+                      );
+                      if (
+                        message.author === "system" ||
+                        message.kind === "activity"
+                      ) {
                         return (
                           <View
                             key={message.id}
-                            style={{ flexDirection: "row", alignItems: "center", gap: 7, paddingVertical: 2, maxWidth: "100%" }}
+                            style={{
+                              flexDirection: "row",
+                              alignItems: "center",
+                              gap: 7,
+                              paddingVertical: 2,
+                              maxWidth: "100%",
+                            }}
                           >
-                            <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: colors.textFaint }} />
-                            <Text style={{ flex: 1, color: colors.textFaint, fontSize: 11.5, lineHeight: 16 }}>{message.body}</Text>
+                            <View
+                              style={{
+                                width: 5,
+                                height: 5,
+                                borderRadius: 3,
+                                backgroundColor: colors.textFaint,
+                              }}
+                            />
+                            <Text
+                              style={{
+                                flex: 1,
+                                color: colors.textFaint,
+                                fontSize: 11.5,
+                                lineHeight: 16,
+                              }}
+                            >
+                              {message.body}
+                            </Text>
                           </View>
                         );
                       }
                       if (message.author === "user") {
                         return (
-                          <View key={message.id} style={{ alignItems: "flex-end", paddingLeft: 48 }}>
+                          <View
+                            key={message.id}
+                            style={{ alignItems: "flex-end", paddingLeft: 48 }}
+                          >
                             <View
                               style={{
                                 backgroundColor: colors.ink,
@@ -540,10 +902,27 @@ export default function ChatScreen() {
                                 maxWidth: "100%",
                               }}
                             >
-                              <Text style={{ color: colors.onInk, fontSize: 15, lineHeight: 21.5 }}>{message.body}</Text>
-                              {message.attachmentName ? <FileChip name={message.attachmentName} /> : null}
+                              <Text
+                                style={{
+                                  color: colors.onInk,
+                                  fontSize: 15,
+                                  lineHeight: 21.5,
+                                }}
+                              >
+                                {message.body}
+                              </Text>
+                              {message.attachmentName ? (
+                                <FileChip name={message.attachmentName} />
+                              ) : null}
                             </View>
-                            <Text style={{ color: colors.textFaint, fontSize: 10.5, marginTop: 5, marginRight: 4 }}>
+                            <Text
+                              style={{
+                                color: colors.textFaint,
+                                fontSize: 10.5,
+                                marginTop: 5,
+                                marginRight: 4,
+                              }}
+                            >
                               {message.createdAt}
                             </Text>
                           </View>
@@ -563,38 +942,88 @@ export default function ChatScreen() {
                               padding: 13,
                             }}
                           >
-                            <MaterialIcons name="shield" size={17} color={colors.amber} />
-                            <ChatMarkdown text={message.body} color={colors.text} baseSize={13.5} />
+                            <MaterialIcons
+                              name="shield"
+                              size={17}
+                              color={colors.amber}
+                            />
+                            <ChatMarkdown
+                              text={message.body}
+                              color={colors.text}
+                              baseSize={13.5}
+                            />
                           </View>
                         );
                       }
                       return (
-                        <View key={message.id} style={{ flexDirection: "row", gap: 10, paddingRight: 20 }}>
+                        <View
+                          key={message.id}
+                          style={{
+                            flexDirection: "row",
+                            gap: 10,
+                            paddingRight: 20,
+                          }}
+                        >
                           <View style={{ width: 28, alignItems: "center" }}>
-                            <Avatar label={source?.avatar ?? "?"} color={source?.color} icon={source?.icon} size={28} />
+                            <Avatar
+                              label={source?.avatar ?? "?"}
+                              color={source?.color}
+                              icon={source?.icon}
+                              size={28}
+                            />
                           </View>
                           <View style={{ flex: 1, minWidth: 0 }}>
-                            <ChatMarkdown text={message.body} color={colors.text} baseSize={15} />
-                            {message.attachmentName ? <FileChip name={message.attachmentName} /> : null}
-                            <Text style={{ color: colors.textFaint, fontSize: 10.5, marginTop: 5 }}>{message.createdAt}</Text>
+                            <ChatMarkdown
+                              text={message.body}
+                              color={colors.text}
+                              baseSize={15}
+                            />
+                            {message.attachmentName ? (
+                              <FileChip name={message.attachmentName} />
+                            ) : null}
+                            <Text
+                              style={{
+                                color: colors.textFaint,
+                                fontSize: 10.5,
+                                marginTop: 5,
+                              }}
+                            >
+                              {message.createdAt}
+                            </Text>
                           </View>
                         </View>
                       );
                     })}
-                    {replyMutation.isPending && activeBot ? <AiWorkingIndicator bot={activeBot} /> : null}
+                    {replyMutation.isPending && activeBot ? (
+                      <AiWorkingIndicator bot={activeBot} />
+                    ) : null}
                   </View>
                 ) : (
                   <EmptyState
                     icon="forum"
-                    title={`Talk to ${activeBot?.name ?? "your Bot"}`}
-                    detail="Describe the outcome you want, the important context, and when this Bot should pause for you."
+                    title={
+                      activeBot
+                        ? `Talk to ${activeBot.name}`
+                        : "Start a new chat"
+                    }
+                    detail={
+                      activeBot
+                        ? "Describe the outcome you want, the important context, and when this Bot should pause for you."
+                        : "Type / in the message box to bring one or more Bots into this chat."
+                    }
                   />
                 )}
               </ScrollView>
 
               {/* Drop a Bot anywhere on the stage. */}
               {draggingBot && dropActive ? (
-                <View pointerEvents="none" style={[StyleSheet.absoluteFill, { alignItems: "center", justifyContent: "center" }]}>
+                <View
+                  pointerEvents="none"
+                  style={[
+                    StyleSheet.absoluteFill,
+                    { alignItems: "center", justifyContent: "center" },
+                  ]}
+                >
                   <View
                     style={{
                       flexDirection: "row",
@@ -609,19 +1038,36 @@ export default function ChatScreen() {
                     }}
                   >
                     <MaterialIcons name="add" size={17} color={colors.onInk} />
-                    <Text style={{ color: colors.onInk, fontSize: 14, fontWeight: "600" }}>Drop to add {draggingBot.name}</Text>
+                    <Text
+                      style={{
+                        color: colors.onInk,
+                        fontSize: 14,
+                        fontWeight: "600",
+                      }}
+                    >
+                      Drop to add {draggingBot.name}
+                    </Text>
                   </View>
                 </View>
               ) : null}
             </View>
 
             {/* Composer — a two-tier rounded pill inspired by the supplied reference. */}
-            <View style={{ backgroundColor: colors.canvas, paddingHorizontal: 14, paddingTop: 8, paddingBottom: 10 }}>
+            <View
+              style={{
+                backgroundColor: colors.canvas,
+                paddingHorizontal: 14,
+                paddingTop: 8,
+                paddingBottom: 10,
+              }}
+            >
               <View
                 style={{
                   borderRadius: 28,
                   borderWidth: 1,
-                  borderColor: composerFocused ? tint(colors.accent, 0.35) : colors.line,
+                  borderColor: composerFocused
+                    ? tint(colors.accent, 0.35)
+                    : colors.line,
                   backgroundColor: colors.surface,
                   paddingHorizontal: 12,
                   paddingTop: 10,
@@ -638,7 +1084,11 @@ export default function ChatScreen() {
                   onChangeText={setComposer}
                   onFocus={() => setComposerFocused(true)}
                   onBlur={() => setComposerFocused(false)}
-                  placeholder="Type your message here…"
+                  placeholder={
+                    activeBot
+                      ? "Type your message here…"
+                      : "Type / to add a Bot…"
+                  }
                   placeholderTextColor={colors.textFaint}
                   multiline
                   editable={!recorderState.isRecording}
@@ -656,51 +1106,225 @@ export default function ChatScreen() {
                   accessibilityLabel={`Message ${activeBot?.name ?? "your Bot"}`}
                 />
 
-                <View style={{ minHeight: 42, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                  <View style={{ flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: 2 }}>
-                    <ComposerControl icon="attach-file" label="Upload a file" onPress={() => void handleAttach()} />
+                {isCompactLayout && activeMention ? (
+                  <View
+                    accessibilityLabel="Bot mention suggestions"
+                    style={{
+                      marginHorizontal: 1,
+                      marginBottom: 4,
+                      borderWidth: 1,
+                      borderColor: colors.line,
+                      borderRadius: 14,
+                      backgroundColor: colors.canvas,
+                      overflow: "hidden",
+                    }}
+                  >
+                    {mentionMatches.length ? (
+                      mentionMatches.map((bot) => (
+                        <Pressable
+                          key={bot.id}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Mention ${bot.name}`}
+                          onPress={() => handleMentionSelect(bot)}
+                          style={({ pressed }) => ({
+                            minHeight: 48,
+                            flexDirection: "row",
+                            alignItems: "center",
+                            gap: 9,
+                            paddingHorizontal: 10,
+                            backgroundColor: pressed
+                              ? colors.surfaceAlt
+                              : "transparent",
+                            borderBottomWidth:
+                              bot.id ===
+                              mentionMatches[mentionMatches.length - 1]?.id
+                                ? 0
+                                : StyleSheet.hairlineWidth,
+                            borderBottomColor: colors.line,
+                          })}
+                        >
+                          <Avatar
+                            label={bot.avatar}
+                            color={bot.color}
+                            icon={bot.icon}
+                            size={27}
+                          />
+                          <View style={{ flex: 1, minWidth: 0 }}>
+                            <Text
+                              numberOfLines={1}
+                              style={{
+                                color: colors.text,
+                                fontSize: 13.5,
+                                fontWeight: "700",
+                              }}
+                            >
+                              {bot.name}
+                            </Text>
+                            <Text
+                              numberOfLines={1}
+                              style={{
+                                color: colors.textFaint,
+                                fontSize: 11.5,
+                                marginTop: 1,
+                              }}
+                            >
+                              {bot.role}
+                            </Text>
+                          </View>
+                          {chatBotIds.includes(bot.id) ? (
+                            <MaterialIcons
+                              name="check"
+                              size={17}
+                              color={colors.accent}
+                            />
+                          ) : null}
+                        </Pressable>
+                      ))
+                    ) : (
+                      <Text
+                        style={{
+                          color: colors.textFaint,
+                          paddingHorizontal: 12,
+                          paddingVertical: 13,
+                          fontSize: 12.5,
+                        }}
+                      >
+                        No Bots match “/{activeMention.query}”.
+                      </Text>
+                    )}
+                  </View>
+                ) : null}
+
+                <View
+                  style={{
+                    minHeight: 42,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 8,
+                  }}
+                >
+                  <View
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 2,
+                    }}
+                  >
+                    <ComposerControl
+                      icon="attach-file"
+                      label="Upload a file"
+                      onPress={() => void handleAttach()}
+                    />
                     <ComposerControl
                       icon="add"
-                      label={excelAttached ? "Microsoft Excel attached. Open connectors" : "Open connectors"}
+                      label={
+                        excelAttached
+                          ? "Microsoft Excel attached. Open connectors"
+                          : "Open connectors"
+                      }
                       active={excelAttached}
                       onPress={() => setConnectorsOpen(true)}
                     />
                     <ComposerModelPicker
                       value={resolvedModel?.id || activeBot?.model || ""}
                       provider={activeProvider}
-                      onChange={(model) => activeBot && workroom.updateBotModel(activeBot.id, model)}
+                      onChange={(model) =>
+                        activeBot &&
+                        workroom.updateBotModel(activeBot.id, model)
+                      }
                     />
                   </View>
 
                   <Pressable
                     accessibilityRole="button"
-                    accessibilityLabel={canSend ? "Send message" : recorderState.isRecording ? "Stop recording" : "Record voice message"}
-                    onPress={() => canSend ? void handleSend() : void handleVoice()}
-                    disabled={replyMutation.isPending || voiceMutation.isPending}
+                    accessibilityLabel={
+                      canSend
+                        ? "Send message"
+                        : recorderState.isRecording
+                          ? "Stop recording"
+                          : "Record voice message"
+                    }
+                    onPress={() =>
+                      canSend ? void handleSend() : void handleVoice()
+                    }
+                    disabled={
+                      replyMutation.isPending || voiceMutation.isPending
+                    }
                     style={({ pressed }) => ({
                       width: 42,
                       height: 42,
                       borderRadius: 21,
-                      backgroundColor: canSend ? colors.ink : recorderState.isRecording ? colors.coral : colors.canvas,
+                      backgroundColor: canSend
+                        ? colors.ink
+                        : recorderState.isRecording
+                          ? colors.coral
+                          : colors.canvas,
                       borderWidth: canSend || recorderState.isRecording ? 0 : 1,
                       borderColor: colors.lineStrong,
                       alignItems: "center",
                       justifyContent: "center",
-                      opacity: replyMutation.isPending || voiceMutation.isPending ? 0.5 : pressed ? 0.7 : 1,
+                      opacity:
+                        replyMutation.isPending || voiceMutation.isPending
+                          ? 0.5
+                          : pressed
+                            ? 0.7
+                            : 1,
                     })}
                   >
                     <MaterialIcons
-                      name={canSend ? "arrow-upward" : recorderState.isRecording ? "stop" : voiceMutation.isPending ? "more-horiz" : "mic"}
+                      name={
+                        canSend
+                          ? "arrow-upward"
+                          : recorderState.isRecording
+                            ? "stop"
+                            : voiceMutation.isPending
+                              ? "more-horiz"
+                              : "mic"
+                      }
                       size={canSend ? 20 : 21}
-                      color={canSend || recorderState.isRecording ? colors.onInk : colors.text}
+                      color={
+                        canSend || recorderState.isRecording
+                          ? colors.onInk
+                          : colors.text
+                      }
                     />
                   </Pressable>
                 </View>
 
                 {recorderState.isRecording ? (
-                  <View style={{ position: "absolute", left: 15, top: 13, flexDirection: "row", alignItems: "center", gap: 7, backgroundColor: colors.surface, paddingRight: 8 }}>
-                    <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: colors.coral }} />
-                    <Text style={{ color: colors.coral, fontSize: 11.5, fontWeight: "700" }}>Recording {formatRecordingTime(recorderState.durationMillis)}</Text>
+                  <View
+                    style={{
+                      position: "absolute",
+                      left: 15,
+                      top: 13,
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 7,
+                      backgroundColor: colors.surface,
+                      paddingRight: 8,
+                    }}
+                  >
+                    <View
+                      style={{
+                        width: 7,
+                        height: 7,
+                        borderRadius: 4,
+                        backgroundColor: colors.coral,
+                      }}
+                    />
+                    <Text
+                      style={{
+                        color: colors.coral,
+                        fontSize: 11.5,
+                        fontWeight: "700",
+                      }}
+                    >
+                      Recording{" "}
+                      {formatRecordingTime(recorderState.durationMillis)}
+                    </Text>
                   </View>
                 ) : null}
               </View>
@@ -709,25 +1333,68 @@ export default function ChatScreen() {
         )}
       </KeyboardAvoidingView>
 
+      <MobileBotDrawer
+        visible={drawerOpen}
+        bots={bots}
+        chatBotIds={chatBotIds}
+        activeBotId={activeBot?.id ?? ""}
+        onClose={() => setDrawerOpen(false)}
+        onNewChat={handleNewChat}
+        onCreateBot={() => {
+          setDrawerOpen(false);
+          setCreateOpen(true);
+        }}
+        onSelectBot={handleDrawerBotSelect}
+      />
+
       {/* Add a Bot — existing teammates, plus a quiet path to make a new one. */}
       <Sheet visible={pickerOpen} onClose={() => setPickerOpen(false)}>
-        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 10,
+          }}
+        >
           <View>
             <SheetEyebrow>Room</SheetEyebrow>
-            <Text style={{ color: colors.text, fontSize: 21, lineHeight: 27, fontWeight: "700", letterSpacing: -0.5 }}>
+            <Text
+              style={{
+                color: colors.text,
+                fontSize: 21,
+                lineHeight: 27,
+                fontWeight: "700",
+                letterSpacing: -0.5,
+              }}
+            >
               Add to the chat
             </Text>
           </View>
-          <IconButton icon="add" label="Create a Bot" onPress={() => { setPickerOpen(false); setCreateOpen(true); }} tone="accent" />
+          <IconButton
+            icon="add"
+            label="Create a Bot"
+            onPress={() => {
+              setPickerOpen(false);
+              setCreateOpen(true);
+            }}
+            tone="accent"
+          />
         </View>
-        <ScrollView contentContainerStyle={{ paddingTop: 16, paddingBottom: 4, gap: 4 }}>
+        <ScrollView
+          contentContainerStyle={{ paddingTop: 16, paddingBottom: 4, gap: 4 }}
+        >
           {bots.map((bot) => {
             const inRoom = chatBotIds.includes(bot.id);
             return (
               <Pressable
                 key={bot.id}
                 accessibilityRole="button"
-                accessibilityLabel={inRoom ? `${bot.name}, already in the room` : `Add ${bot.name} to the room`}
+                accessibilityLabel={
+                  inRoom
+                    ? `${bot.name}, already in the room`
+                    : `Add ${bot.name} to the room`
+                }
                 onPress={() => {
                   addBotToChat(bot.id);
                   setPickerOpen(false);
@@ -744,19 +1411,43 @@ export default function ChatScreen() {
                   },
                 ]}
               >
-                <Avatar label={bot.avatar} color={bot.color} icon={bot.icon} size={42} />
+                <Avatar
+                  label={bot.avatar}
+                  color={bot.color}
+                  icon={bot.icon}
+                  size={42}
+                />
                 <View style={{ flex: 1, minWidth: 0 }}>
-                  <Text numberOfLines={1} style={{ color: colors.text, fontSize: 14.5, fontWeight: "600", letterSpacing: -0.1 }}>
+                  <Text
+                    numberOfLines={1}
+                    style={{
+                      color: colors.text,
+                      fontSize: 14.5,
+                      fontWeight: "600",
+                      letterSpacing: -0.1,
+                    }}
+                  >
                     {bot.name}
                   </Text>
-                  <Text numberOfLines={1} style={{ color: colors.textFaint, fontSize: 12, marginTop: 2 }}>
+                  <Text
+                    numberOfLines={1}
+                    style={{
+                      color: colors.textFaint,
+                      fontSize: 12,
+                      marginTop: 2,
+                    }}
+                  >
                     {bot.status === "Working" ? "Working now" : bot.role}
                   </Text>
                 </View>
                 {inRoom ? (
                   <MaterialIcons name="check" size={19} color={colors.accent} />
                 ) : (
-                  <MaterialIcons name="add-circle-outline" size={19} color={colors.textFaint} />
+                  <MaterialIcons
+                    name="add-circle-outline"
+                    size={19}
+                    color={colors.textFaint}
+                  />
                 )}
               </Pressable>
             );
@@ -766,7 +1457,16 @@ export default function ChatScreen() {
               icon="smart-toy"
               title="No Bots yet"
               detail="Make your first teammate and it will appear here, ready to be added to the room."
-              action={<PrimaryButton label="Make a Bot" icon="add" onPress={() => { setPickerOpen(false); setCreateOpen(true); }} />}
+              action={
+                <PrimaryButton
+                  label="Make a Bot"
+                  icon="add"
+                  onPress={() => {
+                    setPickerOpen(false);
+                    setCreateOpen(true);
+                  }}
+                />
+              }
             />
           ) : null}
         </ScrollView>
@@ -784,7 +1484,6 @@ export default function ChatScreen() {
         onClose={() => setCreateOpen(false)}
         onCreated={(bot) => addBotToChat(bot.id)}
       />
-
     </ScreenContainer>
   );
 }
@@ -825,7 +1524,12 @@ function RoomBotChip({
           },
         ]}
       >
-        <Avatar label={bot.avatar} color={bot.color} icon={bot.icon} size={40} />
+        <Avatar
+          label={bot.avatar}
+          color={bot.color}
+          icon={bot.icon}
+          size={40}
+        />
       </Pressable>
       {showRemove ? (
         <Pressable
@@ -871,22 +1575,69 @@ function ChatMarkdown({
         const lineStyle = {
           color,
           fontSize: heading ? baseSize + (block.level === 1 ? 4 : 2) : baseSize,
-          lineHeight: heading ? baseSize + (block.level === 1 ? 10 : 8) : baseSize + 7,
-          fontWeight: heading ? "700" as const : "400" as const,
+          lineHeight: heading
+            ? baseSize + (block.level === 1 ? 10 : 8)
+            : baseSize + 7,
+          fontWeight: heading ? ("700" as const) : ("400" as const),
         };
+        if (block.type === "math") {
+          return (
+            <MathNotation
+              key={`math-${index}`}
+              latex={block.latex}
+              color={color}
+              fontSize={baseSize}
+              display
+            />
+          );
+        }
         if (block.type === "bullet" || block.type === "ordered") {
           return (
-            <View key={`${block.type}-${index}`} style={{ flexDirection: "row", gap: 7, alignItems: "flex-start" }}>
-              <Text style={[lineStyle, { minWidth: block.type === "ordered" ? 18 : 10 }]}>{block.type === "ordered" ? `${block.ordinal}.` : "•"}</Text>
-              <View style={{ flex: 1, flexDirection: "row", flexWrap: "wrap", alignItems: "center" }}>
-                {renderInlineMarkdown(block.content, color, lineStyle.fontSize, lineStyle.fontWeight)}
+            <View
+              key={`${block.type}-${index}`}
+              style={{ flexDirection: "row", gap: 7, alignItems: "flex-start" }}
+            >
+              <Text
+                style={[
+                  lineStyle,
+                  { minWidth: block.type === "ordered" ? 18 : 10 },
+                ]}
+              >
+                {block.type === "ordered" ? `${block.ordinal}.` : "•"}
+              </Text>
+              <View
+                style={{
+                  flex: 1,
+                  flexDirection: "row",
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                }}
+              >
+                {renderInlineMarkdown(
+                  block.content,
+                  color,
+                  lineStyle.fontSize,
+                  lineStyle.fontWeight,
+                )}
               </View>
             </View>
           );
         }
         return (
-          <View key={`${block.type}-${index}`} style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center" }}>
-            {renderInlineMarkdown(block.content, color, lineStyle.fontSize, lineStyle.fontWeight)}
+          <View
+            key={`${block.type}-${index}`}
+            style={{
+              flexDirection: "row",
+              flexWrap: "wrap",
+              alignItems: "center",
+            }}
+          >
+            {renderInlineMarkdown(
+              block.content,
+              color,
+              lineStyle.fontSize,
+              lineStyle.fontWeight,
+            )}
           </View>
         );
       })}
@@ -904,7 +1655,15 @@ function renderInlineMarkdown(
     splitMathNotation(part.text).map((segment, segmentIndex) => {
       const key = `${partIndex}-${segmentIndex}-${segment.type}`;
       if (segment.type === "math") {
-        return <MathNotation key={key} latex={segment.latex} color={color} fontSize={fontSize} display={segment.display} />;
+        return (
+          <MathNotation
+            key={key}
+            latex={segment.latex}
+            color={color}
+            fontSize={fontSize}
+            display={segment.display}
+          />
+        );
       }
       return (
         <Text
@@ -941,7 +1700,12 @@ function FileChip({ name }: { name: string }) {
       }}
     >
       <MaterialIcons name="attach-file" size={13} color={colors.mint} />
-      <Text numberOfLines={1} style={{ color: colors.mint, fontSize: 11.5, fontWeight: "600" }}>{name}</Text>
+      <Text
+        numberOfLines={1}
+        style={{ color: colors.mint, fontSize: 11.5, fontWeight: "600" }}
+      >
+        {name}
+      </Text>
     </View>
   );
 }
@@ -973,9 +1737,23 @@ function ComposerControl({
         opacity: pressed ? 0.5 : 1,
       })}
     >
-      <MaterialIcons name={icon} size={icon === "add" ? 21 : 19} color={active ? colors.accent : colors.textFaint} />
+      <MaterialIcons
+        name={icon}
+        size={icon === "add" ? 21 : 19}
+        color={active ? colors.accent : colors.textFaint}
+      />
       {active ? (
-        <View style={{ position: "absolute", right: 4, top: 4, width: 6, height: 6, borderRadius: 3, backgroundColor: colors.mint }} />
+        <View
+          style={{
+            position: "absolute",
+            right: 4,
+            top: 4,
+            width: 6,
+            height: 6,
+            borderRadius: 3,
+            backgroundColor: colors.mint,
+          }}
+        />
       ) : null}
     </Pressable>
   );
@@ -990,7 +1768,9 @@ function formatRecordingTime(durationMillis: number) {
 
 async function audioToBase64(uri: string): Promise<string> {
   if (Platform.OS !== "web") {
-    return FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+    return FileSystem.readAsStringAsync(uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
   }
   const response = await fetch(uri);
   if (!response.ok) throw new Error("Rook could not read the recorded audio.");
@@ -998,7 +1778,9 @@ async function audioToBase64(uri: string): Promise<string> {
   let binary = "";
   const chunkSize = 0x8000;
   for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+    binary += String.fromCharCode(
+      ...bytes.subarray(offset, offset + chunkSize),
+    );
   }
   return btoa(binary);
 }

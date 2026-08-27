@@ -1,15 +1,34 @@
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import { type ComponentProps, type ReactNode, useMemo } from "react";
-import { Modal, Pressable, StyleSheet, Text, TextInput, type DimensionValue, type TextInputProps, type ViewStyle, View } from "react-native";
+import {
+  Modal,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  type DimensionValue,
+  type TextInputProps,
+  type ViewStyle,
+  View,
+} from "react-native";
 
 import { getBotShape } from "@/components/bot-glyph";
 import { BotIdentityMark, getBotOrbMaterial } from "@/components/bot-orb";
-import { shade, tint, useRookTheme, type RookTokens, type ToneName } from "@/lib/ui";
+import {
+  shade,
+  tint,
+  useRookTheme,
+  type RookTokens,
+  type ToneName,
+} from "@/lib/ui";
 
 export { useRookTheme } from "@/lib/ui";
 export type { RookTokens, ToneName } from "@/lib/ui";
 
 type IconName = ComponentProps<typeof MaterialIcons>["name"];
+const materialGlyphMap =
+  (MaterialIcons as unknown as { glyphMap?: Record<string, unknown> })
+    .glyphMap ?? {};
 
 /** Map a semantic tone to concrete colors for the active scheme. */
 export function toneColors(tokens: RookTokens, tone: ToneName) {
@@ -42,6 +61,7 @@ export function Avatar({
   const shape = getBotShape(icon);
   const orbMaterial = getBotOrbMaterial(icon);
   const customIdentity = Boolean(shape || orbMaterial);
+  const supportedMaterialIcon = Boolean(icon && materialGlyphMap[icon]);
   const glyph = dark ? shade(color, -0.28) : color;
   const style = useMemo(
     () => ({
@@ -57,15 +77,35 @@ export function Avatar({
 
   return (
     <View
-      style={customIdentity ? { width: size, height: size, alignItems: "center", justifyContent: "center" } : style}
+      style={
+        customIdentity
+          ? {
+              width: size,
+              height: size,
+              alignItems: "center",
+              justifyContent: "center",
+            }
+          : style
+      }
       accessibilityElementsHidden
     >
       {customIdentity ? (
         <BotIdentityMark icon={icon} color={color} size={size} />
-      ) : icon ? (
-        <MaterialIcons name={icon as IconName} size={Math.max(14, Math.round(size * 0.46))} color={glyph} />
+      ) : supportedMaterialIcon ? (
+        <MaterialIcons
+          name={icon as IconName}
+          size={Math.max(14, Math.round(size * 0.46))}
+          color={glyph}
+        />
       ) : (
-        <Text style={{ color: glyph, fontSize: Math.max(11, Math.round(size * 0.38)), fontWeight: "700", letterSpacing: -0.2 }}>
+        <Text
+          style={{
+            color: glyph,
+            fontSize: Math.max(11, Math.round(size * 0.38)),
+            fontWeight: "700",
+            letterSpacing: -0.2,
+          }}
+        >
           {label.slice(0, 1).toUpperCase()}
         </Text>
       )}
@@ -73,7 +113,13 @@ export function Avatar({
   );
 }
 
-export function StatusPill({ label, tone = "mint" }: { label: string; tone?: ToneName }) {
+export function StatusPill({
+  label,
+  tone = "mint",
+}: {
+  label: string;
+  tone?: ToneName;
+}) {
   const { colors } = useRookTheme();
   const toneColor = toneColors(colors, tone);
   return (
@@ -89,8 +135,23 @@ export function StatusPill({ label, tone = "mint" }: { label: string; tone?: Ton
         alignSelf: "flex-start",
       }}
     >
-      <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: toneColor.fg }} />
-      <Text style={{ color: toneColor.fg, fontSize: 11.5, fontWeight: "600", letterSpacing: 0.05 }} numberOfLines={1}>
+      <View
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: 3,
+          backgroundColor: toneColor.fg,
+        }}
+      />
+      <Text
+        style={{
+          color: toneColor.fg,
+          fontSize: 11.5,
+          fontWeight: "600",
+          letterSpacing: 0.05,
+        }}
+        numberOfLines={1}
+      >
         {label}
       </Text>
     </View>
@@ -101,7 +162,10 @@ export function StatusPill({ label, tone = "mint" }: { label: string; tone?: Ton
 /* Buttons                                                             */
 /* ------------------------------------------------------------------ */
 
-const pressedFn = (pressed: boolean) => (pressed ? { opacity: 0.72, transform: [{ scale: 0.985 }] as const } : undefined);
+const pressedFn = (pressed: boolean) =>
+  pressed
+    ? { opacity: 0.72, transform: [{ scale: 0.985 }] as const }
+    : undefined;
 
 export function PrimaryButton({
   label,
@@ -142,7 +206,16 @@ export function PrimaryButton({
       ]}
     >
       {icon ? <MaterialIcons name={icon} size={18} color={foreground} /> : null}
-      <Text style={{ color: foreground, fontSize: 15, fontWeight: "600", letterSpacing: -0.1 }}>{label}</Text>
+      <Text
+        style={{
+          color: foreground,
+          fontSize: 15,
+          fontWeight: "600",
+          letterSpacing: -0.1,
+        }}
+      >
+        {label}
+      </Text>
     </Pressable>
   );
 }
@@ -174,7 +247,9 @@ export function SecondaryButton({
           gap: 8,
           borderRadius: 16,
           borderWidth: 1,
-          borderColor: destructive ? tint(colors.coral, 0.35) : colors.lineStrong,
+          borderColor: destructive
+            ? tint(colors.coral, 0.35)
+            : colors.lineStrong,
           backgroundColor: colors.surface,
           paddingHorizontal: 20,
           paddingVertical: 13,
@@ -183,7 +258,9 @@ export function SecondaryButton({
       ]}
     >
       {icon ? <MaterialIcons name={icon} size={18} color={foreground} /> : null}
-      <Text style={{ color: foreground, fontSize: 15, fontWeight: "600" }}>{label}</Text>
+      <Text style={{ color: foreground, fontSize: 15, fontWeight: "600" }}>
+        {label}
+      </Text>
     </Pressable>
   );
 }
@@ -200,7 +277,12 @@ export function IconButton({
   tone?: "default" | "accent" | "danger";
 }) {
   const { colors } = useRookTheme();
-  const color = tone === "accent" ? colors.accent : tone === "danger" ? colors.coral : colors.textSoft;
+  const color =
+    tone === "accent"
+      ? colors.accent
+      : tone === "danger"
+        ? colors.coral
+        : colors.textSoft;
   return (
     <Pressable
       accessibilityRole="button"
@@ -236,13 +318,21 @@ export function TextAction({
   tone?: "default" | "accent" | "danger";
 }) {
   const { colors } = useRookTheme();
-  const color = tone === "accent" ? colors.accent : tone === "danger" ? colors.coral : colors.textSoft;
+  const color =
+    tone === "accent"
+      ? colors.accent
+      : tone === "danger"
+        ? colors.coral
+        : colors.textSoft;
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
       onPress={onPress}
-      style={({ pressed }) => [{ paddingVertical: 8, paddingHorizontal: 10, borderRadius: 12 }, pressedFn(pressed)]}
+      style={({ pressed }) => [
+        { paddingVertical: 8, paddingHorizontal: 10, borderRadius: 12 },
+        pressedFn(pressed),
+      ]}
     >
       <Text style={{ color, fontSize: 13.5, fontWeight: "600" }}>{label}</Text>
     </Pressable>
@@ -254,14 +344,49 @@ export function TextAction({
 /* ------------------------------------------------------------------ */
 
 /** Large screen header shared by every tab: title, optional lead, action. */
-export function ScreenHeader({ title, lead, action }: { title: string; lead?: string; action?: ReactNode }) {
+export function ScreenHeader({
+  title,
+  lead,
+  action,
+}: {
+  title: string;
+  lead?: string;
+  action?: ReactNode;
+}) {
   const { colors } = useRookTheme();
   return (
-    <View style={{ flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 14 }}>
+    <View
+      style={{
+        flexDirection: "row",
+        alignItems: "flex-start",
+        justifyContent: "space-between",
+        gap: 14,
+      }}
+    >
       <View style={{ flex: 1 }}>
-        <Text style={{ color: colors.text, fontSize: 27, lineHeight: 33, fontWeight: "700", letterSpacing: -0.7 }}>{title}</Text>
+        <Text
+          style={{
+            color: colors.text,
+            fontSize: 27,
+            lineHeight: 33,
+            fontWeight: "700",
+            letterSpacing: -0.7,
+          }}
+        >
+          {title}
+        </Text>
         {lead ? (
-          <Text style={{ color: colors.textSoft, fontSize: 13.5, lineHeight: 19, marginTop: 4, maxWidth: 330 }}>{lead}</Text>
+          <Text
+            style={{
+              color: colors.textSoft,
+              fontSize: 13.5,
+              lineHeight: 19,
+              marginTop: 4,
+              maxWidth: 330,
+            }}
+          >
+            {lead}
+          </Text>
         ) : null}
       </View>
       {action}
@@ -269,20 +394,62 @@ export function ScreenHeader({ title, lead, action }: { title: string; lead?: st
   );
 }
 
-export function SectionHeader({ title, caption, action }: { title: string; caption?: string; action?: ReactNode }) {
+export function SectionHeader({
+  title,
+  caption,
+  action,
+}: {
+  title: string;
+  caption?: string;
+  action?: ReactNode;
+}) {
   const { colors } = useRookTheme();
   return (
-    <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+    <View
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 12,
+      }}
+    >
       <View style={{ flex: 1 }}>
-        <Text style={{ color: colors.text, fontSize: 17, lineHeight: 23, fontWeight: "600", letterSpacing: -0.3 }}>{title}</Text>
-        {caption ? <Text style={{ color: colors.textFaint, fontSize: 12.5, lineHeight: 17, marginTop: 2 }}>{caption}</Text> : null}
+        <Text
+          style={{
+            color: colors.text,
+            fontSize: 17,
+            lineHeight: 23,
+            fontWeight: "600",
+            letterSpacing: -0.3,
+          }}
+        >
+          {title}
+        </Text>
+        {caption ? (
+          <Text
+            style={{
+              color: colors.textFaint,
+              fontSize: 12.5,
+              lineHeight: 17,
+              marginTop: 2,
+            }}
+          >
+            {caption}
+          </Text>
+        ) : null}
       </View>
       {action}
     </View>
   );
 }
 
-export function Card({ children, style }: { children: ReactNode; style?: object }) {
+export function Card({
+  children,
+  style,
+}: {
+  children: ReactNode;
+  style?: object;
+}) {
   const { colors } = useRookTheme();
   return (
     <View
@@ -303,10 +470,27 @@ export function Card({ children, style }: { children: ReactNode; style?: object 
   );
 }
 
-export function EmptyState({ icon, title, detail, action }: { icon: IconName; title: string; detail: string; action?: ReactNode }) {
+export function EmptyState({
+  icon,
+  title,
+  detail,
+  action,
+}: {
+  icon: IconName;
+  title: string;
+  detail: string;
+  action?: ReactNode;
+}) {
   const { colors } = useRookTheme();
   return (
-    <View style={{ alignItems: "center", paddingVertical: 34, paddingHorizontal: 26, gap: 8 }}>
+    <View
+      style={{
+        alignItems: "center",
+        paddingVertical: 34,
+        paddingHorizontal: 26,
+        gap: 8,
+      }}
+    >
       <View
         style={{
           width: 50,
@@ -320,8 +504,28 @@ export function EmptyState({ icon, title, detail, action }: { icon: IconName; ti
       >
         <MaterialIcons name={icon} size={23} color={colors.textFaint} />
       </View>
-      <Text style={{ color: colors.text, fontSize: 15.5, fontWeight: "600", textAlign: "center", letterSpacing: -0.2 }}>{title}</Text>
-      <Text style={{ color: colors.textSoft, fontSize: 13, lineHeight: 19, textAlign: "center", maxWidth: 290 }}>{detail}</Text>
+      <Text
+        style={{
+          color: colors.text,
+          fontSize: 15.5,
+          fontWeight: "600",
+          textAlign: "center",
+          letterSpacing: -0.2,
+        }}
+      >
+        {title}
+      </Text>
+      <Text
+        style={{
+          color: colors.textSoft,
+          fontSize: 13,
+          lineHeight: 19,
+          textAlign: "center",
+          maxWidth: 290,
+        }}
+      >
+        {detail}
+      </Text>
       {action ? <View style={{ marginTop: 10 }}>{action}</View> : null}
     </View>
   );
@@ -329,7 +533,11 @@ export function EmptyState({ icon, title, detail, action }: { icon: IconName; ti
 
 export function Divider() {
   const { colors } = useRookTheme();
-  return <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: colors.line }} />;
+  return (
+    <View
+      style={{ height: StyleSheet.hairlineWidth, backgroundColor: colors.line }}
+    />
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -342,11 +550,25 @@ export function Field({
   multiline,
   style,
   ...props
-}: TextInputProps & { label: string; hint?: string; multiline?: boolean; style?: object }) {
+}: TextInputProps & {
+  label: string;
+  hint?: string;
+  multiline?: boolean;
+  style?: object;
+}) {
   const { colors } = useRookTheme();
   return (
     <View style={{ gap: 7 }}>
-      <Text style={{ color: colors.textSoft, fontSize: 12.5, fontWeight: "600", letterSpacing: 0.1 }}>{label}</Text>
+      <Text
+        style={{
+          color: colors.textSoft,
+          fontSize: 12.5,
+          fontWeight: "600",
+          letterSpacing: 0.1,
+        }}
+      >
+        {label}
+      </Text>
       <TextInput
         placeholderTextColor={colors.placeholder}
         multiline={multiline}
@@ -366,13 +588,25 @@ export function Field({
           style,
         ]}
       />
-      {hint ? <Text style={{ color: colors.textFaint, fontSize: 12, lineHeight: 17 }}>{hint}</Text> : null}
+      {hint ? (
+        <Text style={{ color: colors.textFaint, fontSize: 12, lineHeight: 17 }}>
+          {hint}
+        </Text>
+      ) : null}
     </View>
   );
 }
 
 /** An iOS-style switch built from primitives so it matches on every platform. */
-export function Switch({ checked, onToggle, accessibilityLabel }: { checked: boolean; onToggle: () => void; accessibilityLabel: string }) {
+export function Switch({
+  checked,
+  onToggle,
+  accessibilityLabel,
+}: {
+  checked: boolean;
+  onToggle: () => void;
+  accessibilityLabel: string;
+}) {
   const { colors } = useRookTheme();
   return (
     <Pressable
@@ -491,11 +725,25 @@ export function Sheet({
 }) {
   const { colors } = useRookTheme();
   return (
-    <Modal transparent visible={visible} animationType="slide" onRequestClose={onClose} statusBarTranslucent>
-      <Pressable style={{ flex: 1, justifyContent: "flex-end", backgroundColor: colors.scrim }} onPress={onClose}>
+    <Modal
+      transparent
+      visible={visible}
+      animationType="slide"
+      onRequestClose={onClose}
+      statusBarTranslucent
+    >
+      <Pressable
+        style={{
+          flex: 1,
+          justifyContent: "flex-end",
+          backgroundColor: colors.scrim,
+        }}
+        onPress={onClose}
+      >
         <Pressable
           onPress={(event) => event.stopPropagation()}
-          style={[{
+          style={[
+            {
               backgroundColor: colors.surface,
               borderTopLeftRadius: 26,
               borderTopRightRadius: 26,
@@ -507,7 +755,9 @@ export function Sheet({
               shadowOpacity: 0.2,
               shadowRadius: 30,
               shadowOffset: { width: 0, height: -8 },
-            }, contentStyle]}
+            },
+            contentStyle,
+          ]}
         >
           <View
             accessibilityLabel="Dismiss"
@@ -531,7 +781,16 @@ export function Sheet({
 export function SheetEyebrow({ children }: { children: ReactNode }) {
   const { colors } = useRookTheme();
   return (
-    <Text style={{ color: colors.accent, fontSize: 11.5, fontWeight: "700", letterSpacing: 1, marginBottom: 5, textTransform: "uppercase" }}>
+    <Text
+      style={{
+        color: colors.accent,
+        fontSize: 11.5,
+        fontWeight: "700",
+        letterSpacing: 1,
+        marginBottom: 5,
+        textTransform: "uppercase",
+      }}
+    >
       {children}
     </Text>
   );

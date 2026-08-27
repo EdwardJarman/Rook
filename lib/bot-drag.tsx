@@ -38,14 +38,23 @@ type BotDragContextValue = {
   chatBotIds: string[];
   /** The Bot the composer talks to. */
   activeChatBotId: string;
+  /** Stable identifier for the active conversation transcript. */
+  activeChatId: string;
   ready: boolean;
   addBotToChat: (id: string) => void;
+  /** Starts a clean conversation without deleting Bots or past conversations. */
+  startNewChat: () => void;
   removeBotFromChat: (id: string) => void;
   focusChatBot: (id: string) => void;
 };
 
-const STORAGE_KEY_PREFIX = "rook-chat-participants-v1";
-const BotDragContext = createContext<BotDragContextValue | undefined>(undefined);
+const STORAGE_KEY_PREFIX = "rook-chat-participants-v2";
+const LEGACY_CHAT_ID = "chat-legacy";
+const makeChatId = () =>
+  `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const BotDragContext = createContext<BotDragContextValue | undefined>(
+  undefined,
+);
 
 export function BotDragProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
@@ -53,9 +62,13 @@ export function BotDragProvider({ children }: { children: ReactNode }) {
   const [dropActive, setDropActive] = useState(false);
   const [chatBotIds, setChatBotIds] = useState<string[]>([]);
   const [activeChatBotId, setActiveChatBotId] = useState("");
+  const [activeChatId, setActiveChatId] = useState(LEGACY_CHAT_ID);
   const [ready, setReady] = useState(false);
 
-  const storageKey = useMemo(() => `${STORAGE_KEY_PREFIX}-${user?.id ?? "signed-out"}`, [user?.id]);
+  const storageKey = useMemo(
+    () => `${STORAGE_KEY_PREFIX}-${user?.id ?? "signed-out"}`,
+    [user?.id],
+  );
 
   /* Restore the room for this account. A damaged cache must never block chat. */
   useEffect(() => {
@@ -63,19 +76,33 @@ export function BotDragProvider({ children }: { children: ReactNode }) {
     setReady(false);
     setChatBotIds([]);
     setActiveChatBotId("");
+    setActiveChatId(LEGACY_CHAT_ID);
     void (async () => {
       try {
         const raw = await AsyncStorage.getItem(storageKey);
         if (cancelled || !raw) return;
-        const parsed = JSON.parse(raw) as { chatBotIds?: unknown; activeChatBotId?: unknown };
+        const parsed = JSON.parse(raw) as {
+          chatBotIds?: unknown;
+          activeChatBotId?: unknown;
+          activeChatId?: unknown;
+        };
         const ids = Array.isArray(parsed.chatBotIds)
-          ? parsed.chatBotIds.filter((id): id is string => typeof id === "string")
+          ? parsed.chatBotIds.filter(
+              (id): id is string => typeof id === "string",
+            )
           : [];
         setChatBotIds(ids);
         setActiveChatBotId(
-          typeof parsed.activeChatBotId === "string" && ids.includes(parsed.activeChatBotId)
+          typeof parsed.activeChatBotId === "string" &&
+            ids.includes(parsed.activeChatBotId)
             ? parsed.activeChatBotId
             : (ids[0] ?? ""),
+        );
+        setActiveChatId(
+          typeof parsed.activeChatId === "string" &&
+            parsed.activeChatId.startsWith("chat-")
+            ? parsed.activeChatId
+            : LEGACY_CHAT_ID,
         );
       } catch {
         /* Ignore an unreadable cache and start with an empty room. */
@@ -90,8 +117,11 @@ export function BotDragProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!ready) return;
-    void AsyncStorage.setItem(storageKey, JSON.stringify({ chatBotIds, activeChatBotId }));
-  }, [activeChatBotId, chatBotIds, ready, storageKey]);
+    void AsyncStorage.setItem(
+      storageKey,
+      JSON.stringify({ chatBotIds, activeChatBotId, activeChatId }),
+    );
+  }, [activeChatBotId, activeChatId, chatBotIds, ready, storageKey]);
 
   const beginDrag = useCallback((bot: Bot) => setDraggingBot(bot), []);
   const endDrag = useCallback(() => {
@@ -101,19 +131,28 @@ export function BotDragProvider({ children }: { children: ReactNode }) {
 
   const addBotToChat = useCallback((id: string) => {
     if (!id) return;
-    setChatBotIds((current) => (current.includes(id) ? current : [...current, id]));
+    setChatBotIds((current) =>
+      current.includes(id) ? current : [...current, id],
+    );
     setActiveChatBotId(id);
   }, []);
 
   const removeBotFromChat = useCallback((id: string) => {
     setChatBotIds((current) => {
       const next = current.filter((botId) => botId !== id);
-      setActiveChatBotId((active) => (active === id ? (next[next.length - 1] ?? "") : active));
+      setActiveChatBotId((active) =>
+        active === id ? (next[next.length - 1] ?? "") : active,
+      );
       return next;
     });
   }, []);
 
   const focusChatBot = useCallback((id: string) => setActiveChatBotId(id), []);
+  const startNewChat = useCallback(() => {
+    setChatBotIds([]);
+    setActiveChatBotId("");
+    setActiveChatId(makeChatId());
+  }, []);
 
   const value = useMemo<BotDragContextValue>(
     () => ({
@@ -124,13 +163,16 @@ export function BotDragProvider({ children }: { children: ReactNode }) {
       endDrag,
       chatBotIds,
       activeChatBotId,
+      activeChatId,
       ready,
       addBotToChat,
+      startNewChat,
       removeBotFromChat,
       focusChatBot,
     }),
     [
       activeChatBotId,
+      activeChatId,
       addBotToChat,
       beginDrag,
       chatBotIds,
@@ -140,15 +182,19 @@ export function BotDragProvider({ children }: { children: ReactNode }) {
       focusChatBot,
       ready,
       removeBotFromChat,
+      startNewChat,
     ],
   );
 
-  return <BotDragContext.Provider value={value}>{children}</BotDragContext.Provider>;
+  return (
+    <BotDragContext.Provider value={value}>{children}</BotDragContext.Provider>
+  );
 }
 
 export function useBotDrag() {
   const context = useContext(BotDragContext);
-  if (!context) throw new Error("useBotDrag must be used within BotDragProvider");
+  if (!context)
+    throw new Error("useBotDrag must be used within BotDragProvider");
   return context;
 }
 
@@ -173,7 +219,10 @@ type WebDragEvent = {
 };
 
 /** Props that make a sidebar row the drag source for a Bot. */
-export function botDragSourceProps(bot: Bot, handlers: { onStart: () => void; onEnd: () => void }) {
+export function botDragSourceProps(
+  bot: Bot,
+  handlers: { onStart: () => void; onEnd: () => void },
+) {
   if (Platform.OS !== "web") return {};
   return {
     draggable: true,
