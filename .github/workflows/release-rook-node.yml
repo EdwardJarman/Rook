@@ -233,19 +233,23 @@ jobs:
           ) | Where-Object { Test-Path $_ }
           if (-not $candidates) { Write-Host "::error::install directory not found"; exit 1 }
           $dir = $candidates[0]
-          echo "dir=$dir" >> $env:GITHUB_OUTPUT
-          foreach ($f in @("Rook Node.exe", "rook-node-sidecar.exe")) {
-            if (-not (Test-Path (Join-Path $dir $f))) { Write-Host "::error::missing $f in $dir"; exit 1 }
-          }
+          $appExe = @("rook-node.exe", "Rook Node.exe") |
+            ForEach-Object { Join-Path $dir $_ } |
+            Where-Object { Test-Path $_ } |
+            Select-Object -First 1
+          if (-not $appExe) { Write-Host "::error::missing main Rook Node executable in $dir"; exit 1 }
+          $sidecar = Get-ChildItem $dir -Filter "rook-node-sidecar*.exe" | Select-Object -First 1
+          if (-not $sidecar) { Write-Host "::error::missing Rook Node sidecar executable in $dir"; exit 1 }
           $chromium = Get-ChildItem (Join-Path $dir "resources\chromium") -Directory -ErrorAction SilentlyContinue
           if (-not $chromium) { Write-Host "::error::no chromium resources installed"; exit 1 }
+          echo "dir=$dir" >> $env:GITHUB_OUTPUT
+          echo "app=$appExe" >> $env:GITHUB_OUTPUT
           Write-Host "layout ok: $dir"
 
       - name: Launch app and verify gateway
         shell: pwsh
         run: |
-          $dir = "${{ steps.layout.outputs.dir }}"
-          Start-Process -FilePath (Join-Path $dir "Rook Node.exe")
+          Start-Process -FilePath "${{ steps.layout.outputs.app }}"
           $healthy = $false
           foreach ($i in 1..40) {
             Start-Sleep -Seconds 3
