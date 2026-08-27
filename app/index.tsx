@@ -451,7 +451,7 @@ function EditorialDetail({
 }
 
 function EarthGlobe() {
-  const hostRef = useRef<View | null>(null);
+  const hostRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (
@@ -462,7 +462,7 @@ function EarthGlobe() {
       return;
     }
 
-    const host = hostRef.current as unknown as HTMLElement;
+    const host = hostRef.current;
     let disposed = false;
     let cleanupScene: (() => void) | undefined;
 
@@ -660,7 +660,8 @@ function EarthGlobe() {
           renderer.dispose();
           host.replaceChildren();
         };
-      } catch {
+      } catch (error) {
+        console.error("Rook Earth globe could not initialize.", error);
         host.replaceChildren();
       }
     };
@@ -672,5 +673,9 @@ function EarthGlobe() {
     };
   }, []);
 
-  return <View ref={hostRef} style={{ flex: 1 }} />;
+  if (Platform.OS !== "web") {
+    return <View style={{ flex: 1 }} />;
+  }
+
+  return <div ref={hostRef} style={{ width: "100%", height: "100%" }} />;
 }
