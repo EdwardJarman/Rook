@@ -1,99 +1,122 @@
-const INK = "#191C22";
-const MUTED = "#565E6B";
+const INK = "#090909";
+const PAPER = "#F1F0EB";
+const MUTED = "#AAA8A1";
+const LINE = "#3A3934";
 
 /**
- * Shared styling + localization overrides for Clerk's web sign-in and sign-up
- * cards so everything reads as "Rook" on the light auth canvas: ink text on
- * warm paper, green primary actions, and quiet outlined inputs.
+ * Clerk styling for Rook's browser authentication views. The authentication
+ * shell owns the product-level editorial composition; Clerk owns only the
+ * secure form. Keep the form calm, full-width, and legible on narrow screens.
  */
 export const authWebAppearance = {
   variables: {
-    colorPrimary: "#0E7C59",
-    colorPrimaryForeground: "#FFFFFF",
-    colorBackground: "#F7F7F4",
-    colorForeground: INK,
-    colorDanger: "#C03B3B",
-    colorSuccess: "#0E7C59",
-    colorWarning: "#9A6700",
-    colorMuted: "#E5E4DE",
+    colorPrimary: PAPER,
+    colorPrimaryForeground: INK,
+    colorBackground: "#111110",
+    colorForeground: PAPER,
+    colorDanger: "#EF8E8E",
+    colorSuccess: PAPER,
+    colorWarning: "#F1C46A",
+    colorMuted: "#1A1A18",
     colorMutedForeground: MUTED,
-    colorInput: "#FFFFFF",
-    colorInputForeground: INK,
-    colorNeutral: INK,
-    colorTextOnPrimaryBackground: "#FFFFFF",
+    colorInput: "#171716",
+    colorInputForeground: PAPER,
+    colorNeutral: PAPER,
+    colorTextOnPrimaryBackground: INK,
     colorTextSecondary: MUTED,
-    borderRadius: "0.8rem",
+    borderRadius: "0px",
+    fontFamily:
+      "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
   },
   elements: {
     backLink: { color: MUTED },
     headerBackLink: { color: MUTED },
-    footerActionLink: { color: "#0E7C59" },
+    footerActionLink: { color: PAPER, fontWeight: "700" },
     footerPagesLink: { color: MUTED },
-    formFieldAction: { color: "#0E7C59" },
-    formResendCodeLink: { color: "#0E7C59" },
-    identityPreviewEditButton: { color: "#0E7C59" },
-    formButtonPrimary: { color: "#FFFFFF" },
-    // Hide Clerk's "Secured by Clerk" footer badge where it appears.
-    footer: { display: "none" as const },
-    footerAction: { display: "none" as const },
+    formFieldAction: { color: PAPER },
+    formResendCodeLink: { color: PAPER },
+    identityPreviewEditButton: { color: PAPER },
+    formButtonPrimary: {
+      backgroundColor: PAPER,
+      color: INK,
+      borderRadius: "0px",
+      fontWeight: "800",
+      minHeight: "3.25rem",
+    },
+    footer: {
+      backgroundColor: "transparent",
+      borderTop: `1px solid ${LINE}`,
+      marginTop: "1.25rem",
+      paddingTop: "1.25rem",
+    },
     branding: { display: "none" as const },
     clerkCopyrightBox: { display: "none" as const },
     badge: { display: "none" as const },
     poweredByClerk: { display: "none" as const },
     card: {
-      backgroundColor: "transparent",
+      backgroundColor: "#111110",
       boxShadow: "none",
-      border: "none",
+      border: `1px solid ${LINE}`,
+      borderRadius: "0px",
       width: "100%",
     },
     rootBox: {
       width: "100%",
+      maxWidth: "28rem",
     },
     header: {
-      // The shell already renders the Rook brand, title, and detail — hide
-      // Clerk's duplicate header inside the card to avoid doubled headings.
+      // The Rook shell renders the product heading and uses the same editorial
+      // type scale as the landing page, so Clerk's duplicate header is hidden.
       display: "none" as const,
     },
     socialButtons: {
-      gap: "0.6rem",
+      width: "100%",
+      display: "flex",
+      flexDirection: "column",
+      gap: "0.65rem",
     },
     socialButtonsIconButton: {
-      height: "2.75rem",
-      width: "2.75rem",
-      borderRadius: "0.75rem",
-      border: "1px solid #D9D8D1",
-      backgroundColor: "#FFFFFF",
+      width: "100%",
+      minHeight: "3.25rem",
+      borderRadius: "0px",
+      border: `1px solid ${LINE}`,
+      backgroundColor: "#171716",
+      color: PAPER,
     },
     socialButtonsBlockButton: {
-      height: "2.75rem",
-      borderRadius: "0.75rem",
-      border: "1px solid #D9D8D1",
-      backgroundColor: "#FFFFFF",
-      color: INK,
-      fontSize: "0.9rem",
-      fontWeight: "650",
+      width: "100%",
+      minHeight: "3.25rem",
+      justifyContent: "flex-start",
+      paddingInline: "1rem",
+      borderRadius: "0px",
+      border: `1px solid ${LINE}`,
+      backgroundColor: "#171716",
+      color: PAPER,
+      fontSize: "0.94rem",
+      fontWeight: "700",
     },
-    dividerLine: {
-      backgroundColor: "#E5E4DE",
-    },
-    dividerText: {
-      color: MUTED,
-    },
+    dividerLine: { backgroundColor: LINE },
+    dividerText: { color: MUTED },
+    formFieldLabel: { color: PAPER, fontWeight: "700" },
     formFieldInput: {
-      height: "2.75rem",
-      borderRadius: "0.75rem",
-      border: "1px solid #D9D8D1",
+      minHeight: "3.25rem",
+      borderRadius: "0px",
+      border: `1px solid ${LINE}`,
+      backgroundColor: "#171716",
+      color: PAPER,
     },
     formFieldInputFocused: {
-      border: "1px solid #0E7C59",
-      boxShadow: "0 0 0 3px rgba(14, 124, 89, 0.12)",
+      border: `1px solid ${PAPER}`,
+      boxShadow: "0 0 0 2px rgba(241, 240, 235, 0.12)",
     },
-    formButtonReset: {
-      color: MUTED,
-    },
+    formButtonReset: { color: MUTED },
   },
+  // Current Clerk components read `layout`; current Core appearance docs use
+  // `options`. Providing the same supported values in both keeps this Expo
+  // integration stable as Clerk completes its Core 3 appearance migration.
   layout: {
     socialButtonsPlacement: "top" as const,
+    socialButtonsVariant: "blockButton" as const,
     showOptionalFields: false,
     termsPageUrl: undefined,
     privacyPageUrl: undefined,
@@ -101,22 +124,32 @@ export const authWebAppearance = {
     logoImageUrl: undefined,
     logoPlacement: "none" as const,
   },
+  options: {
+    elevation: "flush" as const,
+    socialButtonsPlacement: "top" as const,
+    socialButtonsVariant: "blockButton" as const,
+    showOptionalFields: false,
+    termsPageUrl: undefined,
+    privacyPageUrl: undefined,
+    helpPageUrl: undefined,
+    logoImageUrl: undefined,
+    logoPlacement: "outside" as const,
+  },
 };
 
 /**
- * Localization overrides that replace every "Sign in to Clerk" / "Sign up for
- * Clerk" / "Continue to Clerk" string with Rook, and reword the OAuth buttons
- * to read naturally ("Continue with Google", not "Sign in with Clerk").
+ * Localization overrides replace Clerk naming with Rook language and make the
+ * full-width social controls read naturally.
  */
 export const authWebLocalization = {
   locale: "en-US",
   socialButtonsBlockButton: "Continue with {{provider|titleize}}",
-  socialButtonsBlockButtonManyInView: "{{provider|titleize}}",
-  dividerText: "or",
+  socialButtonsBlockButtonManyInView: "Continue with {{provider|titleize}}",
+  dividerText: "or continue with email",
   signIn: {
     start: {
       title: "Sign in to Rook",
-      subtitle: "Welcome back — your workroom is waiting.",
+      subtitle: "Return to your workroom.",
       actionText: "New to Rook?",
       actionLink: "Create an account",
     },
@@ -218,8 +251,10 @@ export const authWebLocalization = {
       title: "Verify your email",
       subtitle: "to create your Rook account",
       formTitle: "Email link",
-      formSubtitle: "Open the link sent to your email to create your Rook account",
+      formSubtitle:
+        "Open the link sent to your email to create your Rook account",
       resendButton: "Didn't receive a link? Resend",
+      successMessage: "Your Rook account is ready.",
       loading: {
         title: "Creating your account…",
         subtitle: "You'll be in your Rook workroom shortly.",
@@ -233,13 +268,13 @@ export const authWebLocalization = {
       title: "Verify your phone",
       subtitle: "to create your Rook account",
       formTitle: "Verification code",
-      formSubtitle: "Enter the code sent to your phone",
+      formSubtitle: "Enter the verification code sent to your phone",
       resendButton: "Didn't receive a code? Resend",
       successMessage: "Your Rook account is ready.",
     },
     continue: {
       title: "Fill in missing fields",
-      subtitle: "to finish creating your Rook account",
+      subtitle: "to finish creating your account",
       actionText: "",
       actionLink: "",
     },
