@@ -233,7 +233,7 @@ jobs:
           ) | Where-Object { Test-Path $_ }
           if (-not $candidates) { Write-Host "::error::install directory not found"; exit 1 }
           $dir = $candidates[0]
-          $appExe = @("rook-node.exe", "Rook Node.exe") |
+          $appExe = @("rook_node.exe", "rook-node.exe", "Rook Node.exe") |
             ForEach-Object { Join-Path $dir $_ } |
             Where-Object { Test-Path $_ } |
             Select-Object -First 1
