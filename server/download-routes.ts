@@ -92,12 +92,10 @@ export function registerNodeDownloadRoutes(
       .type("text/plain")
       .send(buildPowerShellCliInstaller(PUBLIC_ROOK_ORIGIN));
   };
-  // API paths always reach the serverless handler. The top-level aliases are
-  // retained for a clean terminal command and are explicitly routed in vercel.json.
-  app.get("/api/install.sh", servePosixInstaller);
-  app.get("/api/install.ps1", servePowerShellInstaller);
-  app.get("/install.sh", servePosixInstaller);
-  app.get("/install.ps1", servePowerShellInstaller);
+  // These nested API paths are routed to the serverless handler before the
+  // static Expo fallback, so shell users always receive a real installer.
+  app.get("/api/download/cli/install.sh", servePosixInstaller);
+  app.get("/api/download/cli/install.ps1", servePowerShellInstaller);
 
   app.get("/api/download/android", (req, res) => {
     void serveAndroidDownload(req, res);

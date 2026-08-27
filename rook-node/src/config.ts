@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { WORKSPACE_LAYOUT } from "./types.js";
 
 /** Version-pinned runtime constants. */
-export const ROOK_NODE_VERSION = "0.1.19";
+export const ROOK_NODE_VERSION = "0.1.20";
 export const PINNED_PLAYWRIGHT = "1.62.1";
 
 /** The dedicated Rook Chromium profile lives inside the node's data home,

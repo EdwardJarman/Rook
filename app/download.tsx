@@ -7,9 +7,9 @@ import { RookLogo } from "@/components/rook-logo";
 import { useRookTheme } from "@/lib/ui";
 
 const POSIX_INSTALL_COMMAND =
-  "curl -fsSL https://www.rook.lighting/install.sh | sh";
+  "curl -fsSL https://www.rook.lighting/api/download/cli/install.sh | sh";
 const POWERSHELL_INSTALL_COMMAND =
-  "irm https://www.rook.lighting/install.ps1 | iex";
+  "irm https://www.rook.lighting/api/download/cli/install.ps1 | iex";
 
 type DownloadTarget = "android" | "windows" | "macArm64" | "macIntel" | "linux";
 type InstallShell = "posix" | "powershell";
