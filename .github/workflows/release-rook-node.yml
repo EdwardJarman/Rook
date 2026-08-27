@@ -29,6 +29,8 @@ jobs:
             sidecar-ext: .exe
             browsers-path: "$LOCALAPPDATA/ms-playwright"
             asset-name: Rook-Node-Setup.exe
+            cli-asset-name: Rook-CLI-windows-x64.zip
+            cli-executable-name: rook.exe
           - label: macOS arm64
             os: macos-14
             pkg-target: node24-macos-arm64
@@ -36,6 +38,8 @@ jobs:
             sidecar-ext: ""
             browsers-path: "$HOME/Library/Caches/ms-playwright"
             asset-name: Rook-Node-arm64.dmg
+            cli-asset-name: Rook-CLI-macos-arm64.tar.gz
+            cli-executable-name: rook
           - label: macOS x64
             os: macos-15-intel
             pkg-target: node24-macos-x64
@@ -43,6 +47,8 @@ jobs:
             sidecar-ext: ""
             browsers-path: "$HOME/Library/Caches/ms-playwright"
             asset-name: Rook-Node-intel.dmg
+            cli-asset-name: Rook-CLI-macos-x64.tar.gz
+            cli-executable-name: rook
           - label: Linux x64
             os: ubuntu-22.04
             pkg-target: node24-linux-x64
@@ -50,6 +56,8 @@ jobs:
             sidecar-ext: ""
             browsers-path: "$HOME/.cache/ms-playwright"
             asset-name: Rook-Node-x86_64.AppImage
+            cli-asset-name: Rook-CLI-linux-x64.tar.gz
+            cli-executable-name: rook
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -172,6 +180,33 @@ jobs:
           fi
           ls -la release-assets
 
+      - name: Stage standalone Rook CLI archive
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          set -eu
+          CLI_STAGE="cli-stage"
+          mkdir -p "$CLI_STAGE"
+          cp "src-tauri/binaries/rook-node-sidecar-${{ matrix.rust-target }}${{ matrix.sidecar-ext }}" "$CLI_STAGE/${{ matrix.cli-executable-name }}"
+          cp -R src-tauri/resources/chromium "$CLI_STAGE/chromium"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            powershell -NoProfile -Command "Compress-Archive -Path '$CLI_STAGE\\*' -DestinationPath 'release-assets\\${{ matrix.cli-asset-name }}' -Force"
+          else
+            tar -C "$CLI_STAGE" -czf "release-assets/${{ matrix.cli-asset-name }}" "${{ matrix.cli-executable-name }}" chromium
+          fi
+          ls -lh "release-assets/${{ matrix.cli-asset-name }}"
+
+      - name: Verify staged Rook CLI
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            powershell -NoProfile -Command "& '.\\cli-stage\\${{ matrix.cli-executable-name }}' --version"
+          else
+            chmod 755 "cli-stage/${{ matrix.cli-executable-name }}"
+            "cli-stage/${{ matrix.cli-executable-name }}" --version
+          fi
+
       - name: Publish release with stable asset names
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
@@ -190,7 +225,9 @@ jobs:
             **macOS (Intel)**: `Rook-Node-intel.dmg`. Same `xattr` step applies.
             **Linux**: `Rook-Node-x86_64.AppImage`; `chmod +x` and run.
 
-            After opening the app, press **Connect account** and sign in — that pairs this computer with your Rook account.
+            **CLI**: macOS/Linux — `curl -fsSL https://www.rook.lighting/install.sh | sh`; Windows PowerShell — `irm https://www.rook.lighting/install.ps1 | iex`. The CLI archive includes the pinned Chromium runtime and installs for the current user only.
+
+            After opening the app, or running `rook`, press **Connect account** and sign in — that pairs this computer with your Rook account.
 
   install-test:
     # Sandbox end-to-end install test: silently install the built NSIS

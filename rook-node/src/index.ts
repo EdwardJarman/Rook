@@ -15,14 +15,23 @@
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import { spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 
 import { defaultConfig, type RookConfig } from "./config.js";
 import { ROOK_NODE_VERSION } from "./config.js";
 import { RookNode } from "./core/node.js";
 import { Gateway } from "./gateway/server.js";
-import { installAutostart, uninstallAutostart } from "./supervisor/autostart.js";
+import {
+  installAutostart,
+  uninstallAutostart,
+} from "./supervisor/autostart.js";
 import { assertProfileIsDedicated } from "./runtime/chromium.js";
-import { pairWithServer, UplinkClient, type CloudIdentity } from "./uplink/uplink.js";
+import {
+  pairWithServer,
+  UplinkClient,
+  type CloudIdentity,
+} from "./uplink/uplink.js";
 
 function parseArgs(argv: string[]): {
   config: RookConfig;
@@ -45,7 +54,9 @@ function parseArgs(argv: string[]): {
   const config = defaultConfig({
     ...(Number.isFinite(port) && port > 0 ? { gatewayPort: port } : {}),
     ...(secret !== undefined ? { nodeSecret: secret } : {}),
-    ...(serverArg !== -1 && argv[serverArg + 1] ? { serverUrl: argv[serverArg + 1] } : {}),
+    ...(serverArg !== -1 && argv[serverArg + 1]
+      ? { serverUrl: argv[serverArg + 1] }
+      : {}),
     noLaunch: flags.has("--no-launch"),
   });
   return {
@@ -60,11 +71,57 @@ function parseArgs(argv: string[]): {
   };
 }
 
+function prepareBundledChromium(): void {
+  // The desktop Tauri shell supplies this variable itself. The standalone CLI
+  // archive keeps Chromium next to the executable, making `rook` fully
+  // self-contained after the public installer copies that directory.
+  if (process.env.PLAYWRIGHT_BROWSERS_PATH) return;
+  const bundled = path.join(path.dirname(process.execPath), "chromium");
+  if (fs.existsSync(bundled)) process.env.PLAYWRIGHT_BROWSERS_PATH = bundled;
+}
+
+function printHelp(): void {
+  console.log(`Rook CLI ${ROOK_NODE_VERSION}
+
+Usage:
+  rook                       Start Rook Node and open the secure account connection page
+  rook --headless            Start without a visible browser window
+  rook --no-open             Start without opening the local connect page
+  rook --install              Start Rook Node automatically when you sign in
+  rook --uninstall            Remove Rook Node login-start
+  rook --version              Print the installed Rook CLI version
+  rook --help                 Show this help
+
+Rook stores its isolated browser profile and connection state in its own application data folder.`);
+}
+
 async function main(): Promise<void> {
-  const { config, headless, install, uninstall, pairToken, serverUrl, noUplink, noOpen } = parseArgs(process.argv.slice(2));
+  const args = process.argv.slice(2);
+  if (args.includes("--version") || args.includes("-v")) {
+    console.log(ROOK_NODE_VERSION);
+    return;
+  }
+  if (args.includes("--help") || args.includes("-h")) {
+    printHelp();
+    return;
+  }
+
+  prepareBundledChromium();
+  const {
+    config,
+    headless,
+    install,
+    uninstall,
+    pairToken,
+    serverUrl,
+    noUplink,
+    noOpen,
+  } = parseArgs(args);
 
   if (!assertProfileIsDedicated(config)) {
-    console.error("[rook-node] Refusing to run: the Rook profile would collide with an ordinary browser profile.");
+    console.error(
+      "[rook-node] Refusing to run: the Rook profile would collide with an ordinary browser profile.",
+    );
     process.exit(2);
   }
 
@@ -74,7 +131,8 @@ async function main(): Promise<void> {
     deviceKeyId: `rkdev-${randomUUID()}`,
     createdAt: new Date().toISOString(),
   });
-  const secret = config.nodeSecret ?? process.env.ROOK_NODE_SECRET ?? generateSecret();
+  const secret =
+    config.nodeSecret ?? process.env.ROOK_NODE_SECRET ?? generateSecret();
 
   if (install) {
     installAutostart();
@@ -92,7 +150,9 @@ async function main(): Promise<void> {
   let uplink: UplinkClient | undefined;
   const startUplink = (identity: CloudIdentity): void => {
     if (uplink) return;
-    uplink = new UplinkClient(node, identity, (message) => console.log(`[rook-node] ${message}`));
+    uplink = new UplinkClient(node, identity, (message) =>
+      console.log(`[rook-node] ${message}`),
+    );
     uplink.start();
     console.log(`[rook-node] Uplink active → ${identity.serverUrl}`);
   };
@@ -101,7 +161,9 @@ async function main(): Promise<void> {
     // Browser pairing lands here: the node is online the moment the browser
     // redirect completes, no restart needed.
     onPaired: (identity) => {
-      console.log(`[rook-node] Paired with ${identity.serverUrl} as ${identity.nodeId}`);
+      console.log(
+        `[rook-node] Paired with ${identity.serverUrl} as ${identity.nodeId}`,
+      );
       startUplink(identity);
     },
   });
@@ -120,7 +182,9 @@ async function main(): Promise<void> {
           version: ROOK_NODE_VERSION,
         });
         node.db.saveCloudIdentity(identity);
-        console.log(`[rook-node] Paired with ${identity.serverUrl} as ${identity.nodeId}`);
+        console.log(
+          `[rook-node] Paired with ${identity.serverUrl} as ${identity.nodeId}`,
+        );
         startUplink(identity);
       } else if (stored) {
         startUplink(stored);
@@ -132,12 +196,16 @@ async function main(): Promise<void> {
         if (!noOpen) openInBrowser(localUrl);
       }
     } catch (error) {
-      console.error(`[rook-node] Uplink setup failed: ${(error as Error).message}`);
+      console.error(
+        `[rook-node] Uplink setup failed: ${(error as Error).message}`,
+      );
     }
   }
 
   if (secret && !config.noLaunch) {
-    console.log(`[rook-node] node-id=${node.db.getNodeIdentity()?.nodeId} port=${config.gatewayPort}`);
+    console.log(
+      `[rook-node] node-id=${node.db.getNodeIdentity()?.nodeId} port=${config.gatewayPort}`,
+    );
   }
 
   const shutdown = async () => {
@@ -178,7 +246,9 @@ function openInBrowser(url: string): void {
       spawn("xdg-open", [url], { detached: true, stdio: "ignore" }).unref();
     }
   } catch {
-    console.log("[rook-node] Could not open a browser automatically — open the URL above manually.");
+    console.log(
+      "[rook-node] Could not open a browser automatically — open the URL above manually.",
+    );
   }
 }
 

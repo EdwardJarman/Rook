@@ -18,7 +18,10 @@ import type { EdgeInsets, Metrics, Rect } from "react-native-safe-area-context";
 
 import "@/lib/_core/nativewind-pressable";
 import { RookNotificationProvider } from "@/lib/rook-notifications";
-import { initManusRuntime, subscribeSafeAreaInsets } from "@/lib/_core/manus-runtime";
+import {
+  initManusRuntime,
+  subscribeSafeAreaInsets,
+} from "@/lib/_core/manus-runtime";
 import { ThemeProvider } from "@/lib/theme-provider";
 import { createTRPCClient, trpc } from "@/lib/trpc";
 import { BotDragProvider } from "@/lib/bot-drag";
@@ -33,7 +36,9 @@ import { useRookTheme } from "@/lib/ui";
 const publishableKey = process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY ?? "";
 
 if (!publishableKey) {
-  throw new Error("Missing EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY. Configure Clerk before starting Rook.");
+  throw new Error(
+    "Missing EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY. Configure Clerk before starting Rook.",
+  );
 }
 
 const DEFAULT_WEB_INSETS: EdgeInsets = { top: 0, right: 0, bottom: 0, left: 0 };
@@ -48,8 +53,12 @@ const DESKTOP_PAIRING_REQUEST_PATTERN = /^rkd-[a-f0-9]{48}$/i;
 function browserDesktopPairingRequest(): string | null {
   if (Platform.OS !== "web") return null;
   try {
-    const requestId = new URLSearchParams(window.location.search).get("request");
-    return requestId && DESKTOP_PAIRING_REQUEST_PATTERN.test(requestId) ? requestId.toLowerCase() : null;
+    const requestId = new URLSearchParams(window.location.search).get(
+      "request",
+    );
+    return requestId && DESKTOP_PAIRING_REQUEST_PATTERN.test(requestId)
+      ? requestId.toLowerCase()
+      : null;
   } catch {
     return null;
   }
@@ -70,10 +79,12 @@ function SessionNavigator() {
     // segments while it hydrates. The pathname is already authoritative then;
     // using it prevents the default workroom route from replacing a desktop
     // pairing handoff before this screen reads its request id.
-    const route = (segments[0] ?? pathname.split("/").filter(Boolean)[0]) as string | undefined;
+    const route = (segments[0] ?? pathname.split("/").filter(Boolean)[0]) as
+      string | undefined;
     const isAuthRoute = route === "sign-in" || route === "sign-up";
     const isOnboardingRoute = route === "onboarding";
-    // Rook Node pairing pages handle their own sign-in prompt.
+    const isPublicLandingRoute = route === "index" || pathname === "/";
+    // Rook Node pairing pages and public download pages handle their own sign-in prompt.
     const isSelfManagedRoute = route === "connect-node" || route === "download";
     const pairingRequest = browserDesktopPairingRequest();
     if (loading) return;
@@ -82,7 +93,12 @@ function SessionNavigator() {
     // browser URL is the authoritative indication that this tab is pairing a
     // desktop, regardless of transient Expo Router segment state.
     if (pairingRequest) return;
-    if (!isAuthenticated && !isAuthRoute && !isSelfManagedRoute) {
+    if (
+      !isAuthenticated &&
+      !isAuthRoute &&
+      !isSelfManagedRoute &&
+      !isPublicLandingRoute
+    ) {
       router.replace("/sign-in");
       return;
     }
@@ -103,15 +119,44 @@ function SessionNavigator() {
     }
 
     if (!workroomReady) return;
-    if (!onboardingComplete && !isOnboardingRoute) router.replace("/onboarding" as never);
-    if (onboardingComplete && (isAuthRoute || isOnboardingRoute)) router.replace("/(tabs)" as never);
-  }, [isAuthenticated, loading, onboardingComplete, pathname, router, segments, workroomReady]);
+    if (isPublicLandingRoute) {
+      router.replace(onboardingComplete ? "/(tabs)" : ("/onboarding" as never));
+      return;
+    }
+    if (!onboardingComplete && !isOnboardingRoute)
+      router.replace("/onboarding" as never);
+    if (onboardingComplete && (isAuthRoute || isOnboardingRoute))
+      router.replace("/(tabs)" as never);
+  }, [
+    isAuthenticated,
+    loading,
+    onboardingComplete,
+    pathname,
+    router,
+    segments,
+    workroomReady,
+  ]);
 
-  const routeForGate = (segments[0] ?? pathname.split("/").filter(Boolean)[0]) as string | undefined;
-  const isSelfManagedRouteForGate = routeForGate === "connect-node" || routeForGate === "download" || Boolean(browserDesktopPairingRequest());
-  if (loading || (isAuthenticated && !workroomReady && !isSelfManagedRouteForGate)) {
+  const routeForGate = (segments[0] ??
+    pathname.split("/").filter(Boolean)[0]) as string | undefined;
+  const isSelfManagedRouteForGate =
+    routeForGate === "connect-node" ||
+    routeForGate === "download" ||
+    Boolean(browserDesktopPairingRequest());
+  if (
+    loading ||
+    (isAuthenticated && !workroomReady && !isSelfManagedRouteForGate)
+  ) {
     return (
-      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.canvas, gap: 12 }}>
+      <View
+        style={{
+          flex: 1,
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: colors.canvas,
+          gap: 12,
+        }}
+      >
         <ActivityIndicator color={colors.text} />
         <Text style={{ color: colors.textSoft, fontSize: 13 }}>
           {loading ? "Checking your secure session…" : "Opening your workroom…"}
@@ -121,7 +166,8 @@ function SessionNavigator() {
   }
 
   return (
-      <Stack screenOptions={{ headerShown: false }}>
+    <Stack screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="index" />
       <Stack.Screen name="sign-in" />
       <Stack.Screen name="sign-up" />
       <Stack.Screen name="onboarding" />
@@ -140,8 +186,15 @@ function RookApplication() {
   const initialFrame = initialWindowMetrics?.frame ?? DEFAULT_WEB_FRAME;
   const [insets, setInsets] = useState<EdgeInsets>(initialInsets);
   const [frame, setFrame] = useState<Rect>(initialFrame);
-  const [queryClient] = useState(() => new QueryClient({ defaultOptions: { queries: { refetchOnWindowFocus: false, retry: 1 } } }));
-  const [trpcClient] = useState(() => createTRPCClient(() => getTokenRef.current()));
+  const [queryClient] = useState(
+    () =>
+      new QueryClient({
+        defaultOptions: { queries: { refetchOnWindowFocus: false, retry: 1 } },
+      }),
+  );
+  const [trpcClient] = useState(() =>
+    createTRPCClient(() => getTokenRef.current()),
+  );
 
   useEffect(() => {
     initManusRuntime();
@@ -158,10 +211,17 @@ function RookApplication() {
   }, [handleSafeAreaUpdate]);
 
   const providerInitialMetrics = useMemo(() => {
-    const metrics = initialWindowMetrics ?? { insets: initialInsets, frame: initialFrame };
+    const metrics = initialWindowMetrics ?? {
+      insets: initialInsets,
+      frame: initialFrame,
+    };
     return {
       ...metrics,
-      insets: { ...metrics.insets, top: Math.max(metrics.insets.top, 16), bottom: Math.max(metrics.insets.bottom, 12) },
+      insets: {
+        ...metrics.insets,
+        top: Math.max(metrics.insets.top, 16),
+        bottom: Math.max(metrics.insets.bottom, 12),
+      },
     };
   }, [initialFrame, initialInsets]);
 
@@ -188,9 +248,13 @@ function RookApplication() {
       <SafeAreaProvider initialMetrics={providerInitialMetrics}>
         {Platform.OS === "web" ? (
           <SafeAreaFrameContext.Provider value={frame}>
-            <SafeAreaInsetsContext.Provider value={insets}>{content}</SafeAreaInsetsContext.Provider>
+            <SafeAreaInsetsContext.Provider value={insets}>
+              {content}
+            </SafeAreaInsetsContext.Provider>
           </SafeAreaFrameContext.Provider>
-        ) : content}
+        ) : (
+          content
+        )}
       </SafeAreaProvider>
     </ThemeProvider>
   );
@@ -199,12 +263,17 @@ function RookApplication() {
 export default function RootLayout() {
   // Apply Rook-branded localization + appearance to the web Clerk components.
   // On native these props are harmlessly ignored by @clerk/expo.
-  const clerkProps = Platform.OS === "web"
-    ? { appearance: authWebAppearance, localization: authWebLocalization }
-    : undefined;
+  const clerkProps =
+    Platform.OS === "web"
+      ? { appearance: authWebAppearance, localization: authWebLocalization }
+      : undefined;
 
   return (
-    <ClerkProvider publishableKey={publishableKey} tokenCache={tokenCache} {...(clerkProps as object)}>
+    <ClerkProvider
+      publishableKey={publishableKey}
+      tokenCache={tokenCache}
+      {...(clerkProps as object)}
+    >
       <RookApplication />
     </ClerkProvider>
   );

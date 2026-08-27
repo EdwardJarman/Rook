@@ -2589,7 +2589,7 @@ dependencies = [
 
 [[package]]
 name = "rook-node"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "env_logger",
  "log",
