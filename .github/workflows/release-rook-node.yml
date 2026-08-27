@@ -226,25 +226,29 @@ jobs:
         id: layout
         shell: pwsh
         run: |
+          $uninstall = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Rook Node" -ErrorAction SilentlyContinue
+          $registeredDir = if ($uninstall -and $uninstall.InstallLocation) { $uninstall.InstallLocation.Trim('"') } else { $null }
           $candidates = @(
+            $registeredDir,
             "$env:LOCALAPPDATA\Rook Node",
             "$env:LOCALAPPDATA\Programs\Rook Node",
             "$env:ProgramFiles\Rook Node"
-          ) | Where-Object { Test-Path $_ }
-          if (-not $candidates) { Write-Host "::error::install directory not found"; exit 1 }
-          $dir = $candidates[0]
-          $appExe = @("rook_node.exe", "rook-node.exe", "Rook Node.exe") |
-            ForEach-Object { Join-Path $dir $_ } |
-            Where-Object { Test-Path $_ } |
-            Select-Object -First 1
-          if (-not $appExe) { Write-Host "::error::missing main Rook Node executable in $dir"; exit 1 }
-          $sidecar = Get-ChildItem $dir -Filter "rook-node-sidecar*.exe" | Select-Object -First 1
+          ) | Where-Object { $_ -and (Test-Path $_) }
+          $dir = $candidates | Where-Object { Test-Path (Join-Path $_ "uninstall.exe") } | Select-Object -First 1
+          if (-not $dir) { Write-Host "::error::installed Rook Node directory with uninstaller not found"; exit 1 }
+          $registeredExe = if ($uninstall -and $uninstall.DisplayIcon) { $uninstall.DisplayIcon.Trim('"') } else { $null }
+          $appExe = @(
+            $registeredExe,
+            (Get-ChildItem $dir -Recurse -Filter "*.exe" | Where-Object { $_.Name -notmatch '^(uninstall|rook-node-sidecar)' } | Select-Object -First 1).FullName
+          ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+          if (-not $appExe) { Write-Host "::error::missing main Rook Node executable in $dir"; Get-ChildItem $dir -Recurse -File | Select-Object FullName; exit 1 }
+          $sidecar = Get-ChildItem $dir -Recurse -Filter "rook-node-sidecar*.exe" | Select-Object -First 1
           if (-not $sidecar) { Write-Host "::error::missing Rook Node sidecar executable in $dir"; exit 1 }
-          $chromium = Get-ChildItem (Join-Path $dir "resources\chromium") -Directory -ErrorAction SilentlyContinue
+          $chromium = Get-ChildItem $dir -Recurse -Directory -Filter "chromium" | Select-Object -First 1
           if (-not $chromium) { Write-Host "::error::no chromium resources installed"; exit 1 }
           echo "dir=$dir" >> $env:GITHUB_OUTPUT
           echo "app=$appExe" >> $env:GITHUB_OUTPUT
-          Write-Host "layout ok: $dir"
+          Write-Host "layout ok: $dir; app: $appExe"
 
       - name: Launch app and verify gateway
         shell: pwsh
