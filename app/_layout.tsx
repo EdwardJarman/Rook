@@ -38,6 +38,22 @@ if (!publishableKey) {
 
 const DEFAULT_WEB_INSETS: EdgeInsets = { top: 0, right: 0, bottom: 0, left: 0 };
 const DEFAULT_WEB_FRAME: Rect = { x: 0, y: 0, width: 0, height: 0 };
+const DESKTOP_PAIRING_REQUEST_PATTERN = /^rkd-[a-f0-9]{48}$/i;
+
+/**
+ * Router segments can be temporarily empty during an external browser
+ * navigation. Read the real URL synchronously so the generic authenticated
+ * redirect can never consume a desktop pairing handoff during that window.
+ */
+function browserDesktopPairingRequest(): string | null {
+  if (Platform.OS !== "web") return null;
+  try {
+    const requestId = new URLSearchParams(window.location.search).get("request");
+    return requestId && DESKTOP_PAIRING_REQUEST_PATTERN.test(requestId) ? requestId.toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}
 
 export const unstable_settings = { anchor: "(tabs)" };
 
@@ -59,7 +75,13 @@ function SessionNavigator() {
     const isOnboardingRoute = route === "onboarding";
     // Rook Node pairing pages handle their own sign-in prompt.
     const isSelfManagedRoute = route === "connect-node" || route === "download";
+    const pairingRequest = browserDesktopPairingRequest();
     if (loading) return;
+
+    // Do this before every ordinary auth/onboarding redirect. A request in the
+    // browser URL is the authoritative indication that this tab is pairing a
+    // desktop, regardless of transient Expo Router segment state.
+    if (pairingRequest) return;
     if (!isAuthenticated && !isAuthRoute && !isSelfManagedRoute) {
       router.replace("/sign-in");
       return;
@@ -86,7 +108,7 @@ function SessionNavigator() {
   }, [isAuthenticated, loading, onboardingComplete, pathname, router, segments, workroomReady]);
 
   const routeForGate = (segments[0] ?? pathname.split("/").filter(Boolean)[0]) as string | undefined;
-  const isSelfManagedRouteForGate = routeForGate === "connect-node" || routeForGate === "download";
+  const isSelfManagedRouteForGate = routeForGate === "connect-node" || routeForGate === "download" || Boolean(browserDesktopPairingRequest());
   if (loading || (isAuthenticated && !workroomReady && !isSelfManagedRouteForGate)) {
     return (
       <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.canvas, gap: 12 }}>

@@ -70,6 +70,9 @@ describe("desktop one-time codes", () => {
     expect(connectScreen).toContain('params: { request: requestId }');
     expect(layout).toContain("usePathname");
     expect(layout).toContain('pathname.split("/").filter(Boolean)[0]');
+    expect(layout).toContain('function browserDesktopPairingRequest(): string | null');
+    expect(layout).toContain('new URLSearchParams(window.location.search).get("request")');
+    expect(layout).toContain('if (pairingRequest) return;');
     expect(signIn).toContain('new URLSearchParams(window.location.search).get("request")');
     expect(signIn).toContain('return `/connect-node?request=${encodeURIComponent(requestId.toLowerCase())}`');
   });
