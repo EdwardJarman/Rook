@@ -16,7 +16,13 @@ type InstallShell = "posix" | "powershell";
 export default function RookLandingPage() {
   const router = useRouter();
   const { colors } = useRookTheme();
-  const [shell, setShell] = useState<InstallShell>("posix");
+  const [shell, setShell] = useState<InstallShell>(
+    Platform.OS === "web" &&
+      typeof navigator !== "undefined" &&
+      /Windows NT/i.test(navigator.userAgent)
+      ? "powershell"
+      : "posix",
+  );
   const [copied, setCopied] = useState(false);
   const installCommand =
     shell === "posix" ? POSIX_INSTALL_COMMAND : POWERSHELL_INSTALL_COMMAND;
@@ -236,6 +242,56 @@ export default function RookLandingPage() {
               >
                 <Pressable
                   accessibilityRole="button"
+                  accessibilityLabel="Copy Rook CLI install command"
+                  onPress={() => void copyInstaller()}
+                  style={({ pressed }) => ({
+                    minHeight: 48,
+                    maxWidth: 500,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 9,
+                    paddingHorizontal: 13,
+                    borderWidth: 1,
+                    borderColor: colors.lineStrong,
+                    borderRadius: 13,
+                    backgroundColor: colors.surface,
+                    opacity: pressed ? 0.72 : 1,
+                  })}
+                >
+                  <MaterialIcons
+                    name={copied ? "check" : "terminal"}
+                    size={17}
+                    color={copied ? colors.mint : colors.accent}
+                  />
+                  <Text
+                    selectable
+                    numberOfLines={1}
+                    style={{
+                      flex: 1,
+                      color: colors.textSoft,
+                      fontFamily: Platform.select({
+                        ios: "Menlo",
+                        android: "monospace",
+                        default:
+                          "ui-monospace, SFMono-Regular, Menlo, monospace",
+                      }),
+                      fontSize: 12.5,
+                    }}
+                  >
+                    $ {installCommand}
+                  </Text>
+                  <Text
+                    style={{
+                      color: copied ? colors.mint : colors.textFaint,
+                      fontSize: 11,
+                      fontWeight: "800",
+                    }}
+                  >
+                    {copied ? "Copied" : "Copy"}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
                   accessibilityLabel="Open Rook downloads"
                   onPress={() => router.push("/download" as never)}
                   style={({ pressed }) => ({
@@ -271,6 +327,7 @@ export default function RookLandingPage() {
 
               <View
                 style={{
+                  display: "none",
                   marginTop: 24,
                   maxWidth: 720,
                   borderRadius: 16,
