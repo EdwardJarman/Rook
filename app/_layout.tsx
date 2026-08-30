@@ -33,13 +33,14 @@ import { useRookTheme } from "@/lib/ui";
 
 // Expo only inlines EXPO_PUBLIC_* values when referenced directly. The Vercel
 // build wrapper maps CLERK_PUBLISHABLE_KEY to this value before static export.
-const publishableKey = process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY ?? "";
-
-if (!publishableKey) {
-  throw new Error(
-    "Missing EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY. Configure Clerk before starting Rook.",
-  );
-}
+// The fallback is a checked-in Clerk dev key so a Vercel redeploy can never
+// fail because the env var is unset in Project Settings.
+const FALLBACK_CLERK_PUBLISHABLE_KEY =
+  "pk_test_aW5zcGlyZWQtaG9uZXliZWUtNDMuY2xlcmsuYWNjb3VudHMuZGV2JA";
+const publishableKey =
+  process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY ||
+  process.env.CLERK_PUBLISHABLE_KEY ||
+  FALLBACK_CLERK_PUBLISHABLE_KEY;
 
 const DEFAULT_WEB_INSETS: EdgeInsets = { top: 0, right: 0, bottom: 0, left: 0 };
 const DEFAULT_WEB_FRAME: Rect = { x: 0, y: 0, width: 0, height: 0 };
