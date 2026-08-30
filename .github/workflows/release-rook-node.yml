@@ -94,6 +94,12 @@ jobs:
       - name: Install dependencies (downloads pinned Chromium via postinstall)
         run: pnpm install --frozen-lockfile
 
+      - name: Build the desktop app (Vite + React)
+        env:
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+        run: pnpm app:build
+
       - name: Bundle sidecar JS
         run: pnpm exec esbuild src/index.ts --bundle --platform=node --format=cjs --outfile=build/index.cjs --external:playwright --external:ws --log-level=error
 

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the Rook Node main window",
+  "description": "Capability for the Rook desktop main window",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -9,6 +9,30 @@
     "core:event:default",
     "core:window:default",
     "core:app:default",
-    "core:resources:default"
+    "core:resources:default",
+    "core:webview:default",
+    "core:menu:default",
+    "core:tray:default",
+    "dialog:default",
+    "fs:default",
+    "fs:allow-read-text-file",
+    "fs:allow-write-text-file",
+    "fs:allow-read-dir",
+    "fs:allow-exists",
+    "fs:allow-stat",
+    "fs:scope-appdata-recursive",
+    "fs:scope-appconfig-recursive",
+    "fs:scope-applocaldata-recursive",
+    "fs:scope-applog-recursive",
+    "fs:scope-document-recursive",
+    "fs:scope-download-recursive",
+    "fs:scope-home-recursive",
+    "fs:scope-picture-recursive",
+    "fs:scope-resource-recursive",
+    "fs:scope-temp-recursive",
+    "fs:scope-video-recursive",
+    "store:default",
+    "opener:default",
+    "clipboard-manager:default"
   ]
 }

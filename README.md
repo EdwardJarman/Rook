@@ -14,7 +14,7 @@ power.
 | --- | --- | --- |
 | **Rook app** | Expo (React Native / web) workroom: Bots, tasks, approvals, files, library | Phone or browser; web build deploys to Vercel |
 | **Rook server** | tRPC API + relay queue + InstantDB persistence + auth | Vercel serverless functions |
-| **Rook Node** | Tauri desktop shell + Node.js sidecar running a supervised Chromium | Windows / macOS / Linux installers |
+| **Rook desktop** | Tauri window with a full Vite/React workroom (chat, Bots, library, files, approvals, account) + the Rook Node sidecar in the background | Windows / macOS / Linux installers |
 
 ---
 
@@ -77,15 +77,22 @@ api/                  Vercel function entry (api/[...path].ts)
 shared/               node-relay protocol shared by server AND node (dependency-free)
 instant.schema.ts     InstantDB schema (nodes, pairing tokens, commands…)
 rook-node/
-  src/                Node sidecar (TypeScript):
-    index.ts            CLI entrypoint (flags: --headless --no-launch --pair … --install …)
+  index.html          Desktop app HTML (loaded by Tauri)
+  vite.config.ts      Vite config for the desktop React app
+  src/
+    index.ts            Sidecar CLI entrypoint (flags: --headless --no-launch --pair … --install …)
     core/node.ts        Execution authority: dispatch, leases, approvals
     gateway/server.ts   Loopback gateway: /connect, /pair, /healthz + local WebSocket control
     uplink/uplink.ts    Outbound HTTPS pair + poll client (the cloud uplink)
     runtime/chromium.ts Supervised pinned-Chromium launcher (Playwright)
     control/ files/ screens/ security/ state/ supervisor/ registry/
-  web/                Desktop window UI (index.html + app.js)
-  src-tauri/          Tauri shell (Rust): spawns/stops the sidecar, health probing
+    app/                **NEW** — Vite + React desktop window (UI)
+      App.tsx           Providers + router
+      router.tsx        Hash routes (Workroom, Bots, Library, Files, Computer, Approvals, Account, Settings)
+      components/       Primitives, app shell, sign-in, modal
+      routes/           One file per screen
+      lib/              tRPC, Clerk, theme, store, node-bridge, workroom store, send-bridge
+  src-tauri/          Tauri shell (Rust): spawns/stops the sidecar, file IO, native dialogs
   tests/              Vitest suites incl. real-Chromium smoke + pairing flow
 scripts/              Build/dev utilities (QR, Vercel build, InstantDB smoke)
 docs/                 Ops docs (rook-node ops, Clerk, ChatGPT/OpenRouter/Excel integrations)
@@ -120,16 +127,25 @@ The sidecar gateway listens on `127.0.0.1:37831` by default. Useful endpoints:
 ### Desktop shell (Tauri)
 
 ```bash
-cd rook-node/src-tauri
-cargo check                  # fast type check
-cd .. && pnpm dlx @tauri-apps/cli@2 build --no-bundle   # full local build
+cd rook-node
+pnpm install                 # also downloads the pinned Chromium via postinstall
+pnpm test                    # 65 tests incl. a real-Chromium smoke run
+pnpm typecheck
+# Vite + React app (full chat, Bots, files, folders, settings):
+pnpm app:dev                 # local dev with HMR on http://localhost:5173
+pnpm app:build               # builds the Vite bundle into rook-node/dist-app
+# Tauri build (installers):
+pnpm dlx @tauri-apps/cli@2 build --no-bundle   # full local build
 # → src-tauri/target/release/rook-node.exe (+ staged sidecar & resources)
 ```
 
-The shell spawns the sidecar next to the executable, points
-`PLAYWRIGHT_BROWSERS_PATH` at the bundled Chromium, probes gateway health,
-adopts an already-running healthy gateway instead of double-spawning, and
-stops the sidecar (and its Chromium children) when you close the window.
+The Tauri window is now a full Rook workroom — chat, Bots, library,
+approvals, file browser, and Codex/Claude-style "Open folder" workspaces —
+in addition to running the existing sidecar. The shell spawns the sidecar
+next to the executable, points `PLAYWRIGHT_BROWSERS_PATH` at the bundled
+Chromium, probes gateway health, adopts an already-running healthy gateway
+instead of double-spawning, and stops the sidecar (and its Chromium
+children) when you close the window.
 
 ---
 

@@ -69,6 +69,16 @@ Ordered by lead time; start the slow items first.
    the pinned Playwright CLI (checksummed download into the node data home).
    Keep this unless offline-first install becomes a requirement.
 
+## Rook Desktop vs Rook Node
+
+`Rook Node` and `Rook Desktop` are the same Tauri build. The Tauri window
+ships a full Vite + React workroom (chat, Bots, library, approvals, file
+browser, Codex/Claude-style folder workspaces, account, settings) while
+the sidecar runs in the background as your `Rook Node` — a supervised,
+version-pinned Chromium plus the loopback control gateway and the cloud
+uplink. The sidecar and the window communicate over `127.0.0.1:37831` so
+the experience is fully local, even if Vercel is unreachable.
+
 ## Local development
 
 ```bash
@@ -78,6 +88,21 @@ pnpm install && pnpm dev
 # node sidecar (separate terminal)
 cd rook-node && pnpm install && pnpm test          # 58 tests incl. Chromium smoke
 npx tsx src/index.ts --headless --no-uplink        # loopback gateway only
+```
+
+The desktop Vite app lives in `rook-node/src/app/`:
+
+```bash
+cd rook-node
+pnpm app:dev                # Vite dev server on http://localhost:5173
+pnpm app:build              # production build into rook-node/dist-app
+```
+
+To run the full Tauri shell locally with HMR:
+
+```bash
+cd rook-node
+pnpm dlx @tauri-apps/cli@2 dev
 ```
 
 Pair a real computer:

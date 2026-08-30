@@ -1,7 +1,7 @@
 [package]
 name = "rook-node"
-version = "0.1.20"
-description = "Rook Node — supervised local Chromium runner sidecar supervisor."
+version = "0.2.0"
+description = "Rook desktop — full workroom + supervised local Chromium node in one Tauri window."
 edition = "2021"
 
 [build-dependencies]
@@ -9,6 +9,11 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-store = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-clipboard-manager = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"

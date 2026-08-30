@@ -19,10 +19,17 @@
 
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{Manager, State};
+
+/// Maximum file size (in bytes) the shell will read or write through its
+/// read_text_file / write_text_file commands. Mirrors the size cap the
+/// sidecar's files/broker enforces, so the desktop window can never bypass
+/// it.
+const MAX_TEXT_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
 /// Loopback gateway port — must match DEFAULT_GATEWAY_PORT in the sidecar.
 const GATEWAY_PORT: u16 = 37831;
@@ -35,6 +42,12 @@ struct SidecarState {
     /// Why the last spawn attempt failed (or the gateway never came up), for
     /// the status UI.
     last_error: Mutex<Option<String>>,
+    /// Folders the user has explicitly linked through the desktop UI. Used
+    /// to scope tauri-plugin-fs to a tiny, user-approved set of roots.
+    linked_roots: Mutex<Vec<PathBuf>>,
+    /// Cached node identity reported back to the UI.
+    node_id: Mutex<Option<String>>,
+    server_url: Mutex<Option<String>>,
 }
 
 /// Probes the sidecar's gateway over loopback HTTP. Returns (listening, paired).
@@ -109,14 +122,45 @@ fn health(app: tauri::AppHandle) -> Result<String, String> {
             *error = None;
         }
     }
+    // Pull a richer status payload from the gateway so the UI can show
+    // nodeId / serverUrl / version without a second round-trip.
+    let mut node_id = state.node_id.lock().map_err(|_| "lock")?.clone();
+    let mut server_url = state.server_url.lock().map_err(|_| "lock")?.clone();
+    let mut version: Option<String> = None;
+    let mut data_home: Option<String> = None;
+    if let Some(snapshot) = fetch_gateway_status() {
+        if let Some(value) = snapshot.get("nodeId").and_then(|v| v.as_str()) {
+            node_id = Some(value.to_string());
+        }
+        if let Some(value) = snapshot.get("serverUrl").and_then(|v| v.as_str()) {
+            server_url = Some(value.to_string());
+        }
+        if let Some(value) = snapshot.get("version").and_then(|v| v.as_str()) {
+            version = Some(value.to_string());
+        }
+        if let Some(value) = snapshot.get("dataHome").and_then(|v| v.as_str()) {
+            data_home = Some(value.to_string());
+        }
+    }
+    *state.node_id.lock().map_err(|_| "lock")? = node_id.clone();
+    *state.server_url.lock().map_err(|_| "lock")? = server_url.clone();
     let error = state.last_error.lock().map_err(|_| "lock")?.clone();
     let body = serde_json::json!({
         "running": running,
         "listening": listening,
         "paired": paired,
         "error": error,
+        "nodeId": node_id,
+        "serverUrl": server_url,
+        "version": version,
+        "dataHome": data_home,
     });
     Ok(body.to_string())
+}
+
+#[tauri::command]
+fn get_node_status(app: tauri::AppHandle) -> Result<String, String> {
+    health(app)
 }
 
 #[tauri::command]
@@ -378,19 +422,308 @@ fn kill_adopted_orphans() {
     let _ = Command::new("pkill").arg("-x").arg("rook-node-sidecar").output();
 }
 
+/* ------------------------------------------------------------------ */
+/* Gateway HTTP helper — talks to the local sidecar over loopback.    */
+/* ------------------------------------------------------------------ */
+
+/// Performs a single HTTP request to the local gateway. Returns the raw
+/// response body, or `None` when the gateway is unreachable.
+fn http_to_gateway(method: &str, path: &str, body: Option<&str>) -> Option<String> {
+    let addr = SocketAddr::from((Ipv4Addr::new(127, 0, 0, 1), GATEWAY_PORT));
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(700)).ok()?;
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(1500)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(1500)));
+    let body_bytes = body.unwrap_or("");
+    let request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{GATEWAY_PORT}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body_bytes}",
+        body_bytes.len()
+    );
+    stream.write_all(request.as_bytes()).ok()?;
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw).ok()?;
+    let body = raw.split("\r\n\r\n").nth(1)?.to_string();
+    Some(body)
+}
+
+fn fetch_gateway_status() -> Option<serde_json::Value> {
+    let raw = http_to_gateway("GET", "/api/status", None)?;
+    serde_json::from_str(&raw).ok()
+}
+
+/* ------------------------------------------------------------------ */
+/* Desktop commands: folder picker, file IO, path reveal, disconnect. */
+/* ------------------------------------------------------------------ */
+
+/// Opens a native folder picker and returns the chosen absolute path.
+/// The UI uses this to populate the Codex/Claude-style "Workspace" pill.
+#[tauri::command]
+async fn pick_folder(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.dialog()
+        .file()
+        .pick_folder(move |path| {
+            let _ = tx.send(path);
+        });
+    let result = rx.recv().map_err(|e| e.to_string())?;
+    Ok(result.map(|p| p.to_string()))
+}
+
+/// Returns the entries of a folder the user has previously linked. Refuses
+/// to read outside the linked roots to match the broker's deny-by-default
+/// stance.
+#[tauri::command]
+fn list_dir(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    let state: State<'_, SidecarState> = app.state();
+    let roots = state.linked_roots.lock().map_err(|_| "lock")?;
+    let target = PathBuf::from(&path);
+    if !is_within_any(&target, &roots) {
+        return Err(format!(
+            "path {path:?} is not inside a linked folder"
+        ));
+    }
+    let read = std::fs::read_dir(&target).map_err(|e| format!("read_dir: {e}"))?;
+    let mut entries: Vec<serde_json::Value> = Vec::new();
+    for entry in read.flatten() {
+        let entry_path = entry.path();
+        let metadata = entry.metadata().ok();
+        let modified = metadata
+            .as_ref()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| {
+                let secs = d.as_secs() as i64;
+                chrono_like_iso(secs)
+            });
+        let is_directory = metadata.as_ref().map(|m| m.is_dir()).unwrap_or(false);
+        entries.push(serde_json::json!({
+            "name": entry.file_name().to_string_lossy(),
+            "path": entry_path.to_string_lossy(),
+            "isDirectory": is_directory,
+            "size": metadata.as_ref().map(|m| m.len()),
+            "modifiedAt": modified,
+        }));
+    }
+    Ok(serde_json::json!({ "entries": entries }).to_string())
+}
+
+fn chrono_like_iso(secs: i64) -> String {
+    // Minimal ISO 8601 formatter so we don't pull a chrono dep just for this.
+    // Returns a stable local-ish timestamp: 2024-08-30T12:34:56Z.
+    let days_since_epoch = secs.div_euclid(86_400);
+    let secs_of_day = secs.rem_euclid(86_400) as u32;
+    let (y, m, d) = civil_from_days(days_since_epoch);
+    let h = secs_of_day / 3600;
+    let mi = (secs_of_day % 3600) / 60;
+    let s = secs_of_day % 60;
+    format!(
+        "{y:04}-{m:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z",
+    )
+}
+
+fn civil_from_days(z: i64) -> (i32, u32, u32) {
+    // Howard Hinnant's date algorithm. Day 0 = 1970-01-01.
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i32 + (era * 400) as i32;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
+}
+
+/// Reads a small text file. Refuses paths outside linked roots and files
+/// above the broker's size cap.
+#[tauri::command]
+fn read_text_file(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    let state: State<'_, SidecarState> = app.state();
+    let roots = state.linked_roots.lock().map_err(|_| "lock")?;
+    let target = PathBuf::from(&path);
+    if !is_within_any(&target, &roots) {
+        return Err(format!("path {path:?} is not inside a linked folder"));
+    }
+    let metadata = std::fs::metadata(&target).map_err(|e| format!("stat: {e}"))?;
+    if !metadata.is_file() {
+        return Err("not a regular file".to_string());
+    }
+    if metadata.len() > MAX_TEXT_FILE_BYTES {
+        return Err(format!(
+            "file is too large to read safely ({} bytes > {} max)",
+            metadata.len(),
+            MAX_TEXT_FILE_BYTES
+        ));
+    }
+    let text = std::fs::read_to_string(&target).map_err(|e| format!("read: {e}"))?;
+    Ok(text)
+}
+
+/// Writes a small text file. Same scoping rules as `read_text_file`.
+#[tauri::command]
+fn write_text_file(
+    app: tauri::AppHandle,
+    path: String,
+    contents: String,
+) -> Result<(), String> {
+    let state: State<'_, SidecarState> = app.state();
+    let roots = state.linked_roots.lock().map_err(|_| "lock")?;
+    let target = PathBuf::from(&path);
+    if !is_within_any(&target, &roots) {
+        return Err(format!("path {path:?} is not inside a linked folder"));
+    }
+    if (contents.len() as u64) > MAX_TEXT_FILE_BYTES {
+        return Err(format!(
+            "payload is too large to write safely ({} bytes > {} max)",
+            contents.len(),
+            MAX_TEXT_FILE_BYTES
+        ));
+    }
+    std::fs::write(&target, contents).map_err(|e| format!("write: {e}"))?;
+    Ok(())
+}
+
+/// Reveals a path in the OS file manager. Falls back to opening it with
+/// the default handler when reveal is unavailable.
+#[tauri::command]
+fn open_path(path: String) -> Result<(), String> {
+    let target = PathBuf::from(&path);
+    if !target.exists() {
+        return Err(format!("path does not exist: {path:?}"));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let arg = if target.is_dir() {
+            format!("/select,{}", target.display())
+        } else {
+            target.display().to_string()
+        };
+        std::process::Command::new("explorer.exe")
+            .arg(arg)
+            .creation_flags(0x08000000)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if target.is_dir() {
+            std::process::Command::new("open").arg(&target).spawn().map_err(|e| e.to_string())?;
+        } else {
+            std::process::Command::new("open")
+                .args(["-R", &target.display().to_string()])
+                .spawn()
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(parent) = target.parent() {
+            std::process::Command::new("xdg-open")
+                .arg(parent)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+        } else {
+            std::process::Command::new("xdg-open")
+                .arg(&target)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// Asks the local gateway to clear its cloud identity. Stops the sidecar
+/// afterward so the next launch starts from a clean slate.
+#[tauri::command]
+fn disconnect_node(app: tauri::AppHandle) -> Result<(), String> {
+    let _ = http_to_gateway("POST", "/api/disconnect", None);
+    kill_child(&app);
+    Ok(())
+}
+
+/// Adds a linked root. Stored in shell state and re-used by the fs scope.
+#[tauri::command]
+fn add_linked_root(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    let state: State<'_, SidecarState> = app.state();
+    let canonical = std::fs::canonicalize(&path).map_err(|e| format!("canonicalize: {e}"))?;
+    let mut roots = state.linked_roots.lock().map_err(|_| "lock")?;
+    if !roots.iter().any(|r| r == &canonical) {
+        roots.push(canonical.clone());
+    }
+    Ok(canonical.to_string_lossy().to_string())
+}
+
+/// Removes a linked root. Subsequent file commands will refuse the path.
+#[tauri::command]
+fn remove_linked_root(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let state: State<'_, SidecarState> = app.state();
+    let mut roots = state.linked_roots.lock().map_err(|_| "lock")?;
+    roots.retain(|r| r.to_string_lossy() != path);
+    Ok(())
+}
+
+/// Lists the currently linked roots. The UI uses this to render the
+/// sidebar and to restore the fs scope after relaunch.
+#[tauri::command]
+fn list_linked_roots(app: tauri::AppHandle) -> Result<String, String> {
+    let state: State<'_, SidecarState> = app.state();
+    let roots = state.linked_roots.lock().map_err(|_| "lock")?;
+    let items: Vec<serde_json::Value> = roots
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "path": r.to_string_lossy(),
+                "name": r.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+            })
+        })
+        .collect();
+    Ok(serde_json::json!({ "roots": items }).to_string())
+}
+
+fn is_within_any(path: &PathBuf, roots: &[PathBuf]) -> bool {
+    roots.iter().any(|root| {
+        let root = root.to_string_lossy().to_string();
+        let target = path.to_string_lossy().to_string();
+        target == root
+            || target.starts_with(&format!("{root}{}", std::path::MAIN_SEPARATOR))
+            || target.starts_with(&format!("{root}/"))
+    })
+}
+
 fn main() {
     env_logger::init();
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .manage(SidecarState {
             child: Mutex::new(None),
             adopted: Mutex::new(false),
             last_error: Mutex::new(None),
+            linked_roots: Mutex::new(Vec::new()),
+            node_id: Mutex::new(None),
+            server_url: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             health,
+            get_node_status,
             start_sidecar,
             stop_sidecar,
-            open_connect
+            open_connect,
+            pick_folder,
+            list_dir,
+            read_text_file,
+            write_text_file,
+            open_path,
+            disconnect_node,
+            add_linked_root,
+            remove_linked_root,
+            list_linked_roots
         ])
         .setup(|app| {
             let handle = app.handle().clone();
