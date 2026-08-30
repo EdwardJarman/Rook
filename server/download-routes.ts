@@ -65,7 +65,11 @@ export function registerNodeDownloadRoutes(
   app: import("express").Express,
 ): void {
   app.get("/api/download/node", (req, res) => {
-    void serveDownload(req, res);
+    serveDownload(req, res).catch(() => {
+      try {
+        res.redirect(302, DOWNLOAD_PAGE);
+      } catch {}
+    });
   });
 
   app.get("/api/download/node/latest", (_req, res) => {
@@ -73,7 +77,11 @@ export function registerNodeDownloadRoutes(
   });
 
   app.get("/api/download/cli", (req, res) => {
-    void serveCliDownload(req, res);
+    serveCliDownload(req, res).catch(() => {
+      try {
+        res.status(500).json({ error: "Download unavailable. Please try again." });
+      } catch {}
+    });
   });
 
   const servePosixInstaller = (
@@ -98,14 +106,20 @@ export function registerNodeDownloadRoutes(
   app.get("/api/download/cli/install.ps1", servePowerShellInstaller);
 
   app.get("/api/download/android", (req, res) => {
-    void serveAndroidDownload(req, res);
+    serveAndroidDownload(req, res).catch(() => {
+      try {
+        res.status(500).json({ available: false, message: "Download unavailable. Please try again." });
+      } catch {}
+    });
   });
 }
 
 /**
- * Redirects to the platform installer. If the asset isn't published yet
- * (mid-release window), sends the user to the download page with a pending
- * hint instead of a GitHub 404.
+ * Redirects to the platform installer. No server-side HEAD probing — just
+ * redirect and let the browser follow GitHub's 302 chain. A HEAD check here
+ * was crashing the serverless function on Vercel (function timeout / fetch
+ * edge cases) and is not worth the risk; the download page handles the
+ * "still publishing" hint via its ?pending param when needed.
  */
 async function serveDownload(
   req: import("express").Request,
@@ -121,22 +135,7 @@ async function serveDownload(
     res.redirect(302, DOWNLOAD_PAGE);
     return;
   }
-  const assetUrl = `${RELEASES_DOWNLOAD_BASE}/${NODE_ASSETS[picked]}`;
-  try {
-    const head = await fetch(assetUrl, {
-      method: "HEAD",
-      redirect: "follow",
-      signal: AbortSignal.timeout(8_000),
-    });
-    if (!head.ok) {
-      res.redirect(302, `${DOWNLOAD_PAGE}?pending=${picked}`);
-      return;
-    }
-  } catch {
-    // GitHub unreachable from the server: send the user through anyway —
-    // their browser may reach it fine.
-  }
-  res.redirect(302, assetUrl);
+  res.redirect(302, `${RELEASES_DOWNLOAD_BASE}/${NODE_ASSETS[picked]}`);
 }
 
 /** Downloads the standalone Rook CLI archive for an explicitly chosen or detected desktop platform. */
