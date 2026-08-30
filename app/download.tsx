@@ -11,6 +11,19 @@ const POSIX_INSTALL_COMMAND =
 const POWERSHELL_INSTALL_COMMAND =
   "irm https://www.rook.lighting/api/download/cli/install.ps1 | iex";
 
+/**
+ * GitHub's `releases/latest/download/<asset>` URL always resolves to the
+ * newest published release. Linking the download page straight at GitHub
+ * means a download works even when the Vercel function is down — the
+ * server endpoint was only ever a thin 302 anyway.
+ */
+const GITHUB_RELEASE_BASE =
+  "https://github.com/EdwardJarman/Rook/releases/latest/download";
+
+function directDownloadUrl(artifact: string): string {
+  return `${GITHUB_RELEASE_BASE}/${artifact}`;
+}
+
 type DownloadTarget = "android" | "windows" | "macArm64" | "macIntel" | "linux";
 type InstallShell = "posix" | "powershell";
 
@@ -23,15 +36,6 @@ function detectedTarget(): DownloadTarget | null {
   if (/Macintosh|Mac OS X/i.test(agent)) return "macArm64";
   if (/Linux/i.test(agent)) return "linux";
   return null;
-}
-
-function serverOrigin(): string {
-  if (Platform.OS === "web" && typeof window !== "undefined")
-    return window.location.origin;
-  return (
-    process.env.EXPO_PUBLIC_API_ORIGIN?.replace(/\/$/, "") ||
-    "https://www.rook.lighting"
-  );
 }
 
 function open(url: string): void {
@@ -49,7 +53,6 @@ const DETAILS: Record<
     title: string;
     artifact: string;
     note: string;
-    endpoint: string;
     icon: string;
     afterInstall: string;
   }
@@ -59,7 +62,6 @@ const DETAILS: Record<
     title: "Rook Node for Windows",
     artifact: "Rook-Node-Setup.exe",
     note: "A guided desktop installer for Windows 10 and later.",
-    endpoint: "/api/download/node?platform=windows",
     icon: "window",
     afterInstall:
       "Open Rook Node, choose Connect account, then enter the short-lived code shown in your browser.",
@@ -69,7 +71,6 @@ const DETAILS: Record<
     title: "Rook Node for Mac",
     artifact: "Rook-Node-arm64.dmg",
     note: "For Mac computers with Apple silicon: M1, M2, M3, and newer.",
-    endpoint: "/api/download/node?platform=macArm64",
     icon: "laptop-mac",
     afterInstall:
       "Move Rook Node to Applications, then open it and use Connect account. If macOS blocks the unsigned app, run the displayed one-time xattr command once.",
@@ -79,7 +80,6 @@ const DETAILS: Record<
     title: "Rook Node for Mac",
     artifact: "Rook-Node-intel.dmg",
     note: "For Intel-based Mac computers.",
-    endpoint: "/api/download/node?platform=macIntel",
     icon: "laptop-mac",
     afterInstall:
       "Move Rook Node to Applications, then open it and use Connect account. If macOS blocks the unsigned app, run the displayed one-time xattr command once.",
@@ -89,7 +89,6 @@ const DETAILS: Record<
     title: "Rook Node for Linux",
     artifact: "Rook-Node-x86_64.AppImage",
     note: "A portable AppImage for 64-bit Linux desktops.",
-    endpoint: "/api/download/node?platform=linux",
     icon: "terminal",
     afterInstall:
       "Mark the AppImage executable, run it, then use Connect account to pair your computer.",
@@ -99,7 +98,6 @@ const DETAILS: Record<
     title: "Rook for Android",
     artifact: "Rook.apk",
     note: "Your Rook workroom, approvals, and Bots on your phone.",
-    endpoint: "/api/download/android",
     icon: "phone-android",
     afterInstall:
       "Install the Android app, open Rook, and sign in to your existing account.",
@@ -281,9 +279,7 @@ export default function DownloadScreen() {
                   key={target}
                   target={target}
                   recommended={target === currentTarget}
-                  onPress={() =>
-                    open(`${serverOrigin()}${DETAILS[target].endpoint}`)
-                  }
+                  onPress={() => open(directDownloadUrl(DETAILS[target].artifact))}
                 />
               ))}
             </View>
