@@ -5,7 +5,7 @@
     "moduleResolution": "NodeNext",
     "lib": ["ES2023", "DOM"],
     "outDir": "dist",
-    "rootDir": "..",
+    "rootDir": "src",
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
@@ -16,6 +16,6 @@
     "declaration": true,
     "sourceMap": true
   },
-  "include": ["src/**/*.ts", "../shared/node-relay.ts"],
-  "exclude": ["dist", "node_modules", "tests"]
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "node_modules", "tests", "../app/**", "../components/**", "../lib/**", "../hooks/**", "../server/**", "../tests/**", "../__tests__/**", "../scripts/**", "../docs/**", "../shared/**"]
 }

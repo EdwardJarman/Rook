@@ -20,7 +20,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import {
   CONNECT_STATE_TTL_MS,
   parsePairCallback,
-} from "../../../shared/node-relay.js";
+} from "../shared/node-relay.js";
 
 import type { RookConfig } from "../config.js";
 import { ROOK_NODE_VERSION } from "../config.js";
@@ -112,6 +112,78 @@ export class Gateway {
           "Cache-Control": "no-store",
         });
         response.end(JSON.stringify({ ok: true, paired: Boolean(this.node.db.getCloudIdentity()) }));
+        return;
+      }
+      if (url.pathname === "/api/status") {
+        const health = this.node.health();
+        const identity = this.node.db.getNodeIdentity();
+        const cloud = this.node.db.getCloudIdentity();
+        response.writeHead(200, {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+          "Cache-Control": "no-store",
+        });
+        response.end(
+          JSON.stringify({
+            ok: true,
+            paired: Boolean(cloud),
+            health,
+            nodeId: identity?.nodeId ?? null,
+            cloud: cloud ? { serverUrl: cloud.serverUrl, nodeId: cloud.nodeId, pairedAt: cloud.pairedAt } : null,
+            serverUrl: this.config.serverUrl,
+            gatewayPort: this.config.gatewayPort,
+            dataHome: this.config.dataHome,
+            profileReady: health.profileReady,
+            version: health.version,
+          }),
+        );
+        return;
+      }
+      if (url.pathname === "/api/bots") {
+        response.writeHead(200, {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+          "Cache-Control": "no-store",
+        });
+        response.end(JSON.stringify({ bots: this.node.registry.listBots() }));
+        return;
+      }
+      if (url.pathname === "/api/tabs") {
+        response.writeHead(200, {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+          "Cache-Control": "no-store",
+        });
+        response.end(JSON.stringify({ tabs: this.node.registry.allTabs() }));
+        return;
+      }
+      if (url.pathname === "/api/events") {
+        const limit = Math.min(Math.max(Number(url.searchParams.get("limit") ?? 20), 1), 100);
+        const events = this.node.db.listEvents(undefined, limit);
+        response.writeHead(200, {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+          "Cache-Control": "no-store",
+        });
+        response.end(JSON.stringify({ events }));
+        return;
+      }
+      if (url.pathname === "/api/approvals") {
+        response.writeHead(200, {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+          "Cache-Control": "no-store",
+        });
+        response.end(JSON.stringify({ approvals: this.node.pendingApprovals() }));
+        return;
+      }
+      if (url.pathname === "/api/disconnect" && request.method === "POST") {
+        this.node.db.clearCloudIdentity();
+        response.writeHead(200, {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+        });
+        response.end(JSON.stringify({ ok: true }));
         return;
       }
       response.writeHead(404, { "Content-Type": "text/plain" });

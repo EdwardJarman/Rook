@@ -18,7 +18,7 @@ import {
   type QueuedRelayCommand,
   type RelayResultReport,
   type UplinkSyncResponse,
-} from "../../../shared/node-relay.js";
+} from "../shared/node-relay.js";
 
 import type { RookNode } from "../core/node.js";
 import type { Capability, TypedAction } from "../types.js";

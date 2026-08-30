@@ -2,67 +2,341 @@
 <html>
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Rook Node</title>
     <style>
+      :root {
+        --canvas: #f7f7f4;
+        --surface: #ffffff;
+        --surface-alt: #f1f1ec;
+        --line: #e9e8e2;
+        --line-strong: #d9d8d1;
+        --text: #191c22;
+        --text-soft: #565e6b;
+        --text-faint: #8a9099;
+        --ink: #1a1d23;
+        --on-ink: #ffffff;
+        --accent: #0e7c59;
+        --mint: #e4f3ea;
+        --mint-text: #1d7a46;
+        --amber: #fdf0d7;
+        --amber-text: #9a6700;
+        --coral: #fde8e8;
+        --coral-text: #a12b2b;
+        --muted-bg: #efeeea;
+        --muted-text: #6b6a63;
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
       body {
-        font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
-        background: #f6f5f1;
-        color: #1a1d23;
+        font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        background: var(--canvas);
+        color: var(--text);
+        display: flex;
+        overflow: hidden;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      /* Sidebar — same language as RookDesktopSidebar */
+      .sidebar {
+        width: 240px;
+        min-width: 240px;
+        background: var(--surface);
+        border-right: 1px solid var(--line);
+        display: flex;
+        flex-direction: column;
+        padding: 22px 16px 16px;
+        gap: 18px;
+      }
+      .brand {
         display: flex;
         align-items: center;
-        justify-content: center;
-        min-height: 100vh;
-        margin: 0;
+        gap: 10px;
+        padding: 0 6px;
       }
+      .brand-mark {
+        width: 30px;
+        height: 30px;
+        border-radius: 9px;
+        background: var(--ink);
+        color: var(--on-ink);
+        display: grid;
+        place-items: center;
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: -0.4px;
+      }
+      .brand-name { font-size: 15px; font-weight: 700; letter-spacing: -0.3px; }
+      .brand-sub { font-size: 11px; color: var(--text-faint); letter-spacing: 0.06em; text-transform: uppercase; }
+      .nav { display: flex; flex-direction: column; gap: 4px; }
+      .nav button {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        text-align: left;
+        background: transparent;
+        border: none;
+        border-radius: 10px;
+        padding: 9px 10px;
+        font-size: 13.5px;
+        font-weight: 500;
+        color: var(--text-soft);
+        cursor: pointer;
+      }
+      .nav button.active { background: var(--ink); color: var(--on-ink); }
+      .nav button:hover:not(.active) { background: var(--surface-alt); color: var(--text); }
+      .nav-ico { width: 18px; text-align: center; font-size: 13px; }
+      .sidebar-foot {
+        margin-top: auto;
+        border-top: 1px solid var(--line);
+        padding-top: 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .foot-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-faint); }
+      .dot { width: 7px; height: 7px; border-radius: 999px; background: var(--text-faint); }
+      .dot.on { background: var(--accent); box-shadow: 0 0 0 4px rgba(14,124,89,.12); }
+      .foot-actions { display: flex; gap: 6px; }
+      .ghost-btn {
+        flex: 1;
+        border: 1px solid var(--line);
+        background: var(--surface);
+        border-radius: 9px;
+        padding: 7px 8px;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text-soft);
+        cursor: pointer;
+      }
+      .ghost-btn:hover { background: var(--surface-alt); color: var(--text); }
+
+      /* Main */
+      .main {
+        flex: 1;
+        overflow: auto;
+        padding: 28px 28px 24px;
+      }
+      .shell {
+        max-width: 720px;
+        margin: 0 auto;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      .eyebrow { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-faint); font-weight: 600; }
+      h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.4px; margin: 2px 0 4px; }
+      .lead { font-size: 14px; line-height: 1.5; color: var(--text-soft); margin: 0; }
       .card {
-        background: #fff;
-        border: 1px solid #e9e8e2;
-        border-radius: 20px;
-        padding: 34px 38px;
-        max-width: 420px;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.06);
-        text-align: center;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 20px 22px;
+        box-shadow: 0 6px 20px rgba(26,29,35,0.05);
       }
-      h1 { font-size: 20px; margin: 0 0 6px; }
-      p { font-size: 14px; line-height: 1.5; margin: 8px 0; color: #4a4d55; }
-      .muted { color: #8a887f; font-size: 12.5px; }
+      .card h2 { font-size: 14.5px; font-weight: 700; letter-spacing: -0.2px; margin: 0 0 4px; }
+      .card p { font-size: 13px; line-height: 1.55; color: var(--text-soft); margin: 6px 0 0; }
+      .card .muted { color: var(--text-faint); font-size: 12.5px; }
+      .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 11px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .pill.on { background: var(--mint); color: var(--mint-text); }
+      .pill.off { background: var(--muted-bg); color: var(--muted-text); }
+      .pill.warn { background: var(--amber); color: var(--amber-text); }
+      .pill.bad { background: var(--coral); color: var(--coral-text); }
       .btn {
-        display: inline-block; margin-top: 14px; background: #1a1d23; color: #fff;
-        text-decoration: none; padding: 11px 22px; border-radius: 12px;
-        font-weight: 600; font-size: 14px; cursor: pointer; border: none;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        border-radius: 12px;
+        padding: 10px 18px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        border: none;
       }
-      .btn[disabled] { opacity: 0.5; cursor: default; }
-      .pill { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px; margin-top: 10px; }
-      .on { background: #e4f3ea; color: #1d7a46; }
-      .off { background: #efeee9; color: #6b6a63; }
-      .warn { background: #fdf0d7; color: #9a6b0f; }
-      .retry {
-        margin-top: 10px; background: transparent; border: 1px solid #d8d6cf;
-        border-radius: 10px; padding: 7px 16px; font-size: 13px; cursor: pointer; color: #4a4d55;
+      .btn-primary { background: var(--ink); color: var(--on-ink); }
+      .btn-primary:hover { opacity: 0.92; }
+      .btn-primary:disabled { opacity: 0.45; cursor: default; }
+      .btn-ghost {
+        background: transparent;
+        border: 1px solid var(--line);
+        color: var(--text-soft);
+        padding: 8px 14px;
+        font-size: 13px;
       }
-      .retry:hover { background: #f1f0ea; }
-      .retry[disabled] { opacity: 0.5; cursor: default; }
-      code {
-        font-size: 12px; background: #f1f0ea; border-radius: 6px;
-        padding: 2px 6px; user-select: all; word-break: break-all;
+      .btn-ghost:hover { background: var(--surface-alt); color: var(--text); }
+      .btn-danger { background: var(--coral); color: var(--coral-text); border: 1px solid transparent; }
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11.5px;
+        background: var(--surface-alt);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px 10px;
+        word-break: break-all;
+        user-select: all;
+        color: var(--text);
       }
+      .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+      .stat {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 14px 16px;
+      }
+      .stat b { font-size: 22px; font-weight: 750; letter-spacing: -0.5px; }
+      .stat span { display: block; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-faint); margin-top: 2px; font-weight: 600; }
+      .list { display: flex; flex-direction: column; gap: 8px; }
+      .list-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 14px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--surface);
+      }
+      .list-item .meta { flex: 1; min-width: 0; }
+      .list-item .title { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .list-item .sub { font-size: 12px; color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .empty {
+        text-align: center;
+        padding: 28px 16px;
+        border: 1px dashed var(--line-strong);
+        border-radius: 14px;
+        background: var(--surface);
+        color: var(--text-faint);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      .section-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+        margin-top: 4px;
+      }
+      .section-head h3 { font-size: 12px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--text-faint); font-weight: 700; margin: 0; }
+      .section-head a { font-size: 12px; color: var(--text-soft); text-decoration: none; font-weight: 500; }
+      .section-head a:hover { color: var(--text); }
+      .divider { height: 1px; background: var(--line); margin: 2px 0; }
       [hidden] { display: none !important; }
+      .err { color: var(--coral-text); font-size: 12.5px; line-height: 1.5; word-break: break-word; }
+      @media (max-width: 760px) {
+        .sidebar { display: none; }
+        .main { padding: 20px 16px; }
+        .stats { grid-template-columns: 1fr; }
+      }
     </style>
   </head>
   <body>
-    <div class="card">
-      <h1>Rook Node</h1>
-      <p>Your computer, as a Bot computer for Rook. Forever free.</p>
-      <span id="status" class="pill warn">Starting…</span>
-      <div><button id="connect" class="btn" disabled>Connect account</button></div>
-      <button id="retry" class="retry" hidden>Retry</button>
-      <p class="muted" id="error"></p>
-      <p class="muted" id="manual" hidden>Or open this in your browser:<br /><code id="manualUrl"></code></p>
-      <p class="muted" id="hint">Connecting opens your browser and comes right back.</p>
-    </div>
-    <!-- External script on purpose: the packaged CSP whitelists inline scripts
-         via build-time hashes, which can silently mismatch and kill the page.
-         A same-origin file only needs default-src 'self'. -->
+    <nav class="sidebar" aria-label="Primary">
+      <div class="brand">
+        <div class="brand-mark">R</div>
+        <div>
+          <div class="brand-name">Rook Node</div>
+          <div class="brand-sub">Your computer · Forever free</div>
+        </div>
+      </div>
+
+      <div class="nav" role="tablist">
+        <button class="active" data-tab="overview" role="tab" aria-selected="true"><span class="nav-ico">◈</span>Overview</button>
+        <button data-tab="bots" role="tab"><span class="nav-ico">⬡</span>Bots</button>
+        <button data-tab="activity" role="tab"><span class="nav-ico">◐</span>Activity</button>
+        <button data-tab="settings" role="tab"><span class="nav-ico">⚙</span>Settings</button>
+      </div>
+
+      <div class="sidebar-foot">
+        <div class="foot-row"><span id="footDot" class="dot"></span><span id="footText">Checking…</span></div>
+        <div class="foot-row" style="font-variant-numeric: tabular-nums;"><span id="footVersion" class="muted">—</span></div>
+        <div class="foot-actions">
+          <button class="ghost-btn" id="footRetry">Retry</button>
+          <button class="ghost-btn" id="footQuit" title="Close Rook Node">Quit</button>
+        </div>
+      </div>
+    </nav>
+
+    <main class="main">
+      <div class="shell">
+        <!-- Overview -->
+        <section data-panel="overview">
+          <div class="eyebrow">Rook Node</div>
+          <h1>Your computer, as a Bot computer</h1>
+          <p class="lead">Rook never runs Bots for you — they run here, under your control, in a dedicated browser profile.</p>
+
+          <div class="card" id="heroCard">
+            <div class="row"><span id="heroPill" class="pill warn">Starting…</span><span id="heroName" class="muted"></span></div>
+            <h2 id="heroTitle" style="margin-top: 10px;">Starting up</h2>
+            <p id="heroLead" class="muted">Bringing your Bot computer online.</p>
+            <div class="row" style="margin-top: 14px;">
+              <button id="heroPrimary" class="btn btn-primary" disabled>Connect account</button>
+              <button id="heroSecondary" class="btn btn-ghost" hidden>Disconnect</button>
+            </div>
+            <p id="heroError" class="err" hidden></p>
+            <p id="heroHint" class="muted" style="margin-top: 10px;">Connecting opens your browser and comes right back. No codes.</p>
+            <div id="heroManual" hidden style="margin-top: 12px;">
+              <p class="muted">Or open this in your browser:</p>
+              <div id="heroManualUrl" class="mono"></div>
+            </div>
+          </div>
+
+          <div class="stats" id="statsRow">
+            <div class="stat"><b id="statBots">—</b><span>Bots on this machine</span></div>
+            <div class="stat"><b id="statTabs">—</b><span>Open tabs</span></div>
+            <div class="stat"><b id="statApprovals">—</b><span>Pending approvals</span></div>
+          </div>
+
+          <div class="section-head"><h3>Recent activity</h3><a href="#" data-nav="activity">View all →</a></div>
+          <div id="recentList" class="list"></div>
+        </section>
+
+        <!-- Bots -->
+        <section data-panel="bots" hidden>
+          <h1>Bots on this machine</h1>
+          <p class="lead">Each Bot gets its own tab group and isolated context on this computer.</p>
+          <div id="botsList" class="list" style="margin-top: 10px;"></div>
+        </section>
+
+        <!-- Activity -->
+        <section data-panel="activity" hidden>
+          <h1>Activity</h1>
+          <p class="lead">Commands, takeovers, and approvals handled by this computer.</p>
+          <div id="activityList" class="list" style="margin-top: 10px;"></div>
+        </section>
+
+        <!-- Settings -->
+        <section data-panel="settings" hidden>
+          <h1>Settings</h1>
+          <div class="card">
+            <h2>Connection</h2>
+            <p class="muted" style="word-break: break-all;">Server: <span id="settingsServer">—</span></p>
+            <p class="muted" style="word-break: break-all;">Node ID: <span id="settingsNodeId">—</span></p>
+            <p class="muted">Data folder: <span id="settingsHome">—</span></p>
+            <p class="muted">Gateway: <span id="settingsPort">—</span></p>
+            <div class="row" style="margin-top: 12px;">
+              <button id="settingsDisconnect" class="btn btn-ghost btn-danger">Disconnect this computer</button>
+              <button id="settingsCopyId" class="btn btn-ghost">Copy node ID</button>
+            </div>
+          </div>
+          <div class="card">
+            <h2>About</h2>
+            <p class="muted">Rook Node <span id="settingsVersion">—</span> · Forever free. Your Bots run here, not on our servers.</p>
+            <p class="muted"><a href="https://www.rook.lighting" target="_blank" rel="noreferrer" style="color: var(--text-soft);">rook.lighting</a> · <a href="https://github.com/EdwardJarman/Rook/releases/latest" target="_blank" rel="noreferrer" style="color: var(--text-soft);">Releases</a></p>
+          </div>
+        </section>
+      </div>
+    </main>
+
     <script src="./app.js"></script>
   </body>
 </html>
