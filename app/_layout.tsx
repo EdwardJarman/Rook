@@ -124,6 +124,12 @@ function SessionNavigator() {
       router.replace(onboardingComplete ? "/(tabs)" : ("/onboarding" as never));
       return;
     }
+    // Self-managed routes (download, connect-node) are public surfaces that
+    // must never be auto-redirected away from — a signed-in user who hasn't
+    // finished onboarding should still be able to download Rook, and a
+    // desktop pairing handoff must reach connect-node before any other
+    // gate runs.
+    if (isSelfManagedRoute) return;
     if (!onboardingComplete && !isOnboardingRoute)
       router.replace("/onboarding" as never);
     if (onboardingComplete && (isAuthRoute || isOnboardingRoute))
