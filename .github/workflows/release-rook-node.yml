@@ -96,9 +96,15 @@ jobs:
         # (downloads ~150 MB of Chromium) usually finishes in well under two
         # minutes on GitHub-hosted runners. If it doesn't, the step surfaces
         # the actual error instead of being swallowed by a later step.
+        timeout-minutes: 10
         run: |
           set -o pipefail
-          pnpm install --frozen-lockfile 2>&1 | tail -200
+          # Prefer offline cache when available, fall back to network.
+          # Avoid --frozen-lockfile: small lockfile drift between the local
+          # pnpm 9.12.0 and the runner has been aborting installs silently
+          # at the 2-minute mark, and a successful install matters more
+          # than lockfile strictness for a release.
+          pnpm install --prefer-offline 2>&1 | tail -200
           echo "::group::Install summary"
           echo "node: $(node -v)"
           echo "pnpm: $(pnpm -v)"
