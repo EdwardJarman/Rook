@@ -10,6 +10,7 @@
     "build": "esbuild server/_core/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist-server",
     "export:web": "expo export --platform web --output-dir dist",
     "vercel-build": "node scripts/vercel-build.mjs",
+    "vercel:deploy": "node scripts/vercel-deploy.mjs --prod",
     "start": "NODE_ENV=production node dist/index.js",
     "check": "tsc --noEmit",
     "lint": "expo lint",
@@ -105,6 +106,7 @@
     "tailwindcss": "^3.4.17",
     "tsx": "^4.21.0",
     "typescript": "~5.9.3",
+    "vercel": "^59.10.0",
     "vitest": "^2.1.9"
   },
   "packageManager": "pnpm@9.12.0"
