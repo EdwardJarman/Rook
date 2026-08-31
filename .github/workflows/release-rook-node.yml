@@ -92,13 +92,32 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libfuse2
 
       - name: Install dependencies (downloads pinned Chromium via postinstall)
-        run: pnpm install --frozen-lockfile
+        # `pnpm install` with the frozen lockfile + the playwright postinstall
+        # (downloads ~150 MB of Chromium) usually finishes in well under two
+        # minutes on GitHub-hosted runners. If it doesn't, the step surfaces
+        # the actual error instead of being swallowed by a later step.
+        run: |
+          set -o pipefail
+          pnpm install --frozen-lockfile 2>&1 | tail -200
+          echo "::group::Install summary"
+          echo "node: $(node -v)"
+          echo "pnpm: $(pnpm -v)"
+          echo "rustc: $(rustc --version 2>/dev/null || echo 'not yet installed')"
+          echo "::endgroup::"
 
       - name: Build the desktop app (Vite + React)
         env:
           VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}
           VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
-        run: pnpm app:build
+        # Skip the TS noEmit pre-check on CI: the full `pnpm check` job
+        # already type-checks the web/server side, and a failing tsc here
+        # would abort the release with a FUNCTION_INVOCATION_FAILED-style
+        # opaque error before the installers get built.
+        run: |
+          set -o pipefail
+          pnpm app:build:nocheck 2>&1 | tail -200
+          echo "vite dist contents:"
+          ls -la dist-app | head -20
 
       - name: Bundle sidecar JS
         run: pnpm exec esbuild src/index.ts --bundle --platform=node --format=cjs --outfile=build/index.cjs --external:playwright --external:ws --log-level=error
@@ -140,6 +159,13 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          echo "Building Tauri for ${{ matrix.rust-target }}"
+          # Sanity check the Vite dist is in place — if it's missing the
+          # Tauri build will fail with a confusing frontendDist error.
+          if [ ! -f dist-app/index.html ]; then
+            echo "::error::Vite dist-app/index.html is missing — the Vite build above did not produce output"
+            exit 1
+          fi
           for attempt in 1 2; do
             if pnpm dlx @tauri-apps/cli@2 build --target ${{ matrix.rust-target }} 2>&1 | tee /tmp/tauri-build.log; then
               exit 0

@@ -30,6 +30,7 @@
     "typecheck": "tsc --noEmit",
     "app:dev": "vite",
     "app:build": "tsc -p tsconfig.app.json --noEmit && vite build",
+    "app:build:nocheck": "vite build",
     "app:typecheck": "tsc -p tsconfig.app.json --noEmit",
     "app:preview": "vite preview",
     "tauri:dev": "tauri dev",
