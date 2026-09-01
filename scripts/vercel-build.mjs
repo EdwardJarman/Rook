@@ -17,20 +17,16 @@ const publishableKey =
 // Build the server bundle (api function target) before the static export.
 // The api/[...path].ts serverless function imports from this bundle so
 // the function can ship a single self-contained ESM file.
-const esbuildEntry = require.resolve("esbuild/bin/esbuild");
-const bundleResult = spawnSync(process.execPath, [
-  esbuildEntry,
-  "server/_core/index.ts",
-  "--bundle",
-  "--platform=node",
-  "--packages=external",
-  "--format=esm",
-  "--outfile=dist-server/index.js",
-], { stdio: "inherit", shell: false });
-if (bundleResult.status !== 0) {
-  console.error("[vercel-build] server bundle failed");
-  process.exit(1);
-}
+const esbuild = await import("esbuild");
+const bundleResult = await esbuild.build({
+  entryPoints: ["server/_core/index.ts"],
+  bundle: true,
+  platform: "node",
+  packages: "external",
+  format: "esm",
+  outfile: "dist-server/index.js",
+  logLevel: "info",
+});
 if (!existsSync("dist-server/index.js")) {
   console.error("[vercel-build] dist-server/index.js missing after bundle");
   process.exit(1);
