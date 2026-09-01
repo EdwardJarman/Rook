@@ -5,14 +5,14 @@
   "buildCommand": "pnpm vercel-build",
   "outputDirectory": "dist",
   "functions": {
-    "api/[...path].mts": {
+    "api/[...path].ts": {
       "maxDuration": 60
     }
   },
   "routes": [
     {
       "src": "/api/(.*)",
-      "dest": "/api/[...path].mts"
+      "dest": "/api/[...path].ts"
     },
     {
       "handle": "filesystem"
