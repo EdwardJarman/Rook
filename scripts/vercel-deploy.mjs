@@ -26,15 +26,23 @@ const require = createRequire(import.meta.url);
 
 function run(cmd, args, opts = {}) {
   console.log(`\n$ ${cmd} ${args.join(" ")}`);
-  const result = spawnSync(cmd, args, { stdio: "inherit", shell: true, ...opts });
+  // shell:false so paths with spaces ("C:\Program Files\nodejs\node.exe")
+  // aren't split by the platform shell.
+  const result = spawnSync(cmd, args, { stdio: "inherit", shell: false, ...opts });
   if (result.status !== 0) {
     console.error(`command failed with exit ${result.status}`);
     process.exit(result.status ?? 1);
   }
 }
 
-const vercelPkg = require.resolve("vercel/package.json");
-const vercelBin = resolve(vercelPkg.replace("/package.json", "/bin/vercel.js"));
+const vercelPkgPath = require.resolve("vercel/package.json");
+const vercelPkgJson = require(vercelPkgPath);
+// `bin` can be a string or an object { name: relativePath }.
+const vercelBinRel =
+  typeof vercelPkgJson.bin === "string"
+    ? vercelPkgJson.bin
+    : (vercelPkgJson.bin?.vercel ?? Object.values(vercelPkgJson.bin ?? {})[0]);
+const vercelBin = resolve(vercelPkgPath.replace(/package\.json$/, vercelBinRel.replace(/^\.\//, "")));
 
 const hasToken = Boolean(process.env.VERCEL_TOKEN);
 const hasProject = existsSync(resolve(process.cwd(), ".vercel"));

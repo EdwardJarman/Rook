@@ -1,0 +1,37 @@
+node_modules/
+.vercel/
+.env*
+!.env.example
+dist-app/
+dist-server/
+build/
+rook-node/
+rook-cli/
+rook-node-sidecar*
+tests/
+__tests__/
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+docs/
+.claude/
+.idea/
+.vscode/
+.github/
+.git/
+.gitignore
+.gitattributes
+tmp/
+*.log
+.DS_Store
+verify-*.ps1
+test-*.ps1
+# Keep scripts/vercel-build.mjs so the buildCommand in vercel.json can run it.
+# Also keep scripts/load-env.js because app.config.ts requires it.
+scripts/*
+!scripts/vercel-build.mjs
+!scripts/load-env.js
+
+# Don't ignore the api function (it's a serverless function, not source).
+!api/
