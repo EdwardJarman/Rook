@@ -16,10 +16,12 @@ const publishableKey =
 
 // Build the server bundle (api function target) before the static export.
 // The api/[...path].ts serverless function imports from this bundle so
-// the function can ship a single self-contained ESM file.
+// the function can ship a single self-contained ESM file. We bundle
+// server/_core/app.ts (which exports createApp) rather than the CLI
+// entry server/_core/index.ts (which only starts a listener).
 const esbuild = await import("esbuild");
 const bundleResult = await esbuild.build({
-  entryPoints: ["server/_core/index.ts"],
+  entryPoints: ["server/_core/app.ts"],
   bundle: true,
   platform: "node",
   packages: "external",
