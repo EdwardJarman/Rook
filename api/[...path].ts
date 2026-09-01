@@ -8,7 +8,11 @@
  * that gives the caller no signal.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { createApp } from "../server/_core/app";
+// `.js` extension is required under the ESM resolver that Vercel uses
+// for this function (api/package.json sets "type": "module"). At build
+// time Vercel strips the .ts and resolves the matching .js in the
+// compiled output.
+import { createApp } from "../server/_core/app.js";
 
 let appInstance: ReturnType<typeof createApp> | null = null;
 let appError: unknown = null;
