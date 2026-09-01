@@ -1,7 +1,7 @@
 import express from "express";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 
-import { appRouter } from "../routers";
+import { appRouter } from "../routers.js";
 import { getAiBackendStatus } from "../ai";
 import { handleChatGPTRoute } from "../ai/chatgpt";
 import { createContext } from "./context";

@@ -3,7 +3,6 @@ node_modules/
 .env*
 !.env.example
 dist-app/
-dist-server/
 build/
 rook-node/
 rook-cli/
@@ -35,3 +34,5 @@ scripts/*
 
 # Don't ignore the api function (it's a serverless function, not source).
 !api/
+# Keep dist-server/ so the api function can import the pre-bundled server.
+!dist-server/

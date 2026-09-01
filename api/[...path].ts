@@ -1,18 +1,14 @@
 /**
  * Vercel serverless function entry.
  *
- * Wraps the Rook Express app in a Vercel-compatible `(req, res)`
- * handler. Catches synchronous initialization errors so a transient
- * cold-start failure (e.g. a third-party SDK not yet ready) returns
- * a clean 500 with a useful log line instead of a FUNCTION_INVOCATION_FAILED
- * that gives the caller no signal.
+ * Imports the pre-bundled Rook server from dist-server/index.js. That
+ * bundle is produced by `pnpm build` (esbuild --format=esm) in the
+ * Vercel buildCommand before the static export runs, so the function
+ * receives a single self-contained ESM file with no transitive
+ * require()/import mismatches.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
-// `.js` extension is required under the ESM resolver that Vercel uses
-// for this function (api/package.json sets "type": "module"). At build
-// time Vercel strips the .ts and resolves the matching .js in the
-// compiled output.
-import { createApp } from "../server/_core/app.js";
+import { createApp } from "../dist-server/index.js";
 
 let appInstance: ReturnType<typeof createApp> | null = null;
 let appError: unknown = null;

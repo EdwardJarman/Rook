@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
@@ -13,6 +13,30 @@ const publishableKey =
   process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY ||
   process.env.CLERK_PUBLISHABLE_KEY ||
   ROOK_CLERK_PUBLISHABLE_KEY;
+
+// Build the server bundle (api function target) before the static export.
+// The api/[...path].ts serverless function imports from this bundle so
+// the function can ship a single self-contained ESM file.
+const esbuildEntry = require.resolve("esbuild/bin/esbuild");
+const bundleResult = spawnSync(process.execPath, [
+  esbuildEntry,
+  "server/_core/index.ts",
+  "--bundle",
+  "--platform=node",
+  "--packages=external",
+  "--format=esm",
+  "--outfile=dist-server/index.js",
+], { stdio: "inherit", shell: false });
+if (bundleResult.status !== 0) {
+  console.error("[vercel-build] server bundle failed");
+  process.exit(1);
+}
+if (!existsSync("dist-server/index.js")) {
+  console.error("[vercel-build] dist-server/index.js missing after bundle");
+  process.exit(1);
+}
+const bundleSize = statSync("dist-server/index.js").size;
+console.log(`[vercel-build] dist-server/index.js (${(bundleSize / 1024).toFixed(1)} KB) ready`);
 
 // Resolve the expo CLI binary directly. Calling `pnpm exec expo` from a
 // `spawnSync` on Windows is fragile because pnpm shims through a .ps1 entry
