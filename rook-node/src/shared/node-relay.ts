@@ -35,6 +35,31 @@ export function buildConnectNodeUrl(input: { serverUrl: string; state: string; p
   return url.toString();
 }
 
+/**
+ * The web-app page that authenticates the owner for a desktop pairing
+ * handshake. Unlike `buildConnectNodeUrl`, this flow does NOT redirect
+ * back to the node's loopback — the user copies a short code from the
+ * browser and pastes it into the node, which calls
+ * /api/node/desktop-pairing/complete to mint its durable identity.
+ */
+export function buildDesktopPairingUrl(input: { serverUrl: string; requestId: string }): string {
+  const url = new URL("/connect-node", normalizeServerUrl(input.serverUrl));
+  url.searchParams.set("request", input.requestId);
+  return url.toString();
+}
+
+/**
+ * Normalises a user-entered desktop pairing code. Accepts 8 alphanumeric
+ * characters with any common separator (spaces, dashes) and returns the
+ * canonical uppercase form, or empty string if invalid.
+ */
+export function normalizeDesktopPairingCode(value: string): string {
+  if (typeof value !== "string") return "";
+  const stripped = value.replace(/[\s-]+/g, "").toUpperCase();
+  if (!/^[A-Z0-9]{8}$/.test(stripped)) return "";
+  return stripped;
+}
+
 /** The loopback callback the browser is redirected to after pairing is minted. */
 export function buildPairCallbackUrl(input: { port: number; token: string; state: string }): string {
   // 127.0.0.1, not `localhost`: the node's gateway binds only the IPv4
