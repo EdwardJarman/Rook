@@ -5,15 +5,14 @@ import { RouterProvider } from "react-router-dom";
 import { router } from "./router";
 import { ThemeProvider } from "./lib/theme";
 import { ThemeStyle } from "./lib/theme-style";
-import { ClerkProviderRook } from "./lib/clerk";
 import { AuthGate } from "./components/auth-gate";
 
 /**
  * Top-level providers.
  *
- * Theme is always available; Clerk only renders its hosted auth flow when a
- * publishable key is set. The AuthGate swaps in a sign-in screen until the
- * user is signed in.
+ * Theme is always available; Clerk is only initialised when a publishable
+ * key is set. The AuthGate swaps in a sign-in screen until the user is
+ * signed in.
  */
 export function App() {
   const queryClient = useMemo(
@@ -29,13 +28,11 @@ export function App() {
   return (
     <ThemeProvider>
       <ThemeStyle />
-      <ClerkProviderRook>
-        <QueryClientProvider client={queryClient}>
-          <AuthGate>
-            <RouterProvider router={router} />
-          </AuthGate>
-        </QueryClientProvider>
-      </ClerkProviderRook>
+      <QueryClientProvider client={queryClient}>
+        <AuthGate>
+          <RouterProvider router={router} />
+        </AuthGate>
+      </QueryClientProvider>
     </ThemeProvider>
   );
 }
