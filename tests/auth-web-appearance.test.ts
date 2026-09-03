@@ -20,10 +20,9 @@ describe("public authentication appearance", () => {
     expect(appearanceSource).toContain("Continue with {{provider|titleize}}");
   });
 
-  it("shares the landing page’s dark editorial foundation", () => {
-    expect(shellSource).toContain('backgroundColor: "#080808"');
-    expect(shellSource).toContain('borderBottomColor: "#35342F"');
-    expect(shellSource).toContain('color: "#F1F0EB"');
-    expect(shellSource).not.toContain("bloom-background");
+  it("shares the app's rounded design tokens instead of a separate flat, square-cornered theme", () => {
+    expect(shellSource).toContain("useRookTheme");
+    expect(shellSource).not.toContain('backgroundColor: "#080808"');
+    expect(appearanceSource).toContain('borderRadius: "14px"');
   });
 });
