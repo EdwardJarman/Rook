@@ -1,47 +1,57 @@
-const INK = "#090909";
-const PAPER = "#F1F0EB";
-const MUTED = "#AAA8A1";
-const LINE = "#3A3934";
+import { Colors } from "@/lib/_core/theme";
+
+// Clerk's web components render before React context is available, so this
+// module reads the light palette directly rather than through useRookTheme.
+// It matches the app's default (light) canvas; dark-mode Clerk theming is a
+// later enhancement since Clerk doesn't support runtime appearance swaps
+// without a re-render of the whole widget.
+const INK = Colors.light.text;
+const ACCENT = "#0E7C59";
+const SURFACE = "#FFFFFF";
+const SURFACE_ALT = "#F1F1EC";
+const LINE = "#E9E8E2";
+const MUTED = "#8A9099";
 
 /**
  * Clerk styling for Rook's browser authentication views. The authentication
- * shell owns the product-level editorial composition; Clerk owns only the
- * secure form. Keep the form calm, full-width, and legible on narrow screens.
+ * shell owns the product-level composition; Clerk owns only the secure
+ * form. Kept rounded and calm to match the rest of the app instead of a
+ * separate flat, square-cornered treatment.
  */
 export const authWebAppearance = {
   variables: {
-    colorPrimary: PAPER,
-    colorPrimaryForeground: INK,
-    colorBackground: "#111110",
-    colorForeground: PAPER,
-    colorDanger: "#EF8E8E",
-    colorSuccess: PAPER,
-    colorWarning: "#F1C46A",
-    colorMuted: "#1A1A18",
+    colorPrimary: ACCENT,
+    colorPrimaryForeground: "#FFFFFF",
+    colorBackground: SURFACE,
+    colorForeground: INK,
+    colorDanger: "#C03B3B",
+    colorSuccess: ACCENT,
+    colorWarning: "#9A6700",
+    colorMuted: SURFACE_ALT,
     colorMutedForeground: MUTED,
-    colorInput: "#171716",
-    colorInputForeground: PAPER,
-    colorNeutral: PAPER,
-    colorTextOnPrimaryBackground: INK,
+    colorInput: SURFACE_ALT,
+    colorInputForeground: INK,
+    colorNeutral: INK,
+    colorTextOnPrimaryBackground: "#FFFFFF",
     colorTextSecondary: MUTED,
-    borderRadius: "0px",
+    borderRadius: "14px",
     fontFamily:
-      "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
+      "-apple-system, BlinkMacSystemFont, Inter, ui-sans-serif, system-ui, Segoe UI, sans-serif",
   },
   elements: {
     backLink: { color: MUTED },
     headerBackLink: { color: MUTED },
-    footerActionLink: { color: PAPER, fontWeight: "700" },
+    footerActionLink: { color: ACCENT, fontWeight: "700" },
     footerPagesLink: { color: MUTED },
-    formFieldAction: { color: PAPER },
-    formResendCodeLink: { color: PAPER },
-    identityPreviewEditButton: { color: PAPER },
+    formFieldAction: { color: ACCENT },
+    formResendCodeLink: { color: ACCENT },
+    identityPreviewEditButton: { color: ACCENT },
     formButtonPrimary: {
-      backgroundColor: PAPER,
-      color: INK,
-      borderRadius: "0px",
-      fontWeight: "800",
-      minHeight: "3.25rem",
+      backgroundColor: INK,
+      color: "#FFFFFF",
+      borderRadius: "14px",
+      fontWeight: "700",
+      minHeight: "3.1rem",
     },
     footer: {
       backgroundColor: "transparent",
@@ -54,10 +64,9 @@ export const authWebAppearance = {
     badge: { display: "none" as const },
     poweredByClerk: { display: "none" as const },
     card: {
-      backgroundColor: "#111110",
+      backgroundColor: "transparent",
       boxShadow: "none",
-      border: `1px solid ${LINE}`,
-      borderRadius: "0px",
+      border: "none",
       width: "100%",
     },
     rootBox: {
@@ -65,49 +74,49 @@ export const authWebAppearance = {
       maxWidth: "28rem",
     },
     header: {
-      // The Rook shell renders the product heading and uses the same editorial
-      // type scale as the landing page, so Clerk's duplicate header is hidden.
+      // The Rook shell renders the product heading, so Clerk's duplicate
+      // header is hidden.
       display: "none" as const,
     },
     socialButtons: {
       width: "100%",
       display: "flex",
       flexDirection: "column",
-      gap: "0.65rem",
+      gap: "0.6rem",
     },
     socialButtonsIconButton: {
       width: "100%",
-      minHeight: "3.25rem",
-      borderRadius: "0px",
+      minHeight: "3.1rem",
+      borderRadius: "14px",
       border: `1px solid ${LINE}`,
-      backgroundColor: "#171716",
-      color: PAPER,
+      backgroundColor: SURFACE_ALT,
+      color: INK,
     },
     socialButtonsBlockButton: {
       width: "100%",
-      minHeight: "3.25rem",
+      minHeight: "3.1rem",
       justifyContent: "flex-start",
       paddingInline: "1rem",
-      borderRadius: "0px",
+      borderRadius: "14px",
       border: `1px solid ${LINE}`,
-      backgroundColor: "#171716",
-      color: PAPER,
+      backgroundColor: SURFACE_ALT,
+      color: INK,
       fontSize: "0.94rem",
       fontWeight: "700",
     },
     dividerLine: { backgroundColor: LINE },
     dividerText: { color: MUTED },
-    formFieldLabel: { color: PAPER, fontWeight: "700" },
+    formFieldLabel: { color: INK, fontWeight: "700" },
     formFieldInput: {
-      minHeight: "3.25rem",
-      borderRadius: "0px",
+      minHeight: "3.1rem",
+      borderRadius: "14px",
       border: `1px solid ${LINE}`,
-      backgroundColor: "#171716",
-      color: PAPER,
+      backgroundColor: SURFACE_ALT,
+      color: INK,
     },
     formFieldInputFocused: {
-      border: `1px solid ${PAPER}`,
-      boxShadow: "0 0 0 2px rgba(241, 240, 235, 0.12)",
+      border: `1px solid ${ACCENT}`,
+      boxShadow: "0 0 0 3px rgba(14, 124, 89, 0.14)",
     },
     formButtonReset: { color: MUTED },
   },

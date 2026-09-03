@@ -12,6 +12,7 @@ import {
 
 import { EarthGlobe } from "@/components/earth-globe";
 import { RookLogo } from "@/components/rook-logo";
+import { tint, useRookTheme } from "@/lib/ui";
 
 const POSIX_INSTALL_COMMAND =
   "curl -fsSL https://www.rook.lighting/api/download/cli/install.sh | sh";
@@ -20,8 +21,14 @@ const POWERSHELL_INSTALL_COMMAND =
 
 type InstallShell = "posix" | "powershell";
 
+/**
+ * The public landing page. Kept in the same warm/ink token system and
+ * rounded language as the signed-in workroom so the very first thing a
+ * visitor sees doesn't feel like a different product.
+ */
 export default function RookLandingPage() {
   const router = useRouter();
+  const { colors } = useRookTheme();
   const { width } = useWindowDimensions();
   const isWide = width >= 980;
   const [shell] = useState<InstallShell>(
@@ -54,22 +61,20 @@ export default function RookLandingPage() {
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: "#080808" }}>
+    <View style={{ flex: 1, backgroundColor: colors.canvas }}>
       <ScrollView
         contentContainerStyle={{ minHeight: "100%" }}
         showsVerticalScrollIndicator={false}
       >
-        <View
-          style={{ flex: 1, backgroundColor: "#080808", overflow: "hidden" }}
-        >
+        <View style={{ flex: 1, overflow: "hidden" }}>
           <View
             style={{
               width: "100%",
-              maxWidth: 1440,
-              minHeight: isWide ? 820 : 900,
+              maxWidth: 1180,
+              minHeight: isWide ? 800 : 860,
               alignSelf: "center",
-              paddingHorizontal: isWide ? 42 : 20,
-              paddingTop: 22,
+              paddingHorizontal: isWide ? 32 : 20,
+              paddingTop: 20,
               paddingBottom: 34,
             }}
           >
@@ -81,12 +86,13 @@ export default function RookLandingPage() {
             <View
               style={{
                 position: "absolute",
-                top: isWide ? 95 : 388,
-                right: isWide ? -28 : -105,
-                width: isWide ? "61%" : 540,
-                height: isWide ? 680 : 540,
-                opacity: isWide ? 1 : 0.86,
+                top: isWide ? 70 : 372,
+                right: isWide ? -10 : -95,
+                width: isWide ? "56%" : 480,
+                height: isWide ? 620 : 480,
+                opacity: isWide ? 0.92 : 0.7,
               }}
+              pointerEvents="none"
             >
               <EarthGlobe />
             </View>
@@ -95,60 +101,70 @@ export default function RookLandingPage() {
               style={{
                 flex: 1,
                 position: "relative",
-                paddingTop: isWide ? 98 : 58,
+                paddingTop: isWide ? 84 : 52,
                 justifyContent: "space-between",
               }}
             >
-              <View style={{ maxWidth: isWide ? 690 : 620 }}>
+              <View style={{ maxWidth: isWide ? 640 : 600 }}>
                 <View
                   style={{
                     flexDirection: "row",
                     alignItems: "center",
-                    gap: 10,
+                    gap: 8,
+                    alignSelf: "flex-start",
+                    backgroundColor: colors.surfaceAlt,
+                    borderRadius: 999,
+                    paddingHorizontal: 12,
+                    paddingVertical: 6,
                   }}
                 >
                   <View
-                    style={{ width: 7, height: 7, backgroundColor: "#f1f0eb" }}
+                    style={{
+                      width: 6,
+                      height: 6,
+                      borderRadius: 3,
+                      backgroundColor: colors.accent,
+                    }}
                   />
                   <Text
                     style={{
-                      color: "#aba9a2",
-                      fontSize: 10.5,
-                      fontWeight: "800",
-                      letterSpacing: 1.7,
+                      color: colors.textSoft,
+                      fontSize: 11.5,
+                      fontWeight: "700",
+                      letterSpacing: 0.3,
                     }}
                   >
-                    ROOK / 01 — PERSONAL OPERATIONS
+                    Your Bot-first AI workroom
                   </Text>
                 </View>
 
                 <Text
                   style={{
-                    color: "#f1f0eb",
-                    fontSize: isWide ? 74 : 49,
-                    lineHeight: isWide ? 70 : 48,
-                    fontWeight: "700",
-                    letterSpacing: isWide ? -5.2 : -3.3,
-                    marginTop: 30,
-                    maxWidth: isWide ? 650 : 510,
+                    color: colors.text,
+                    fontSize: isWide ? 60 : 42,
+                    lineHeight: isWide ? 62 : 46,
+                    fontWeight: "800",
+                    letterSpacing: isWide ? -2.4 : -1.4,
+                    marginTop: 22,
+                    maxWidth: isWide ? 580 : 480,
                   }}
                 >
-                  WORK WITH{"\n"}
-                  <Text style={{ color: "#77756e" }}>GRAVITY.</Text>
+                  Calm Bots.{"\n"}
+                  <Text style={{ color: colors.accent }}>Real work.</Text>
                 </Text>
 
                 <Text
                   style={{
-                    color: "#c9c7c0",
+                    color: colors.textSoft,
                     fontSize: 16,
                     lineHeight: 25,
-                    marginTop: 27,
-                    maxWidth: 435,
+                    marginTop: 20,
+                    maxWidth: 440,
                   }}
                 >
-                  A deliberate workspace for capable Bots. Keep real work close,
-                  direct every meaningful step, and bring your own computer in
-                  only when it matters.
+                  A deliberate workspace for capable Bots. Keep real work
+                  close, direct every meaningful step, and bring your own
+                  computer in only when it matters.
                 </Text>
 
                 <View
@@ -156,60 +172,41 @@ export default function RookLandingPage() {
                     flexDirection: isWide ? "row" : "column",
                     alignItems: isWide ? "center" : "stretch",
                     gap: 10,
-                    marginTop: 36,
-                    maxWidth: isWide ? 690 : 510,
+                    marginTop: 28,
+                    maxWidth: isWide ? 640 : 480,
                   }}
                 >
                   <Pressable
                     accessibilityRole="button"
-                    accessibilityLabel="Copy Rook CLI install command"
-                    onPress={() => void copyInstaller()}
+                    accessibilityLabel="Get started with Rook"
+                    onPress={() => router.push("/sign-up" as never)}
                     style={({ pressed }) => ({
-                      height: 52,
-                      flex: 1,
-                      minWidth: 0,
+                      height: 54,
                       flexDirection: "row",
                       alignItems: "center",
-                      gap: 9,
-                      paddingHorizontal: 13,
-                      borderWidth: 1,
-                      borderColor: "#474640",
-                      backgroundColor: "#111110",
-                      opacity: pressed ? 0.68 : 1,
+                      justifyContent: "center",
+                      gap: 8,
+                      paddingHorizontal: 22,
+                      borderRadius: 18,
+                      backgroundColor: colors.ink,
+                      opacity: pressed ? 0.82 : 1,
                     })}
                   >
+                    <Text
+                      style={{
+                        color: colors.onInk,
+                        fontSize: 15,
+                        fontWeight: "700",
+                        letterSpacing: -0.2,
+                      }}
+                    >
+                      Get started free
+                    </Text>
                     <MaterialIcons
-                      name={copied ? "check" : "terminal"}
-                      size={16}
-                      color={copied ? "#f1f0eb" : "#8f8d86"}
+                      name="arrow-forward"
+                      size={17}
+                      color={colors.onInk}
                     />
-                    <Text
-                      selectable
-                      numberOfLines={1}
-                      style={{
-                        flex: 1,
-                        color: "#cfcdc6",
-                        fontFamily: Platform.select({
-                          ios: "Menlo",
-                          android: "monospace",
-                          default:
-                            "ui-monospace, SFMono-Regular, Menlo, monospace",
-                        }),
-                        fontSize: 11.5,
-                      }}
-                    >
-                      $ {installCommand}
-                    </Text>
-                    <Text
-                      style={{
-                        color: copied ? "#f1f0eb" : "#85837c",
-                        fontSize: 10.5,
-                        fontWeight: "800",
-                        letterSpacing: 0.5,
-                      }}
-                    >
-                      {copied ? "COPIED" : "COPY"}
-                    </Text>
                   </Pressable>
 
                   <Pressable
@@ -217,23 +214,30 @@ export default function RookLandingPage() {
                     accessibilityLabel="Open Rook downloads"
                     onPress={() => router.push("/download" as never)}
                     style={({ pressed }) => ({
-                      height: 52,
+                      height: 54,
                       flexDirection: "row",
                       alignItems: "center",
                       justifyContent: "center",
-                      gap: 9,
-                      paddingHorizontal: 18,
-                      backgroundColor: "#f1f0eb",
-                      opacity: pressed ? 0.76 : 1,
+                      gap: 8,
+                      paddingHorizontal: 20,
+                      borderRadius: 18,
+                      borderWidth: 1,
+                      borderColor: colors.lineStrong,
+                      backgroundColor: colors.surface,
+                      opacity: pressed ? 0.72 : 1,
                     })}
                   >
-                    <MaterialIcons name="download" size={18} color="#090909" />
+                    <MaterialIcons
+                      name="download"
+                      size={18}
+                      color={colors.text}
+                    />
                     <Text
                       style={{
-                        color: "#090909",
-                        fontSize: 13,
-                        fontWeight: "900",
-                        letterSpacing: -0.2,
+                        color: colors.text,
+                        fontSize: 14.5,
+                        fontWeight: "700",
+                        letterSpacing: -0.1,
                       }}
                     >
                       Download Rook
@@ -241,70 +245,100 @@ export default function RookLandingPage() {
                   </Pressable>
                 </View>
 
-                <Text
-                  style={{
-                    color: "#77756e",
-                    fontSize: 11.5,
-                    lineHeight: 17,
-                    marginTop: 11,
-                    maxWidth: 620,
-                  }}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Copy Rook CLI install command"
+                  onPress={() => void copyInstaller()}
+                  style={({ pressed }) => ({
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 9,
+                    alignSelf: "flex-start",
+                    marginTop: 14,
+                    paddingHorizontal: 14,
+                    paddingVertical: 10,
+                    borderRadius: 14,
+                    backgroundColor: colors.surfaceAlt,
+                    maxWidth: "100%",
+                    opacity: pressed ? 0.7 : 1,
+                  })}
                 >
-                  The CLI installer fetches the current published release,
-                  installs for your user account, and verifies Rook before it
-                  finishes.
-                </Text>
+                  <MaterialIcons
+                    name={copied ? "check" : "terminal"}
+                    size={15}
+                    color={copied ? colors.accent : colors.textFaint}
+                  />
+                  <Text
+                    selectable
+                    numberOfLines={1}
+                    style={{
+                      flexShrink: 1,
+                      color: colors.textSoft,
+                      fontFamily: Platform.select({
+                        ios: "Menlo",
+                        android: "monospace",
+                        default:
+                          "ui-monospace, SFMono-Regular, Menlo, monospace",
+                      }),
+                      fontSize: 11.5,
+                    }}
+                  >
+                    {installCommand}
+                  </Text>
+                  <Text
+                    style={{
+                      color: copied ? colors.accent : colors.textFaint,
+                      fontSize: 10.5,
+                      fontWeight: "800",
+                      letterSpacing: 0.4,
+                    }}
+                  >
+                    {copied ? "COPIED" : "COPY"}
+                  </Text>
+                </Pressable>
               </View>
 
               <View
                 style={{
-                  marginTop: isWide ? 92 : 80,
-                  borderTopWidth: 1,
-                  borderTopColor: "#35342f",
+                  marginTop: isWide ? 76 : 56,
                   flexDirection: isWide ? "row" : "column",
+                  gap: 12,
                 }}
               >
-                <EditorialDetail
-                  index="01"
+                <FeatureCard
+                  icon="badge"
                   title="A clear role"
                   detail="Shape focused teammates around the context and tools they need."
-                  bordered={isWide}
                 />
-                <EditorialDetail
-                  index="02"
+                <FeatureCard
+                  icon="shield"
                   title="Control stays close"
                   detail="Bring Rook Node into the loop when work needs your own machine."
-                  bordered={isWide}
                 />
-                <EditorialDetail
-                  index="03"
+                <FeatureCard
+                  icon="fact-check"
                   title="Intent before action"
                   detail="Review consequential external steps before they leave your workspace."
-                  bordered={false}
                 />
               </View>
             </View>
 
             <View
               style={{
-                marginTop: 42,
-                paddingTop: 17,
+                marginTop: 32,
+                paddingTop: 18,
                 borderTopWidth: 1,
-                borderTopColor: "#35342f",
+                borderTopColor: colors.line,
                 flexDirection: "row",
                 justifyContent: "space-between",
                 gap: 20,
               }}
             >
-              <Text
-                style={{ color: "#737169", fontSize: 10.5, letterSpacing: 0.3 }}
-              >
-                © {new Date().getFullYear()} ROOK
+              <Text style={{ color: colors.textFaint, fontSize: 11.5 }}>
+                © {new Date().getFullYear()} Rook
               </Text>
-              <Text
-                style={{ color: "#737169", fontSize: 10.5, letterSpacing: 0.3 }}
-              >
-                BUILT FOR DELIBERATE WORK
+              <Text style={{ color: colors.textFaint, fontSize: 11.5 }}>
+                Built for deliberate work
               </Text>
             </View>
           </View>
@@ -321,6 +355,7 @@ function LandingHeader({
   onSignIn: () => void;
   onSignUp: () => void;
 }) {
+  const { colors } = useRookTheme();
   return (
     <View
       style={{
@@ -328,48 +363,47 @@ function LandingHeader({
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "space-between",
-        borderBottomWidth: 1,
-        borderBottomColor: "#35342f",
-        paddingBottom: 16,
       }}
     >
       <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
         <View
           style={{
-            width: 30,
-            height: 30,
+            width: 32,
+            height: 32,
+            borderRadius: 11,
             alignItems: "center",
             justifyContent: "center",
-            backgroundColor: "#f1f0eb",
+            backgroundColor: colors.ink,
           }}
         >
-          <RookLogo size={20} color="#090909" />
+          <RookLogo size={20} color={colors.onInk} />
         </View>
         <Text
           style={{
-            color: "#f1f0eb",
+            color: colors.text,
             fontSize: 15,
-            fontWeight: "900",
-            letterSpacing: -0.5,
+            fontWeight: "800",
+            letterSpacing: -0.4,
           }}
         >
-          ROOK
+          Rook
         </Text>
       </View>
 
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Sign in to Rook"
           onPress={onSignIn}
           style={({ pressed }) => ({
-            minHeight: 34,
+            minHeight: 36,
             justifyContent: "center",
-            paddingHorizontal: 10,
+            paddingHorizontal: 12,
+            borderRadius: 12,
             opacity: pressed ? 0.62 : 1,
           })}
         >
-          <Text style={{ color: "#c9c7c0", fontSize: 12, fontWeight: "700" }}>
+          <Text style={{ color: colors.textSoft, fontSize: 13, fontWeight: "700" }}>
             Sign in
           </Text>
         </Pressable>
@@ -378,15 +412,15 @@ function LandingHeader({
           accessibilityLabel="Get started with Rook"
           onPress={onSignUp}
           style={({ pressed }) => ({
-            minHeight: 34,
+            minHeight: 36,
             justifyContent: "center",
-            paddingHorizontal: 11,
-            borderWidth: 1,
-            borderColor: "#77756e",
-            opacity: pressed ? 0.62 : 1,
+            paddingHorizontal: 14,
+            borderRadius: 12,
+            backgroundColor: colors.surfaceAlt,
+            opacity: pressed ? 0.7 : 1,
           })}
         >
-          <Text style={{ color: "#f1f0eb", fontSize: 12, fontWeight: "800" }}>
+          <Text style={{ color: colors.text, fontSize: 13, fontWeight: "700" }}>
             Get started
           </Text>
         </Pressable>
@@ -395,53 +429,57 @@ function LandingHeader({
   );
 }
 
-function EditorialDetail({
-  index,
+function FeatureCard({
+  icon,
   title,
   detail,
-  bordered,
 }: {
-  index: string;
+  icon: keyof typeof MaterialIcons.glyphMap;
   title: string;
   detail: string;
-  bordered: boolean;
 }) {
+  const { colors } = useRookTheme();
   return (
     <View
       style={{
         flex: 1,
-        minHeight: 144,
-        paddingTop: 18,
-        paddingRight: 24,
-        paddingBottom: 18,
-        paddingLeft: bordered ? 24 : 0,
-        borderLeftWidth: bordered ? 1 : 0,
-        borderLeftColor: "#35342f",
+        borderRadius: 20,
+        borderWidth: 1,
+        borderColor: colors.line,
+        backgroundColor: colors.surface,
+        padding: 18,
       }}
     >
-      <Text
+      <View
         style={{
-          color: "#8f8d86",
-          fontSize: 10,
-          fontWeight: "900",
-          letterSpacing: 1.4,
+          width: 36,
+          height: 36,
+          borderRadius: 12,
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: tint(colors.accent, 0.12),
         }}
       >
-        {index}
-      </Text>
+        <MaterialIcons name={icon} size={17} color={colors.accent} />
+      </View>
       <Text
         style={{
-          color: "#f1f0eb",
-          fontSize: 15,
-          fontWeight: "800",
-          letterSpacing: -0.4,
-          marginTop: 27,
+          color: colors.text,
+          fontSize: 14.5,
+          fontWeight: "700",
+          letterSpacing: -0.2,
+          marginTop: 14,
         }}
       >
         {title}
       </Text>
       <Text
-        style={{ color: "#99978f", fontSize: 12, lineHeight: 18, marginTop: 7 }}
+        style={{
+          color: colors.textFaint,
+          fontSize: 12.5,
+          lineHeight: 18,
+          marginTop: 6,
+        }}
       >
         {detail}
       </Text>
