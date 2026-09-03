@@ -78,7 +78,7 @@ jobs:
       - name: Stage sidecar placeholder for tauri-build
         shell: bash
         run: |
-          mkdir -p binaries resources/chromium
+          mkdir -p binaries resources/chromium ../dist-app
           if [ "${{ runner.os }}" = "Windows" ]; then
             echo "placeholder" > binaries/rook-node-sidecar-x86_64-pc-windows-msvc.exe
           elif [ "${{ runner.os }}" = "macOS" ]; then
@@ -87,7 +87,10 @@ jobs:
             echo "placeholder" > binaries/rook-node-sidecar-x86_64-unknown-linux-gnu
           fi
           echo "placeholder" > resources/chromium/.keep
-          ls -la binaries resources/chromium
+          # tauri::generate_context! validates frontendDist exists at compile
+          # time even for `cargo check`, so stage a minimal dist-app too.
+          echo "<!doctype html><title>placeholder</title>" > ../dist-app/index.html
+          ls -la binaries resources/chromium ../dist-app
       - name: cargo check
         id: cargochk
         shell: bash
