@@ -49,9 +49,11 @@ export const authWebAppearance = {
     formButtonPrimary: {
       backgroundColor: INK,
       color: "#FFFFFF",
+      border: "none",
       borderRadius: "14px",
       fontWeight: "700",
       minHeight: "3.1rem",
+      boxShadow: "none",
     },
     footer: {
       backgroundColor: "transparent",

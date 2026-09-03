@@ -64,11 +64,13 @@ import {
 } from "@/lib/chat-markdown";
 import { splitMathNotation } from "@/lib/math-notation";
 import {
-  approvalReason,
+  assessRisk,
   fileSizeLabel,
-  requiresApproval,
+  guessDeliverableTitle,
+  isDeliverableWorthy,
+  wordCount,
 } from "@/lib/workroom-helpers";
-import { useWorkroom, type Bot } from "@/lib/workroom-store";
+import { useWorkroom, type Bot, type WorkMessage } from "@/lib/workroom-store";
 
 /**
  * Rook is one room.
@@ -201,7 +203,11 @@ export default function ChatScreen() {
       );
       return;
     }
-    const requiresReview = requiresApproval(clean);
+    // Auto-Review: classify risk into Low/Medium/High rather than a single
+    // approve-or-not boolean. Low risk (drafting, research, reading) never
+    // creates approval friction; only Medium/High pause for a decision.
+    const risk = assessRisk(clean);
+    const requiresReview = risk.tier !== "Low";
     const task = workroom.addTask({
       botId: activeBot.id,
       title: clean.length > 52 ? `${clean.slice(0, 52)}…` : clean,
@@ -212,7 +218,7 @@ export default function ChatScreen() {
       nextAction: requiresReview
         ? "Review the proposed action."
         : "Review the result and decide what happens next.",
-      risk: requiresReview ? "Medium" : "Low",
+      risk: risk.tier,
       steps: [
         {
           id: "scope",
@@ -234,8 +240,8 @@ export default function ChatScreen() {
       workroom.addApproval({
         botId: activeBot.id,
         title: task.title,
-        detail: approvalReason(clean),
-        risk: "Medium",
+        detail: risk.reason,
+        risk: risk.tier === "High" ? "High" : "Medium",
       });
       void sendTaskAlert({
         kind: "approval",
@@ -247,7 +253,7 @@ export default function ChatScreen() {
         botId: activeBot.id,
         author: "bot",
         conversationId: activeChatId,
-        body: `I can prepare the work, but I need your approval before this step. ${approvalReason(clean)}`,
+        body: `I can prepare the work, but I need your approval before this step. ${risk.reason}`,
         kind: "approval",
         taskId: task.id,
       });
@@ -311,7 +317,11 @@ export default function ChatScreen() {
         author: "bot",
         conversationId: activeChatId,
         body: response.text,
-        kind: response.approvals.length ? "approval" : "message",
+        kind: response.approvals.length
+          ? "approval"
+          : isDeliverableWorthy(response.text)
+            ? "result"
+            : "message",
         trace: response.trace,
         taskId: task.id,
       });
@@ -938,6 +948,33 @@ export default function ChatScreen() {
                               {message.createdAt}
                             </Text>
                           </View>
+                        );
+                      }
+                      if (message.kind === "result") {
+                        return (
+                          <DeliverableCard
+                            key={message.id}
+                            message={message}
+                            bot={source}
+                            onSave={() => {
+                              const title = guessDeliverableTitle(
+                                message.body,
+                              );
+                              workroom.addFile({
+                                name: `${title}.md`,
+                                size: fileSizeLabel(message.body.length),
+                                scope: "Selected-Bot shared",
+                                owner: source?.name ?? "Rook",
+                              });
+                              workroom.addMessage({
+                                botId: message.botId,
+                                author: "system",
+                                conversationId: activeChatId,
+                                body: `Saved “${title}” to Library → Files.`,
+                                kind: "activity",
+                              });
+                            }}
+                          />
                         );
                       }
                       if (message.kind === "approval") {
@@ -1698,6 +1735,146 @@ function renderInlineMarkdown(
         </Text>
       );
     }),
+  );
+}
+
+function DeliverableCard({
+  message,
+  bot,
+  onSave,
+}: {
+  message: WorkMessage;
+  bot?: Bot;
+  onSave: () => void;
+}) {
+  const { colors } = useRookTheme();
+  const [saved, setSaved] = useState(false);
+  const title = useMemo(() => guessDeliverableTitle(message.body), [message.body]);
+  const words = useMemo(() => wordCount(message.body), [message.body]);
+
+  const handleSave = () => {
+    if (saved) return;
+    onSave();
+    setSaved(true);
+  };
+
+  return (
+    <View
+      style={{
+        flexDirection: "row",
+        gap: 10,
+        maxWidth: "100%",
+      }}
+    >
+      <View style={{ width: 28, alignItems: "center" }}>
+        <Avatar
+          label={bot?.avatar ?? "?"}
+          color={bot?.color}
+          icon={bot?.icon}
+          size={28}
+        />
+      </View>
+      <View
+        style={{
+          flex: 1,
+          minWidth: 0,
+          borderRadius: 18,
+          borderWidth: 1,
+          borderColor: colors.line,
+          backgroundColor: colors.surface,
+          overflow: "hidden",
+        }}
+      >
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "flex-start",
+            gap: 10,
+            padding: 14,
+            paddingBottom: 10,
+          }}
+        >
+          <View
+            style={{
+              width: 34,
+              height: 34,
+              borderRadius: 12,
+              alignItems: "center",
+              justifyContent: "center",
+              backgroundColor: tint(colors.accent, 0.12),
+            }}
+          >
+            <MaterialIcons name="description" size={17} color={colors.accent} />
+          </View>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text
+              numberOfLines={2}
+              style={{
+                color: colors.text,
+                fontSize: 14.5,
+                fontWeight: "700",
+                letterSpacing: -0.2,
+              }}
+            >
+              {title}
+            </Text>
+            <Text
+              style={{
+                color: colors.textFaint,
+                fontSize: 11.5,
+                marginTop: 2,
+              }}
+            >
+              {words} words · Result
+            </Text>
+          </View>
+        </View>
+
+        <View
+          style={{
+            paddingHorizontal: 14,
+            paddingBottom: 12,
+          }}
+        >
+          <ChatMarkdown text={message.body} color={colors.text} baseSize={13.5} />
+        </View>
+
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={saved ? "Saved to Library" : "Save to Library"}
+          onPress={handleSave}
+          disabled={saved}
+          style={({ pressed }) => [
+            {
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 7,
+              minHeight: 44,
+              borderTopWidth: 1,
+              borderTopColor: colors.line,
+              backgroundColor: colors.surfaceAlt,
+            },
+            pressed && !saved && { opacity: 0.72 },
+          ]}
+        >
+          <MaterialIcons
+            name={saved ? "check" : "save-alt"}
+            size={16}
+            color={saved ? colors.mint : colors.textSoft}
+          />
+          <Text
+            style={{
+              color: saved ? colors.mint : colors.textSoft,
+              fontSize: 13,
+              fontWeight: "700",
+            }}
+          >
+            {saved ? "Saved to Library" : "Save to Library"}
+          </Text>
+        </Pressable>
+      </View>
+    </View>
   );
 }
 
