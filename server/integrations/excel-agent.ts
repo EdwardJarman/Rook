@@ -96,11 +96,15 @@ export async function runRookAgent(input: {
 
   const connection = isMicrosoftExcelConfigured()
     ? await microsoftConnectionStatus(input.userId)
-    : { configured: false, connected: false, needsReauthorization: false };
+    : { configured: false, connected: false, needsReauthorization: false, accounts: [] as Awaited<ReturnType<typeof microsoftConnectionStatus>>["accounts"] };
   const tools = connection.connected ? EXCEL_TOOLS : undefined;
   const excelSelected = input.connectors?.includes("microsoft-excel") === true;
   const connectionNote = connection.connected
-    ? `Microsoft Excel is connected.${excelSelected ? " The user explicitly attached Microsoft Excel to this message, so treat workbook context as relevant and use the tools when needed." : ""} Use the Excel tools whenever the user asks about a workbook. Never guess workbook, worksheet, range, table, value, or formula data: inspect it with tools. Read tools may run immediately. Every write tool is only a proposal and is never executed until the user approves it in Rook Updates. Prepare no more than one write action per turn unless the user explicitly requests a batch.`
+    ? `Microsoft Excel is connected.${excelSelected ? " The user explicitly attached Microsoft Excel to this message, so treat workbook context as relevant and use the tools when needed." : ""}${
+        connection.accounts.length > 1
+          ? ` The user has ${connection.accounts.length} Microsoft accounts connected (${connection.accounts.map((account) => account.email || account.displayName || account.accountId).join(", ")}). Tools default to the primary account; pass account_id when the user names a different one.`
+          : ""
+      } Use the Excel tools whenever the user asks about a workbook. Never guess workbook, worksheet, range, table, value, or formula data: inspect it with tools. Read tools may run immediately. Every write tool is only a proposal and is never executed until the user approves it in Rook Updates. Prepare no more than one write action per turn unless the user explicitly requests a batch.`
     : connection.needsReauthorization
       ? "Microsoft Excel needs to be reconnected. Tell the user to open Account → Microsoft Excel and reconnect it if this request needs workbook access."
       : connection.configured

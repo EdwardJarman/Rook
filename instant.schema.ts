@@ -31,7 +31,8 @@ const _schema = i.schema({
       updatedAt: i.date(),
     }),
     microsoftConnections: i.entity({
-      userId: i.string().unique().indexed(),
+      accountId: i.string().unique().indexed(),
+      userId: i.string().indexed(),
       microsoftUserId: i.string(),
       displayName: i.string().optional(),
       email: i.string().optional(),
@@ -40,6 +41,7 @@ const _schema = i.schema({
       expiresAt: i.date().indexed(),
       scopes: i.string(),
       status: i.string().indexed(),
+      isPrimary: i.boolean().optional(),
       createdAt: i.date(),
       updatedAt: i.date(),
     }),
