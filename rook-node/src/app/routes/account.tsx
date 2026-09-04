@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { LogOut, Trash2, Download, Mail, Calendar } from "lucide-react";
-import { useAuth, useUser } from "@clerk/clerk-react";
+import { useSafeAuth } from "@/lib/safe-auth";
 
 import {
   Button,
@@ -15,8 +15,7 @@ import { useTheme } from "@/lib/theme";
 
 export function AccountPage() {
   const { tokens } = useTheme();
-  const { signOut } = useAuth();
-  const { user, isLoaded } = useUser();
+  const { signOut, user, isLoaded } = useSafeAuth();
 
   if (!isLoaded) {
     return (
@@ -60,9 +59,7 @@ export function AccountPage() {
               fontWeight: 800,
             }}
           >
-            {(user?.firstName ?? user?.username ?? user?.emailAddresses[0]?.emailAddress ?? "R")
-              .slice(0, 1)
-              .toUpperCase()}
+            {(user?.initials ?? "R")}
           </div>
           <div style={{ minWidth: 0, flex: 1 }}>
             <div
@@ -73,13 +70,13 @@ export function AccountPage() {
                 letterSpacing: -0.2,
               }}
             >
-              {user?.fullName ?? user?.username ?? "Rook user"}
+              {user?.fullName ?? "Rook user"}
             </div>
             <div style={{ fontSize: 13, color: tokens.textSoft, display: "flex", alignItems: "center", gap: 6 }}>
-              <Mail size={13} /> {user?.emailAddresses[0]?.emailAddress ?? "—"}
+              <Mail size={13} /> {user?.email ?? "—"}
             </div>
             <div style={{ fontSize: 12, color: tokens.textFaint, marginTop: 4, display: "flex", alignItems: "center", gap: 6 }}>
-              <Calendar size={12} /> Joined {user?.createdAt ? new Date(user.createdAt).toLocaleDateString() : "—"}
+              <Calendar size={12} /> Joined {user?.joinedAt ? new Date(user.joinedAt).toLocaleDateString() : "—"}
             </div>
           </div>
           <Pill label="Active" tone="mint" />
@@ -111,7 +108,7 @@ export function AccountPage() {
         <Button
           variant="secondary"
           onClick={() => {
-            void signOut({ redirectUrl: "/sign-in" });
+            signOut();
           }}
         >
           <LogOut size={14} /> Sign out

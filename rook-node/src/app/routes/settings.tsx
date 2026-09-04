@@ -4,12 +4,12 @@ import { Sun, Moon, Monitor, Copy, LogOut } from "lucide-react";
 import { Button, Card, Field, Input, Pill, Segmented, Switch } from "@/components/primitives";
 import { useTheme, type Scheme } from "@/lib/theme";
 import { useNodeStatus } from "@/lib/use-node-status";
-import { useAuth } from "@clerk/clerk-react";
+import { useSafeAuth } from "@/lib/safe-auth";
 
 export function SettingsPage() {
   const { tokens, scheme, setScheme } = useTheme();
   const status = useNodeStatus();
-  const { signOut } = useAuth();
+  const { signOut } = useSafeAuth();
   const [runOnLogin, setRunOnLogin] = useState(false);
   const [serverUrl, setServerUrl] = useState<string>(status.serverUrl ?? "");
 
@@ -103,7 +103,7 @@ export function SettingsPage() {
           <Button
             variant="secondary"
             onClick={() => {
-              void signOut({ redirectUrl: "/sign-in" });
+              signOut();
             }}
           >
             <LogOut size={14} /> Sign out

@@ -7,6 +7,7 @@ import { LibraryPage } from "@/routes/library";
 import { FilesPage } from "@/routes/files";
 import { ComputerPage } from "@/routes/computer";
 import { ApprovalsPage } from "@/routes/approvals";
+import { ActivityPage } from "@/routes/activity";
 import { AccountPage } from "@/routes/account";
 import { SettingsPage } from "@/routes/settings";
 
@@ -21,6 +22,7 @@ export const router = createHashRouter([
       { path: "files", element: <FilesPage /> },
       { path: "computer", element: <ComputerPage /> },
       { path: "approvals", element: <ApprovalsPage /> },
+      { path: "activity", element: <ActivityPage /> },
       { path: "account", element: <AccountPage /> },
       { path: "settings", element: <SettingsPage /> },
       { path: "*", element: <Navigate to="/" replace /> },

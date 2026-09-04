@@ -1,7 +1,8 @@
-import { ClerkProvider, useAuth } from "@clerk/clerk-react";
+import { ClerkProvider, useAuth, useUser } from "@clerk/clerk-react";
 import { type ReactNode, useEffect, useState } from "react";
 
 import { SignInPage } from "@/routes/sign-in";
+import { offlineAuth, SafeAuthProvider, type SafeAuth } from "@/lib/safe-auth";
 
 /**
  * Reads the Clerk publishable key from Vite env. The Tauri shell injects
@@ -32,7 +33,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
 function AuthGateInner({ children }: { children: ReactNode }) {
   // Clerk's `isSignedIn` is null while loading.
-  const { isSignedIn, isLoaded } = useAuth();
+  const { isSignedIn, isLoaded, signOut } = useAuth();
+  const { user } = useUser();
   const [timedOut, setTimedOut] = useState(false);
   // If Clerk never finishes loading (network blocked, key invalid, etc.)
   // surface a clear error after 8 s rather than hanging on "Loading…".
@@ -41,17 +43,39 @@ function AuthGateInner({ children }: { children: ReactNode }) {
     const id = setTimeout(() => setTimedOut(true), 8_000);
     return () => clearTimeout(id);
   }, [isLoaded]);
+  const safeAuth: SafeAuth = {
+    mode: "clerk",
+    isLoaded: Boolean(isLoaded),
+    isSignedIn: Boolean(isSignedIn),
+    user: user
+      ? {
+          fullName: user.fullName ?? user.username ?? null,
+          email: user.emailAddresses[0]?.emailAddress ?? null,
+          initials: (
+            user.firstName ??
+            user.username ??
+            user.emailAddresses[0]?.emailAddress ??
+            "R"
+          )
+            .slice(0, 1)
+            .toUpperCase(),
+          joinedAt: user.createdAt ? new Date(user.createdAt).toISOString() : null,
+        }
+      : null,
+    signOut: () => void signOut({ redirectUrl: "/sign-in" }),
+  };
   if (!isLoaded) {
     if (timedOut) return <SignInUnavailableScreen />;
     return <LoadingScreen label="Checking your secure session…" />;
   }
   if (!isSignedIn) return <SignInPage />;
-  return <>{children}</>;
+  return <SafeAuthProvider value={safeAuth}>{children}</SafeAuthProvider>;
 }
 
 function NoClerkKeyScreen({ children }: { children: ReactNode }) {
   return (
     <div style={{ height: "100vh", display: "grid", gridTemplateRows: "1fr auto" }}>
+      <SafeAuthProvider value={offlineAuth}>
       <div
         style={{
           padding: 24,
@@ -62,6 +86,7 @@ function NoClerkKeyScreen({ children }: { children: ReactNode }) {
       >
         {children}
       </div>
+      </SafeAuthProvider>
       <div
         style={{
           padding: "10px 16px",

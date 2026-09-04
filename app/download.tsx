@@ -1,6 +1,6 @@
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import { useRouter } from "expo-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Platform, Pressable, ScrollView, Text, View } from "react-native";
 
 import { RookLogo } from "@/components/rook-logo";
@@ -24,6 +24,67 @@ function directDownloadUrl(artifact: string): string {
   return `${GITHUB_RELEASE_BASE}/${artifact}`;
 }
 
+/**
+ * Live metadata for the latest published release, fetched from the public
+ * GitHub API. Used to (a) show the real version + file size on each card,
+ * (b) mark platforms whose asset is missing from the release as
+ * "Coming soon" instead of linking to a 404. Everything degrades to the
+ * static page if the API is unreachable or rate-limited.
+ */
+type ReleaseInfo = {
+  version: string | null;
+  sizes: Record<string, number>;
+  available: Set<string>;
+};
+
+function useLatestRelease(): ReleaseInfo | null {
+  const [info, setInfo] = useState<ReleaseInfo | null>(null);
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(
+          "https://api.github.com/repos/EdwardJarman/Rook/releases/latest",
+          { headers: { Accept: "application/vnd.github+json" } },
+        );
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          tag_name?: string;
+          assets?: { name?: string; size?: number }[];
+        };
+        if (cancelled || !data.assets) return;
+        const sizes: Record<string, number> = {};
+        const available = new Set<string>();
+        for (const asset of data.assets) {
+          if (asset.name && typeof asset.size === "number") {
+            sizes[asset.name] = asset.size;
+            available.add(asset.name);
+          }
+        }
+        setInfo({
+          version: data.tag_name?.replace(/^v/, "") ?? null,
+          sizes,
+          available,
+        });
+      } catch {
+        // Offline or rate-limited — keep the static page.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return info;
+}
+
+function formatSize(bytes: number): string {
+  if (bytes >= 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  }
+  return `${Math.max(1, Math.round(bytes / (1024 * 1024)))} MB`;
+}
+
 type DownloadTarget = "android" | "windows" | "macArm64" | "macIntel" | "linux";
 type InstallShell = "posix" | "powershell";
 
@@ -31,11 +92,32 @@ function detectedTarget(): DownloadTarget | null {
   if (Platform.OS === "android") return "android";
   if (Platform.OS !== "web" || typeof navigator === "undefined") return null;
   const agent = navigator.userAgent;
+  // Phones first: iOS user agents contain "Mac OS X", and iPadOS masquerades
+  // as desktop Safari, so desktop checks must never run before these.
+  if (/iPhone|iPad|iPod/i.test(agent)) return null; // no iOS app yet
   if (/Android/i.test(agent)) return "android";
+  if (
+    (/Macintosh/.test(agent) && (navigator.maxTouchPoints ?? 0) > 1) || // iPadOS 13+
+    /Windows Phone|Mobile Safari/i.test(agent)
+  ) {
+    return null;
+  }
   if (/Windows NT/i.test(agent)) return "windows";
-  if (/Macintosh|Mac OS X/i.test(agent)) return "macArm64";
+  if (/Macintosh|Mac OS X/i.test(agent)) {
+    // Chrome on Intel Macs reports "Intel Mac OS X 10_15_7"; Apple
+    // silicon reports plain "Mac OS X".
+    return /Intel Mac OS X/i.test(agent) ? "macIntel" : "macArm64";
+  }
   if (/Linux/i.test(agent)) return "linux";
   return null;
+}
+
+/** True when the visitor is on a phone/tablet — they can't run the desktop app. */
+function isPhoneVisitor(): boolean {
+  if (Platform.OS !== "web" || typeof navigator === "undefined") return false;
+  const agent = navigator.userAgent;
+  if (/iPhone|iPad|iPod|Android/i.test(agent)) return true;
+  return /Macintosh/.test(agent) && (navigator.maxTouchPoints ?? 0) > 1;
 }
 
 function open(url: string): void {
@@ -108,6 +190,13 @@ export default function DownloadScreen() {
   const router = useRouter();
   const { colors } = useRookTheme();
   const currentTarget = useMemo(detectedTarget, []);
+  const phone = useMemo(isPhoneVisitor, []);
+  const release = useLatestRelease();
+  const heroDetail = currentTarget ? DETAILS[currentTarget] : null;
+  const heroSize = heroDetail && release ? release.sizes[heroDetail.artifact] : undefined;
+  const heroComingSoon = Boolean(
+    heroDetail && release !== null && !release.available.has(heroDetail.artifact),
+  );
   const [shell, setShell] = useState<InstallShell>(
     Platform.OS === "web" &&
       typeof navigator !== "undefined" &&
@@ -137,10 +226,7 @@ export default function DownloadScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.canvas }}>
-      <ScrollView
-        contentContainerStyle={{ minHeight: "100%" }}
-        showsVerticalScrollIndicator={false}
-      >
+      <ScrollView contentContainerStyle={{ minHeight: "100%" }}>
         <View
           style={{
             width: "100%",
@@ -266,6 +352,107 @@ export default function DownloadScreen() {
               </Text>
             </View>
 
+            {phone ? (
+              <View
+                style={{
+                  marginTop: 30,
+                  borderWidth: 1,
+                  borderColor: colors.lineStrong,
+                  borderRadius: 18,
+                  backgroundColor: colors.surface,
+                  padding: 18,
+                  gap: 8,
+                  maxWidth: 640,
+                }}
+              >
+                <Text
+                  style={{ color: colors.text, fontSize: 17, fontWeight: "800" }}
+                >
+                  You're on a phone — Rook Desktop lives on your computer
+                </Text>
+                <Text
+                  style={{
+                    color: colors.textSoft,
+                    fontSize: 13,
+                    lineHeight: 19,
+                  }}
+                >
+                  The desktop app runs on Windows, macOS, and Linux. Open this
+                  page on your computer to install it — this same address works
+                  everywhere.
+                </Text>
+              </View>
+            ) : heroDetail ? (
+              <View
+                style={{
+                  marginTop: 30,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 16,
+                  flexWrap: "wrap",
+                }}
+              >
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    heroComingSoon
+                      ? `${heroDetail.platform} build coming soon`
+                      : `Download Rook for ${heroDetail.platform}`
+                  }
+                  disabled={heroComingSoon}
+                  onPress={() => open(directDownloadUrl(heroDetail.artifact))}
+                  style={({ pressed }) => ({
+                    minHeight: 62,
+                    paddingHorizontal: 26,
+                    borderRadius: 16,
+                    backgroundColor: colors.ink,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 4,
+                    opacity: heroComingSoon ? 0.5 : pressed ? 0.85 : 1,
+                  })}
+                >
+                  <Text
+                    style={{
+                      color: colors.onInk,
+                      fontSize: 16.5,
+                      fontWeight: "800",
+                      letterSpacing: -0.2,
+                    }}
+                  >
+                    {heroComingSoon
+                      ? `${heroDetail.platform} build coming soon`
+                      : `Download for ${heroDetail.platform}`}
+                  </Text>
+                  {!heroComingSoon ? (
+                    <Text
+                      style={{
+                        color: colors.onInk,
+                        fontSize: 11.5,
+                        fontWeight: "600",
+                        opacity: 0.75,
+                      }}
+                    >
+                      {typeof heroSize === "number" ? `${formatSize(heroSize)} · ` : ""}
+                      {release?.version ? `v${release.version}` : "Free"}
+                    </Text>
+                  ) : null}
+                </Pressable>
+                <Text
+                  style={{
+                    color: colors.textFaint,
+                    fontSize: 12,
+                    lineHeight: 17,
+                    flex: 1,
+                    minWidth: 180,
+                  }}
+                >
+                  {heroDetail.artifact} — free, installs for the current user,
+                  and pairs with your existing Rook account.
+                </Text>
+              </View>
+            ) : null}
+
             <View
               style={{
                 marginTop: 38,
@@ -274,14 +461,23 @@ export default function DownloadScreen() {
                 gap: 12,
               }}
             >
-              {(Object.keys(DETAILS) as DownloadTarget[]).map((target) => (
-                <DownloadCard
-                  key={target}
-                  target={target}
-                  recommended={target === currentTarget}
-                  onPress={() => open(directDownloadUrl(DETAILS[target].artifact))}
-                />
-              ))}
+              {(Object.keys(DETAILS) as DownloadTarget[]).map((target) => {
+                const detail = DETAILS[target];
+                const size = release?.sizes[detail.artifact];
+                const missing =
+                  release !== null && !release.available.has(detail.artifact);
+                return (
+                  <DownloadCard
+                    key={target}
+                    target={target}
+                    recommended={target === currentTarget}
+                    version={release?.version ?? null}
+                    size={typeof size === "number" ? formatSize(size) : null}
+                    comingSoon={missing}
+                    onPress={() => open(directDownloadUrl(detail.artifact))}
+                  />
+                );
+              })}
             </View>
 
             <View
@@ -465,6 +661,38 @@ export default function DownloadScreen() {
                 text="Enter the browser’s one-time code in Rook Node. The uplink starts immediately."
               />
             </View>
+
+            <View
+              style={{
+                marginTop: 43,
+                borderTopWidth: 1,
+                borderColor: colors.line,
+                paddingTop: 22,
+                gap: 11,
+              }}
+            >
+              <Text
+                style={{ color: colors.text, fontSize: 16, fontWeight: "800" }}
+              >
+                Troubleshooting
+              </Text>
+              <Faq
+                q="Windows says 'Windows protected your PC' (SmartScreen)"
+                a="Rook is distributed without a code-signing certificate, so Windows shows this warning on first run. Choose “More info”, then “Run anyway” — you only see it once per install."
+              />
+              <Faq
+                q="macOS says Rook can't be opened"
+                a="After moving Rook to Applications, run this once in Terminal: xattr -cr “/Applications/Rook Node.app”. Then open Rook normally."
+              />
+              <Faq
+                q="The Linux AppImage doesn't start"
+                a="Make it executable first: chmod +x Rook-Node-x86_64.AppImage — then run it. On very minimal systems you may also need libfuse2."
+              />
+              <Faq
+                q="The download didn't start"
+                a="All installers are served directly from GitHub Releases. Open github.com/EdwardJarman/Rook/releases/latest in a browser and grab the file from Assets."
+              />
+            </View>
           </View>
         </View>
       </ScrollView>
@@ -475,10 +703,16 @@ export default function DownloadScreen() {
 function DownloadCard({
   target,
   recommended,
+  version,
+  size,
+  comingSoon,
   onPress,
 }: {
   target: DownloadTarget;
   recommended: boolean;
+  version: string | null;
+  size: string | null;
+  comingSoon: boolean;
   onPress: () => void;
 }) {
   const { colors } = useRookTheme();
@@ -486,17 +720,23 @@ function DownloadCard({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`Download ${detail.title}`}
+      accessibilityLabel={
+        comingSoon
+          ? `${detail.title} — not available yet`
+          : `Download ${detail.title}`
+      }
+      disabled={comingSoon}
       onPress={onPress}
       style={({ pressed }) => ({
         width: 208,
         minHeight: 195,
         padding: 15,
         borderWidth: 1,
-        borderColor: recommended ? colors.accent : colors.line,
+        borderColor:
+          recommended && !comingSoon ? colors.accent : colors.line,
         borderRadius: 16,
         backgroundColor: colors.surface,
-        opacity: pressed ? 0.72 : 1,
+        opacity: comingSoon ? 0.55 : pressed ? 0.72 : 1,
       })}
     >
       <View
@@ -523,7 +763,18 @@ function DownloadCard({
             color={recommended ? colors.mint : colors.textSoft}
           />
         </View>
-        {recommended ? (
+        {comingSoon ? (
+          <Text
+            style={{
+              color: colors.textFaint,
+              fontSize: 10,
+              fontWeight: "900",
+              letterSpacing: 0.6,
+            }}
+          >
+            COMING SOON
+          </Text>
+        ) : recommended ? (
           <Text
             style={{
               color: colors.accent,
@@ -555,8 +806,23 @@ function DownloadCard({
           marginTop: 5,
         }}
       >
-        {detail.artifact}
+        {comingSoon ? "Build in progress — check back shortly" : detail.artifact}
       </Text>
+      {comingSoon ? null : (
+        <Text
+          style={{
+            color: colors.textFaint,
+            fontSize: 11,
+            lineHeight: 15,
+            marginTop: 4,
+            fontWeight: "700",
+          }}
+        >
+          {size ?? null}
+          {size && version ? " · " : null}
+          {version ? `v${version}` : null}
+        </Text>
+      )}
       <Text
         style={{
           color: colors.textSoft,
@@ -607,8 +873,7 @@ function ShellTab({
   );
 }
 
-function Step({ label, text }: { label: string; text: string }) {
-  const { colors } = useRookTheme();
+function Step({ label, text }: { label: string; text: string }) {  const { colors } = useRookTheme();
   return (
     <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 10 }}>
       <View
@@ -636,6 +901,62 @@ function Step({ label, text }: { label: string; text: string }) {
       >
         {text}
       </Text>
+    </View>
+  );
+}
+
+function Faq({ q, a }: { q: string; a: string }) {
+  const { colors } = useRookTheme();
+  const [open, setOpen] = useState(false);
+  return (
+    <View
+      style={{
+        borderWidth: 1,
+        borderColor: colors.line,
+        borderRadius: 12,
+        backgroundColor: colors.surface,
+        overflow: "hidden",
+      }}
+    >
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        aria-expanded={open}
+        onPress={() => setOpen((v) => !v)}
+        style={({ pressed }) => ({
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 12,
+          paddingHorizontal: 14,
+          paddingVertical: 12,
+          opacity: pressed ? 0.72 : 1,
+        })}
+      >
+        <Text
+          style={{ color: colors.text, fontSize: 13, fontWeight: "700", flex: 1 }}
+        >
+          {q}
+        </Text>
+        <MaterialIcons
+          name={open ? "remove" : "add"}
+          size={17}
+          color={colors.textSoft}
+        />
+      </Pressable>
+      {open ? (
+        <Text
+          style={{
+            color: colors.textSoft,
+            fontSize: 12.5,
+            lineHeight: 19,
+            paddingHorizontal: 14,
+            paddingBottom: 13,
+          }}
+        >
+          {a}
+        </Text>
+      ) : null}
     </View>
   );
 }

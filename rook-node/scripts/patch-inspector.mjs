@@ -32,6 +32,10 @@ const replacements = [
 ];
 
 let source = fs.readFileSync(coreBundle, "utf8");
+if (source.includes('return { Session: class { connect() {} post() {} disconnect() {} } };')) {
+  console.log(`[patch-inspector] already patched — skipping (${coreBundle})`);
+  process.exit(0);
+}
 let applied = 0;
 for (const [from, to] of replacements) {
   if (source.includes(from)) {

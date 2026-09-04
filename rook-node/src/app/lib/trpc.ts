@@ -1,7 +1,11 @@
 import { createTRPCReact } from "@trpc/react-query";
 import { httpBatchLink } from "@trpc/client";
 import superjson from "superjson";
-import { initTRPC } from "@trpc/server";
+// NOTE: import `initTRPC` from the browser-safe core subpath. The package
+// root (`@trpc/server`) throws at runtime in a browser bundle —
+// "You're trying to use @trpc/server in a non-server environment" — which
+// blanked every route of the desktop web app.
+import { initTRPC } from "@trpc/server/unstable-core-do-not-import";
 
 import { getApiBaseUrl } from "./api-base";
 
@@ -11,7 +15,9 @@ import { getApiBaseUrl } from "./api-base";
  * router here so the Vite app type-checks standalone; the actual routes run
  * against the live API (see `docs/rook-node.md`).
  */
-const t = initTRPC.create({ transformer: superjson });
+// `allowOutsideOfServer` — the stub router is only used to derive the
+// `AppRouter` type in this browser bundle; no procedures ever execute here.
+const t = initTRPC.create({ transformer: superjson, allowOutsideOfServer: true });
 const stubRouter = t.router({
   workroom: t.router({
     reply: t.procedure.query(() => null),

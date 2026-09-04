@@ -14,7 +14,8 @@ import {
   Image as ImageIcon,
 } from "lucide-react";
 
-import { Avatar, Button, Card, EmptyState, Pill, Spinner } from "@/components/primitives";
+import { Avatar, Button, Card, Pill, Spinner } from "@/components/primitives";
+import { Markdown } from "@/components/markdown";
 import { useTheme } from "@/lib/theme";
 import { useWorkroom, type Message, type Bot } from "@/lib/workroom";
 import { useLinkedFolders } from "@/lib/workspaces";
@@ -51,6 +52,7 @@ export function WorkroomPage() {
     focusChatBot,
     decideApproval,
     setWorkspace,
+    ensureChatTarget,
   } = useWorkroom();
   const { folders: linkedFolders, add: addLinkedFolder } = useLinkedFolders();
   const [composer, setComposer] = useState("");
@@ -72,8 +74,11 @@ export function WorkroomPage() {
 
   const submit = () => {
     const trimmed = composer.trim();
-    if (!trimmed || !activeBot) return;
-    void send(trimmed, attachments);
+    if (!trimmed) return;
+    // Talking always works — even before any Bot exists (a built-in
+    // assistant is provisioned on first send, like Claude/Codex).
+    const botId = ensureChatTarget();
+    void send(trimmed, attachments, botId);
     setComposer("");
     setAttachments([]);
   };
@@ -130,18 +135,13 @@ export function WorkroomPage() {
           }}
         >
           {messages.length === 0 ? (
-            <EmptyState
-              icon={<Sparkles size={20} strokeWidth={2} />}
-              title={
-                activeBot
-                  ? `Say hello to ${activeBot.name}`
-                  : "Pick a Bot to begin"
-              }
-              body={
-                activeBot
-                  ? `${activeBot.role}. I can read and write files, run web tasks, and bring back a result.`
-                  : "Drag a Bot from the sidebar or create a new one in the Bots tab."
-              }
+            <WelcomeHero
+              botName={activeBot?.name ?? "Rook"}
+              hasBots={bots.length > 0}
+              onPick={(s) => {
+                setComposer(s);
+                document.querySelector<HTMLTextAreaElement>("textarea")?.focus();
+              }}
             />
           ) : (
             messages.map((m) => <MessageRow key={m.id} message={m} />)
@@ -157,7 +157,6 @@ export function WorkroomPage() {
           onRemoveAttachment={(name) =>
             setAttachments((a) => a.filter((x) => x !== name))
           }
-          disabled={!activeBot}
           activeBot={activeBot}
         />
       </section>
@@ -298,6 +297,102 @@ export function WorkroomPage() {
           )}
         </Card>
       </aside>
+    </div>
+  );
+}
+
+const SUGGESTIONS = [
+  { icon: "📁", label: "Summarize a folder", text: "Summarize what's in my open workspace folder and flag anything that looks stale." },
+  { icon: "🔍", label: "Research with sources", text: "Research a topic I give you and bring back a short brief with sources." },
+  { icon: "✍️", label: "Draft a document", text: "Draft a one-page status report from the files in this workspace." },
+  { icon: "🧹", label: "Tidy up (ask first)", text: "Find duplicate and old files here, then propose a cleanup plan for my approval." },
+];
+
+function WelcomeHero({
+  botName,
+  hasBots,
+  onPick,
+}: {
+  botName: string;
+  hasBots: boolean;
+  onPick: (suggestion: string) => void;
+}) {
+  const { tokens } = useTheme();
+  return (
+    <div
+      style={{
+        margin: "auto",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        textAlign: "center",
+        gap: 10,
+        maxWidth: 560,
+        padding: "32px 16px",
+      }}
+    >
+      <div
+        style={{
+          width: 52,
+          height: 52,
+          borderRadius: 16,
+          background: tokens.accentSoft,
+          color: tokens.accent,
+          display: "grid",
+          placeItems: "center",
+        }}
+      >
+        <Sparkles size={24} strokeWidth={2} />
+      </div>
+      <h1
+        style={{
+          margin: "6px 0 0",
+          fontSize: 26,
+          fontWeight: 800,
+          letterSpacing: -0.6,
+          color: tokens.text,
+        }}
+      >
+        {hasBots ? `What should ${botName} do first?` : "What can I help with?"}
+      </h1>
+      <p style={{ margin: 0, fontSize: 13.5, color: tokens.textSoft, lineHeight: 1.6 }}>
+        Type below to start — no setup needed. Open a workspace folder to let
+        Rook read and write files with your approval.
+      </p>
+      <div
+        style={{
+          marginTop: 10,
+          display: "grid",
+          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+          gap: 8,
+          width: "100%",
+        }}
+      >
+        {SUGGESTIONS.map((s) => (
+          <button
+            key={s.label}
+            type="button"
+            onClick={() => onPick(s.text)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              padding: "12px 14px",
+              borderRadius: 14,
+              background: tokens.surface,
+              border: `1px solid ${tokens.line}`,
+              cursor: "pointer",
+              textAlign: "left",
+              color: tokens.text,
+            }}
+          >
+            <span style={{ fontSize: 16 }} aria-hidden>
+              {s.icon}
+            </span>
+            <span style={{ fontSize: 12.5, fontWeight: 600 }}>{s.label}</span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -469,7 +564,7 @@ function MessageRow({ message }: { message: Message }) {
               <Spinner size={12} /> thinking…
             </span>
           ) : (
-            message.body
+            <Markdown text={message.body} />
           )}
         </div>
       </div>
@@ -484,7 +579,6 @@ function Composer({
   onAttach,
   attachments,
   onRemoveAttachment,
-  disabled,
   activeBot,
 }: {
   value: string;
@@ -493,7 +587,6 @@ function Composer({
   onAttach: () => void;
   attachments: string[];
   onRemoveAttachment: (name: string) => void;
-  disabled?: boolean;
   activeBot: Bot | null;
 }) {
   const { tokens } = useTheme();
@@ -567,15 +660,14 @@ function Composer({
         onKeyDown={(e) => {
           if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
-            if (!disabled) onSubmit();
+            onSubmit();
           }
         }}
         placeholder={
           activeBot
             ? `Message ${activeBot.name}…`
-            : "Pick a Bot in the strip above to start"
+            : "Ask Rook anything — or drop in a file"
         }
-        disabled={disabled}
         rows={1}
         style={{
           border: "none",
@@ -604,7 +696,7 @@ function Composer({
           variant="primary"
           size="sm"
           onClick={onSubmit}
-          disabled={disabled || !value.trim()}
+          disabled={!value.trim()}
         >
           <Send size={14} />
           Send

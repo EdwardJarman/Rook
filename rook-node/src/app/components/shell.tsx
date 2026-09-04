@@ -5,6 +5,7 @@ import {
   FileText,
   Monitor,
   CheckCheck,
+  Activity,
   MessageCircle,
   Settings,
   User,
@@ -32,6 +33,7 @@ const NAV: NavItem[] = [
   { to: "/files", label: "Files", icon: FileText },
   { to: "/computer", label: "Computer", icon: Monitor },
   { to: "/approvals", label: "Approvals", icon: CheckCheck },
+  { to: "/activity", label: "Activity", icon: Activity },
   { to: "/account", label: "Account", icon: User },
   { to: "/settings", label: "Settings", icon: Settings },
 ];

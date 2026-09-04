@@ -174,6 +174,42 @@ class WorkroomStore {
     this.notify();
   }
 
+  /**
+   * Returns a bot the user can talk to right now, creating a built-in
+   * "Rook" assistant on first send if none exists. Claude and Codex never
+   * ask you to configure anything before typing; neither should Rook.
+   */
+  ensureChatTarget(): string {
+    const st = this.state;
+    if (st.activeChatBotId && st.bots.some((b) => b.id === st.activeChatBotId)) {
+      return st.activeChatBotId;
+    }
+    const existing = st.bots[0];
+    if (existing) {
+      this.setActiveChat(
+        st.chatBotIds.includes(existing.id) ? st.chatBotIds : [...st.chatBotIds, existing.id],
+        existing.id,
+      );
+      return existing.id;
+    }
+    const bot: Bot = {
+      id: `bot-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      name: "Rook",
+      role: "Generalist assistant",
+      purpose: "Help with anything — files, research, writing, and computer tasks.",
+      color: "#0E7C59",
+      icon: "sparkles",
+      status: "Ready",
+      model: "auto",
+      lastActive: "just now",
+      memory: "Workspace files in this conversation",
+      approvalRule: "Ask before risky actions",
+    };
+    this.addBot(bot);
+    this.setActiveChat([bot.id], bot.id);
+    return bot.id;
+  }
+
   updateBot(id: string, patch: Partial<Bot>) {
     this.state = {
       ...this.state,
@@ -205,13 +241,14 @@ class WorkroomStore {
 export const workroom = new WorkroomStore();
 
 export function useWorkroom(): WorkroomState & {
-  send: (text: string, attachments?: string[]) => Promise<void>;
+  send: (text: string, attachments?: string[], botIdOverride?: string) => Promise<void>;
   startNewChat: () => void;
   addBotToChat: (botId: string) => void;
   removeBotFromChat: (botId: string) => void;
   focusChatBot: (botId: string) => void;
   decideApproval: (id: string, state: "approved" | "declined") => void;
   setWorkspace: (path: string | null) => void;
+  ensureChatTarget: () => string;
 } {
   const [state, setState] = useState<WorkroomState>(() => workroom.get());
   useEffect(() => workroom.subscribe(setState), []);
@@ -227,8 +264,8 @@ export function useWorkroom(): WorkroomState & {
     }
   }, [state.activeWorkspacePath, setStoredWorkspace]);
 
-  const send = useCallback(async (text: string, attachments: string[] = []) => {
-    const botId = state.activeChatBotId;
+  const send = useCallback(async (text: string, attachments: string[] = [], botIdOverride?: string) => {
+    const botId = botIdOverride ?? state.activeChatBotId;
     if (!botId) return;
     const userMsg: Message = {
       id: `m-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -296,6 +333,8 @@ export function useWorkroom(): WorkroomState & {
     workroom.setWorkspace(path);
   }, []);
 
+  const ensureChatTarget = useCallback(() => workroom.ensureChatTarget(), []);
+
   return useMemo(
     () => ({
       ...state,
@@ -306,6 +345,7 @@ export function useWorkroom(): WorkroomState & {
       focusChatBot,
       decideApproval,
       setWorkspace: setWorkspacePath,
+      ensureChatTarget,
     }),
     [
       state,
@@ -316,6 +356,7 @@ export function useWorkroom(): WorkroomState & {
       focusChatBot,
       decideApproval,
       setWorkspacePath,
+      ensureChatTarget,
     ],
   );
 }
