@@ -513,39 +513,89 @@ function asMicrosoftConnection(entity: MicrosoftConnectionRow): MicrosoftConnect
     displayName: nullable(entity.displayName),
     email: nullable(entity.email),
     status: entity.status === "reauthorize" ? "reauthorize" : "connected",
+    isPrimary: Boolean(entity.isPrimary),
     expiresAt: asDate(entity.expiresAt),
     createdAt: asDate(entity.createdAt),
     updatedAt: asDate(entity.updatedAt),
   };
 }
 
-export async function getMicrosoftConnection(
+/**
+ * Multi-account connectors: a user may connect several Microsoft accounts to
+ * the same connector (e.g. a work and a personal OneDrive), mirroring the
+ * multi-account-per-connector pattern in Grok Bot. Each connection is keyed
+ * by its own `accountId` rather than being unique per user, and one
+ * connection is marked `isPrimary` as the default for tool calls that don't
+ * specify an account.
+ */
+export async function listMicrosoftConnections(
   userId: string,
+): Promise<MicrosoftConnection[]> {
+  const database = await getDb();
+  if (!database) return [];
+  const { microsoftConnections } = (await database.query({
+    microsoftConnections: { $: { where: { userId } } },
+  })) as { microsoftConnections: MicrosoftConnectionRow[] };
+  return microsoftConnections
+    .map(asMicrosoftConnection)
+    .sort((left, right) => {
+      if (left.isPrimary !== right.isPrimary) return left.isPrimary ? -1 : 1;
+      return left.createdAt.getTime() - right.createdAt.getTime();
+    });
+}
+
+/** The primary connection, or the earliest-connected one if none is marked primary. */
+export async function getPrimaryMicrosoftConnection(
+  userId: string,
+): Promise<MicrosoftConnection | undefined> {
+  const connections = await listMicrosoftConnections(userId);
+  return connections[0];
+}
+
+export async function getMicrosoftConnectionByAccountId(
+  userId: string,
+  accountId: string,
 ): Promise<MicrosoftConnection | undefined> {
   const database = await getDb();
   if (!database) return undefined;
   const { microsoftConnections } = (await database.query({
-    microsoftConnections: { $: { where: { userId }, limit: 1 } },
+    microsoftConnections: { $: { where: { accountId }, limit: 1 } },
   })) as { microsoftConnections: MicrosoftConnectionRow[] };
-  return microsoftConnections[0]
-    ? asMicrosoftConnection(microsoftConnections[0])
-    : undefined;
+  const connection = microsoftConnections[0];
+  if (!connection || connection.userId !== userId) return undefined;
+  return asMicrosoftConnection(connection);
+}
+
+/** @deprecated Use getPrimaryMicrosoftConnection or getMicrosoftConnectionByAccountId. */
+export async function getMicrosoftConnection(
+  userId: string,
+): Promise<MicrosoftConnection | undefined> {
+  return getPrimaryMicrosoftConnection(userId);
 }
 
 export async function upsertMicrosoftConnection(
   input: InsertMicrosoftConnection,
 ) {
   const database = await requireDb();
-  const existing = await getMicrosoftConnection(input.userId);
+  const existing = await getMicrosoftConnectionByAccountId(
+    input.userId,
+    input.accountId,
+  );
+  const existingConnections = await listMicrosoftConnections(input.userId);
   const now = new Date();
   await database.transact(
-    database.tx.microsoftConnections.lookup("userId", input.userId).update({
+    database.tx.microsoftConnections.lookup("accountId", input.accountId).update({
+      userId: input.userId,
       microsoftUserId: input.microsoftUserId,
       encryptedAccessToken: input.encryptedAccessToken,
       encryptedRefreshToken: input.encryptedRefreshToken,
       expiresAt: input.expiresAt,
       scopes: input.scopes,
       status: input.status ?? "connected",
+      // The very first connection for a user is primary by default; later
+      // ones are additional accounts unless the caller explicitly asks.
+      isPrimary:
+        input.isPrimary ?? existing?.isPrimary ?? existingConnections.length === 0,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
       ...(input.displayName !== undefined
@@ -556,8 +606,28 @@ export async function upsertMicrosoftConnection(
   );
 }
 
+export async function setPrimaryMicrosoftConnection(
+  userId: string,
+  accountId: string,
+) {
+  const database = await requireDb();
+  const connections = await listMicrosoftConnections(userId);
+  const target = connections.find((c) => c.accountId === accountId);
+  if (!target) throw new Error("Microsoft account not found");
+  await transactInBatches(
+    database,
+    connections.map((connection) =>
+      database.tx.microsoftConnections[connection.id].update(
+        { isPrimary: connection.accountId === accountId, updatedAt: new Date() },
+        { upsert: false },
+      ),
+    ),
+  );
+}
+
 export async function updateMicrosoftTokens(
   userId: string,
+  accountId: string,
   input: {
     encryptedAccessToken: string;
     encryptedRefreshToken: string;
@@ -566,7 +636,7 @@ export async function updateMicrosoftTokens(
   },
 ) {
   const database = await requireDb();
-  const connection = await getMicrosoftConnection(userId);
+  const connection = await getMicrosoftConnectionByAccountId(userId, accountId);
   if (!connection) throw new Error("Microsoft Excel is not connected");
   await database.transact(
     database.tx.microsoftConnections[connection.id].update(
@@ -580,10 +650,13 @@ export async function updateMicrosoftTokens(
   );
 }
 
-export async function markMicrosoftReauthorizationRequired(userId: string) {
+export async function markMicrosoftReauthorizationRequired(
+  userId: string,
+  accountId: string,
+) {
   const database = await getDb();
   if (!database) return;
-  const connection = await getMicrosoftConnection(userId);
+  const connection = await getMicrosoftConnectionByAccountId(userId, accountId);
   if (!connection) return;
   await database.transact(
     database.tx.microsoftConnections[connection.id].update(
@@ -591,6 +664,25 @@ export async function markMicrosoftReauthorizationRequired(userId: string) {
       { upsert: false },
     ),
   );
+}
+
+export async function deleteMicrosoftConnectionByAccountId(
+  userId: string,
+  accountId: string,
+) {
+  const database = await getDb();
+  if (!database) return false;
+  const connection = await getMicrosoftConnectionByAccountId(userId, accountId);
+  if (!connection) return false;
+  const wasPrimary = connection.isPrimary;
+  await database.transact(database.tx.microsoftConnections[connection.id].delete());
+  // Promote the next-oldest remaining connection to primary so tool calls
+  // that don't specify an account keep working.
+  if (wasPrimary) {
+    const remaining = await listMicrosoftConnections(userId);
+    if (remaining.length) await setPrimaryMicrosoftConnection(userId, remaining[0].accountId);
+  }
+  return true;
 }
 
 function deletionTransactions(
@@ -812,11 +904,11 @@ export async function resolveExcelPendingAction(
 }
 
 export async function exportAccountWorkroomData(userId: string) {
-  const [snapshot, records, preferences, microsoft] = await Promise.all([
+  const [snapshot, records, preferences, microsoftConnections] = await Promise.all([
     getWorkroomSnapshot(userId),
     listNormalizedWorkroomRecords(userId),
     getNotificationPreferences(userId),
-    getMicrosoftConnection(userId),
+    listMicrosoftConnections(userId),
   ]);
   return {
     exportedAt: new Date().toISOString(),
@@ -829,15 +921,15 @@ export async function exportAccountWorkroomData(userId: string) {
         }
       : { approval: true, completion: true },
     integrations: {
-      microsoftExcel: microsoft
-        ? {
-            displayName: microsoft.displayName,
-            email: microsoft.email,
-            status: microsoft.status,
-            scopes: microsoft.scopes,
-            connectedAt: microsoft.createdAt,
-          }
-        : null,
+      microsoftExcel: microsoftConnections.map((connection) => ({
+        accountId: connection.accountId,
+        displayName: connection.displayName,
+        email: connection.email,
+        status: connection.status,
+        scopes: connection.scopes,
+        isPrimary: connection.isPrimary,
+        connectedAt: connection.createdAt,
+      })),
     },
   };
 }

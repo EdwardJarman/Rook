@@ -216,6 +216,40 @@ export async function disconnect(): Promise<void> {
   await gateway("/api/disconnect", { method: "POST" });
 }
 
+export type LeaseRecord = {
+  botId: string;
+  state: "NONE" | "BOT" | "HUMAN" | "PAUSED";
+  fencing: number;
+  holderDeviceId: string;
+  updatedAt: string;
+};
+
+/** Every Bot's current control lease, so the UI can show a takeover banner. */
+export async function listLeases(): Promise<LeaseRecord[]> {
+  const result = await gateway<{ leases?: LeaseRecord[] }>("/api/leases");
+  return result?.leases ?? [];
+}
+
+/** Human takeover: pause the Bot's input and give control to this desktop window. */
+export async function takeOverBot(botId: string): Promise<boolean> {
+  const result = await gateway<{ ok?: boolean }>("/api/take-over", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ botId }).toString(),
+  });
+  return Boolean(result?.ok);
+}
+
+/** Release control back to the Bot. */
+export async function releaseBot(botId: string): Promise<boolean> {
+  const result = await gateway<{ ok?: boolean }>("/api/release", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ botId }).toString(),
+  });
+  return Boolean(result?.ok);
+}
+
 export function isTauri(): boolean {
   return getTauri() !== null;
 }

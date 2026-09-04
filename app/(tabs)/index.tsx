@@ -184,6 +184,20 @@ export default function ChatScreen() {
   const pendingCount = approvals.filter(
     (approval) => approval.state === "Pending",
   ).length;
+  const [handoffOpen, setHandoffOpen] = useState(false);
+  /* Group workroom: the most recent open task owned by the active Bot in this chat. */
+  const activeTaskForHandoff = useMemo(() => {
+    if (!activeBot) return undefined;
+    return workroom.tasks.find(
+      (task) =>
+        task.botId === activeBot.id &&
+        !["Completed", "Cancelled", "Failed"].includes(task.status),
+    );
+  }, [activeBot, workroom.tasks]);
+  const handoffCandidates = useMemo(
+    () => chatBots.filter((bot) => bot.id !== activeBot?.id),
+    [chatBots, activeBot?.id],
+  );
 
   /* Keep the newest message in view as the thread grows. */
   useEffect(() => {
@@ -866,6 +880,48 @@ export default function ChatScreen() {
                   </Pressable>
                 ) : null}
 
+                {activeTaskForHandoff && handoffCandidates.length ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Hand off ${activeTaskForHandoff.title} to another Bot in the room`}
+                    onPress={() => setHandoffOpen(true)}
+                    style={({ pressed }) => [
+                      {
+                        flexDirection: "row",
+                        alignItems: "center",
+                        gap: 9,
+                        paddingHorizontal: 13,
+                        paddingVertical: 10,
+                        borderRadius: 14,
+                        backgroundColor: colors.surfaceAlt,
+                        opacity: pressed ? 0.72 : 1,
+                      },
+                    ]}
+                  >
+                    <MaterialIcons
+                      name="swap-horiz"
+                      size={16}
+                      color={colors.textSoft}
+                    />
+                    <Text
+                      numberOfLines={1}
+                      style={{
+                        flex: 1,
+                        color: colors.textSoft,
+                        fontSize: 12.5,
+                        fontWeight: "600",
+                      }}
+                    >
+                      Hand off “{activeTaskForHandoff.title}” to another Bot
+                    </Text>
+                    <MaterialIcons
+                      name="chevron-right"
+                      size={18}
+                      color={colors.textFaint}
+                    />
+                  </Pressable>
+                ) : null}
+
                 {visibleMessages.length ? (
                   <View style={{ gap: 14, paddingTop: 2 }}>
                     {visibleMessages.map((message) => {
@@ -1539,6 +1595,84 @@ export default function ChatScreen() {
         onClose={() => setCreateOpen(false)}
         onCreated={(bot) => addBotToChat(bot.id)}
       />
+
+      {/* Group workroom: hand a task from the active Bot to another Bot in the room. */}
+      <Sheet visible={handoffOpen} onClose={() => setHandoffOpen(false)}>
+        <SheetEyebrow>Hand off</SheetEyebrow>
+        <Text
+          style={{
+            color: colors.text,
+            fontSize: 20,
+            lineHeight: 26,
+            fontWeight: "700",
+            letterSpacing: -0.4,
+          }}
+        >
+          {activeTaskForHandoff?.title ?? "Choose who takes this"}
+        </Text>
+        <Text
+          style={{
+            color: colors.textSoft,
+            fontSize: 13.5,
+            lineHeight: 19.5,
+            marginTop: 6,
+            marginBottom: 16,
+          }}
+        >
+          The receiving Bot gets a note in the room and this task moves to
+          their queue.
+        </Text>
+        <View style={{ gap: 8 }}>
+          {handoffCandidates.map((bot) => (
+            <Pressable
+              key={bot.id}
+              accessibilityRole="button"
+              accessibilityLabel={`Hand off to ${bot.name}`}
+              onPress={() => {
+                if (activeTaskForHandoff) {
+                  workroom.handOffTask(activeTaskForHandoff.id, bot.id);
+                  focusChatBot(bot.id);
+                }
+                setHandoffOpen(false);
+              }}
+              style={({ pressed }) => [
+                {
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 12,
+                  minHeight: 58,
+                  borderRadius: 16,
+                  borderWidth: 1,
+                  borderColor: colors.line,
+                  paddingHorizontal: 13,
+                },
+                pressed && { opacity: 0.72 },
+              ]}
+            >
+              <Avatar label={bot.avatar} color={bot.color} icon={bot.icon} size={38} />
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text
+                  numberOfLines={1}
+                  style={{ color: colors.text, fontSize: 14, fontWeight: "700" }}
+                >
+                  {bot.name}
+                </Text>
+                <Text
+                  numberOfLines={1}
+                  style={{ color: colors.textFaint, fontSize: 12, marginTop: 1 }}
+                >
+                  {bot.role}
+                </Text>
+              </View>
+              <MaterialIcons
+                name="arrow-forward"
+                size={18}
+                color={colors.textFaint}
+              />
+            </Pressable>
+          ))}
+        </View>
+      </Sheet>
     </ScreenContainer>
   );
 }
