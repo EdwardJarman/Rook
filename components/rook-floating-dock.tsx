@@ -1,10 +1,23 @@
 import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
-import { useCallback, useMemo, useRef, useState } from "react";
-import { Animated, Platform, Pressable, StyleSheet, View, type LayoutChangeEvent, useWindowDimensions } from "react-native";
+import { BlurView } from "expo-blur";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  AccessibilityInfo,
+  Animated,
+  Easing,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  type LayoutChangeEvent,
+  useWindowDimensions,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import { useDockVisibility } from "@/lib/dock-visibility";
+import { useThemeContext } from "@/lib/theme-provider";
 
 const ROUTE_ICONS = {
   index: "message.fill",
@@ -14,160 +27,275 @@ const ROUTE_ICONS = {
   account: "person.crop.circle",
 } as const;
 
-const clamp = (value: number, minimum: number, maximum: number) => Math.min(Math.max(value, minimum), maximum);
+const MAX_DOCK_WIDTH = 430;
+const DOCK_HEIGHT = 62;
+const TRACK_INSET = 5;
 
 export function RookFloatingDock({ state, descriptors, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
-  const { width, height } = useWindowDimensions();
+  const { width } = useWindowDimensions();
+  const { colorScheme } = useThemeContext();
   const { dockVisible, translateY, showDock } = useDockVisibility();
-  const [dockWidth, setDockWidth] = useState(0);
-  const scales = useRef(state.routes.map(() => new Animated.Value(1))).current;
-  const bounces = useRef(state.routes.map(() => new Animated.Value(0))).current;
+  const [trackWidth, setTrackWidth] = useState(0);
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const [reduceMotion, setReduceMotion] = useState(false);
+  const indicatorX = useRef(new Animated.Value(0)).current;
+  const indicatorReady = useRef(false);
+  const itemScales = useRef(state.routes.map(() => new Animated.Value(1))).current;
 
-  const config = useMemo(() => {
-    const smallerDimension = Math.min(width, height);
-    if (smallerDimension < 480) return { baseIconSize: clamp(smallerDimension * 0.08, 40, 46), maxScale: 1.4, effectWidth: smallerDimension * 0.4 };
-    if (smallerDimension < 768) return { baseIconSize: clamp(smallerDimension * 0.07, 48, 56), maxScale: 1.5, effectWidth: smallerDimension * 0.35 };
-    if (smallerDimension < 1024) return { baseIconSize: clamp(smallerDimension * 0.06, 56, 64), maxScale: 1.6, effectWidth: smallerDimension * 0.3 };
-    return { baseIconSize: clamp(smallerDimension * 0.05, 64, 80), maxScale: 1.8, effectWidth: 300 };
-  }, [height, width]);
+  const dark = colorScheme === "dark";
+  const dockWidth = Math.max(0, Math.min(width - 24, MAX_DOCK_WIDTH));
+  const itemWidth = trackWidth > 0 ? trackWidth / state.routes.length : 0;
+  const dockBottom = Platform.OS === "web" ? 18 : Math.max(insets.bottom, 10);
+  const compactLabels = width < 350;
 
-  const padding = Math.max(8, config.baseIconSize * 0.12);
-  const dockBottom = Platform.OS === "web" ? 18 : Math.max(insets.bottom, 12);
+  const glass = useMemo(
+    () => ({
+      surface: dark ? "rgba(13, 17, 24, 0.78)" : "rgba(255, 255, 255, 0.78)",
+      edge: dark ? "rgba(255, 255, 255, 0.10)" : "rgba(23, 26, 32, 0.08)",
+      active: dark ? "#222938" : "#FFFFFF",
+      activeEdge: dark ? "rgba(255, 255, 255, 0.14)" : "rgba(23, 26, 32, 0.10)",
+      activeText: dark ? "#F2F5F8" : "#191C22",
+      activeIcon: dark ? "#6FE8BC" : "#0E7C59",
+      idleText: dark ? "#96A0AF" : "#6B7280",
+      idleIcon: dark ? "#8B95A4" : "#7A8290",
+      hover: dark ? "rgba(255, 255, 255, 0.06)" : "rgba(23, 26, 32, 0.05)",
+      shadow: dark ? "#01030A" : "#3A4150",
+    }),
+    [dark],
+  );
 
-  const animateScales = useCallback((mouseX: number | null) => {
-    const availableWidth = Math.max(1, dockWidth - padding * 2);
-    const slotWidth = availableWidth / state.routes.length;
-
-    const targets = state.routes.map((_, index) => {
-      if (mouseX === null) return 1;
-      const normalIconCenter = padding + index * slotWidth + slotWidth / 2;
-      const minX = mouseX - config.effectWidth / 2;
-      const maxX = mouseX + config.effectWidth / 2;
-      if (normalIconCenter < minX || normalIconCenter > maxX) return 1;
-      const theta = ((normalIconCenter - minX) / config.effectWidth) * 2 * Math.PI;
-      const scaleFactor = (1 - Math.cos(clamp(theta, 0, 2 * Math.PI))) / 2;
-      return 1 + scaleFactor * (config.maxScale - 1);
+  useEffect(() => {
+    let mounted = true;
+    void AccessibilityInfo.isReduceMotionEnabled().then((enabled) => {
+      if (mounted) setReduceMotion(enabled);
     });
+    const subscription = AccessibilityInfo.addEventListener("reduceMotionChanged", setReduceMotion);
+    return () => {
+      mounted = false;
+      subscription.remove();
+    };
+  }, []);
 
-    targets.forEach((target, index) => {
-      scales[index].stopAnimation();
-      Animated.spring(scales[index], {
-        toValue: target,
-        speed: mouseX === null ? 16 : 22,
-        bounciness: 0,
-        useNativeDriver: true,
-      }).start();
-    });
-  }, [config.effectWidth, config.maxScale, dockWidth, padding, scales, state.routes]);
+  useEffect(() => {
+    if (!itemWidth) return;
+    const target = state.index * itemWidth;
+    if (!indicatorReady.current || reduceMotion) {
+      indicatorX.setValue(target);
+      indicatorReady.current = true;
+      return;
+    }
 
-  const handlePointerMove = useCallback((event: any) => {
-    const pointerX = event.nativeEvent.offsetX ?? event.nativeEvent.locationX;
-    if (typeof pointerX === "number") animateScales(pointerX);
-  }, [animateScales]);
+    Animated.spring(indicatorX, {
+      toValue: target,
+      mass: 0.7,
+      damping: 19,
+      stiffness: 210,
+      useNativeDriver: true,
+    }).start();
+  }, [indicatorX, itemWidth, reduceMotion, state.index]);
 
-  const resetMagnification = useCallback(() => animateScales(null), [animateScales]);
+  const animatePress = useCallback(
+    (index: number) => {
+      if (reduceMotion) return;
+      const scale = itemScales[index];
+      scale.stopAnimation();
+      Animated.sequence([
+        Animated.timing(scale, {
+          toValue: 0.88,
+          duration: 70,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.spring(scale, {
+          toValue: 1,
+          mass: 0.45,
+          damping: 8,
+          stiffness: 280,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    },
+    [itemScales, reduceMotion],
+  );
 
-  const bounce = useCallback((index: number) => {
-    const bounceHeight = Math.max(-8, -config.baseIconSize * 0.15);
-    bounces[index].stopAnimation();
-    Animated.sequence([
-      Animated.timing(bounces[index], { toValue: bounceHeight, duration: 160, useNativeDriver: true }),
-      Animated.timing(bounces[index], { toValue: 0, duration: 180, useNativeDriver: true }),
-    ]).start();
-  }, [bounces, config.baseIconSize]);
+  const handleTrackLayout = useCallback((event: LayoutChangeEvent) => {
+    setTrackWidth(event.nativeEvent.layout.width);
+  }, []);
 
   return (
     <Animated.View
-      pointerEvents={dockVisible ? "auto" : "none"}
-      onLayout={(event: LayoutChangeEvent) => setDockWidth(event.nativeEvent.layout.width)}
-      onPointerMove={handlePointerMove}
-      onPointerLeave={resetMagnification}
+      pointerEvents={dockVisible ? "box-none" : "none"}
       style={[
-        styles.dock,
+        styles.frame,
         {
           bottom: dockBottom,
-          minHeight: config.baseIconSize + padding * 2,
-          borderRadius: Math.max(12, config.baseIconSize * 0.4),
-          padding,
           transform: [{ translateY }],
         },
       ]}
     >
-      {state.routes.map((route, index) => {
-        const descriptor = descriptors[route.key];
-        const isFocused = state.index === index;
-        const icon = ROUTE_ICONS[route.name as keyof typeof ROUTE_ICONS];
-        const label = descriptor.options.tabBarAccessibilityLabel ?? descriptor.options.title ?? route.name;
-        if (!icon) return null;
+      <View
+        accessibilityRole="tablist"
+        renderToHardwareTextureAndroid
+        style={[
+          styles.shadowShell,
+          {
+            width: dockWidth,
+            shadowColor: glass.shadow,
+          },
+        ]}
+      >
+        <BlurView
+          intensity={dark ? 64 : 82}
+          tint={dark ? "systemUltraThinMaterialDark" : "systemUltraThinMaterialLight"}
+          experimentalBlurMethod="dimezisBlurView"
+          blurReductionFactor={3}
+          style={[
+            styles.glassShell,
+            {
+              backgroundColor: glass.surface,
+              borderColor: glass.edge,
+            },
+          ]}
+        >
+          <View onLayout={handleTrackLayout} style={styles.track}>
+            {itemWidth > 0 ? (
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.activePill,
+                  {
+                    width: Math.max(0, itemWidth - 6),
+                    backgroundColor: glass.active,
+                    borderColor: glass.activeEdge,
+                    transform: [{ translateX: indicatorX }],
+                  },
+                ]}
+              />
+            ) : null}
 
-        const onPress = () => {
-          showDock();
-          bounce(index);
-          const event = navigation.emit({ type: "tabPress", target: route.key, canPreventDefault: true });
-          if (!isFocused && !event.defaultPrevented) navigation.navigate(route.name);
-        };
+            {state.routes.map((route, index) => {
+              const descriptor = descriptors[route.key];
+              const isFocused = state.index === index;
+              const icon = ROUTE_ICONS[route.name as keyof typeof ROUTE_ICONS];
+              const label = descriptor.options.tabBarAccessibilityLabel ?? descriptor.options.title ?? route.name;
+              if (!icon) return null;
 
-        return (
-          <Pressable
-            key={route.key}
-            accessibilityRole="tab"
-            accessibilityLabel={label}
-            accessibilityState={{ selected: isFocused }}
-            onHoverIn={() => animateScales(padding + (index + 0.5) * (Math.max(1, dockWidth - padding * 2) / state.routes.length))}
-            onHoverOut={resetMagnification}
-            onLongPress={() => navigation.emit({ type: "tabLongPress", target: route.key })}
-            onPress={onPress}
-            style={styles.item}
-          >
-            <Animated.View style={[styles.iconMotion, { transform: [{ translateY: bounces[index] }, { scale: scales[index] }] }]}>
-              <IconSymbol size={config.baseIconSize} name={icon} color={isFocused ? "#70E5BE" : "#D1D3DC"} />
-              <View style={[styles.openDot, isFocused && styles.openDotVisible]} />
-            </Animated.View>
-          </Pressable>
-        );
-      })}
+              const onPress = () => {
+                showDock();
+                animatePress(index);
+                const event = navigation.emit({ type: "tabPress", target: route.key, canPreventDefault: true });
+                if (!isFocused && !event.defaultPrevented) navigation.navigate(route.name);
+              };
+
+              return (
+                <Pressable
+                  key={route.key}
+                  accessibilityRole="tab"
+                  accessibilityLabel={label}
+                  accessibilityState={{ selected: isFocused }}
+                  onHoverIn={() => setHoveredIndex(index)}
+                  onHoverOut={() => setHoveredIndex((current) => (current === index ? null : current))}
+                  onLongPress={() => navigation.emit({ type: "tabLongPress", target: route.key })}
+                  onPress={onPress}
+                  style={styles.item}
+                >
+                  {hoveredIndex === index && !isFocused ? (
+                    <View pointerEvents="none" style={[styles.hoverWash, { backgroundColor: glass.hover }]} />
+                  ) : null}
+                  <Animated.View style={[styles.itemContent, { transform: [{ scale: itemScales[index] }] }]}>
+                    <IconSymbol size={20} name={icon} color={isFocused ? glass.activeIcon : glass.idleIcon} />
+                    <Text
+                      numberOfLines={1}
+                      style={[
+                        styles.label,
+                        compactLabels && styles.labelCompact,
+                        { color: isFocused ? glass.activeText : glass.idleText },
+                        isFocused && styles.labelActive,
+                      ]}
+                    >
+                      {label}
+                    </Text>
+                  </Animated.View>
+                </Pressable>
+              );
+            })}
+          </View>
+        </BlurView>
+      </View>
     </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
-  dock: {
+  frame: {
     position: "absolute",
-    left: 16,
-    right: 16,
-    flexDirection: "row",
-    alignItems: "flex-end",
-    backgroundColor: "rgba(45,45,45,0.75)",
+    left: 0,
+    right: 0,
+    zIndex: 50,
+    alignItems: "center",
+  },
+  shadowShell: {
+    height: DOCK_HEIGHT,
+    borderRadius: 24,
+    shadowOpacity: 0.16,
+    shadowOffset: { width: 0, height: 10 },
+    shadowRadius: 24,
+    elevation: 14,
+  },
+  glassShell: {
+    flex: 1,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.15)",
-    elevation: 16,
-    shadowColor: "#000000",
-    shadowOpacity: 0.4,
-    shadowOffset: { width: 0, height: 8 },
-    shadowRadius: 18,
+    borderRadius: 24,
+    overflow: "hidden",
+  },
+  track: {
+    flex: 1,
+    flexDirection: "row",
+    margin: TRACK_INSET,
+  },
+  activePill: {
+    position: "absolute",
+    left: 3,
+    top: 0,
+    bottom: 0,
+    borderRadius: 18,
+    borderWidth: 1,
   },
   item: {
     flex: 1,
-    alignSelf: "stretch",
+    minWidth: 0,
+    minHeight: 48,
     alignItems: "center",
-    justifyContent: "flex-end",
+    justifyContent: "center",
+    borderRadius: 18,
   },
-  iconMotion: {
+  itemContent: {
     alignItems: "center",
-    justifyContent: "flex-end",
-    transformOrigin: "bottom center",
+    justifyContent: "center",
+    gap: 2,
   },
-  openDot: {
-    width: 4,
-    height: 4,
-    borderRadius: 3,
-    marginTop: 5,
-    opacity: 0,
-    backgroundColor: "rgba(255,255,255,0.8)",
-    shadowColor: "#000000",
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
+  hoverWash: {
+    position: "absolute",
+    top: 3,
+    bottom: 3,
+    left: 3,
+    right: 3,
+    borderRadius: 16,
   },
-  openDotVisible: { opacity: 1 },
+  label: {
+    maxWidth: "100%",
+    fontSize: 10,
+    lineHeight: 12,
+    fontWeight: "600",
+    letterSpacing: 0.05,
+    paddingHorizontal: 2,
+  },
+  labelCompact: {
+    fontSize: 9,
+    letterSpacing: -0.1,
+  },
+  labelActive: {
+    fontWeight: "700",
+  },
 });

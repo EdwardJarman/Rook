@@ -1,3 +1,49 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* The page matches the app canvas so there is never a white flash or a stray
+   colored line at the viewport edge before React Native Web mounts. */
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  background-color: #f7f7f4;
+  color: #191c22;
+  min-height: 100%;
+}
+
+:root[data-theme="dark"],
+:root[data-theme="dark"] body,
+:root[data-theme="dark"] #root {
+  background-color: #0a0c10;
+  color: #f1f3f6;
+}
+
+/* Keep native web form controls from injecting their own colors. */
+input,
+textarea {
+  font: inherit;
+}
+
+/* The composer has its own persistent rounded focus surface. Prevent the
+   browser from drawing a second rectangular outline inside that surface. */
+textarea#rook-composer-input:focus,
+textarea#rook-composer-input:focus-visible {
+  outline: none;
+}
+
+/* Clerk's default focus/hover ring on the primary sign-in/up button is a
+   box-shadow with harder corners than the button's own border-radius, so it
+   visibly pokes past the rounded shape. The appearance.elements JS override
+   for this can't win the specificity fight with Clerk's internal styles, so
+   pin it here against the stable, documented `.cl-formButtonPrimary` class. */
+.cl-formButtonPrimary,
+.cl-formButtonPrimary:hover,
+.cl-formButtonPrimary:focus,
+.cl-formButtonPrimary:focus-visible,
+.cl-formButtonPrimary:active {
+  box-shadow: none !important;
+  outline: none !important;
+}

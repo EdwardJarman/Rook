@@ -1,46 +1,210 @@
-import { type ReactNode } from "react";
-import { Image, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { type ReactNode, useMemo } from "react";
+import { StyleSheet, Text, View, useWindowDimensions } from "react-native";
 
-const bloomImage = require("@/assets/images/bloom-background.webp");
+import { RookLogo } from "@/components/rook-logo";
+import { useRookTheme, type RookTokens } from "@/lib/ui";
 
-export function AuthWebShell({ eyebrow, title, detail, children }: { eyebrow: string; title: string; detail: string; children: ReactNode }) {
+export function AuthWebShell({
+  eyebrow,
+  title,
+  detail,
+  children,
+}: {
+  eyebrow: string;
+  title: string;
+  detail: string;
+  children: ReactNode;
+}) {
+  const { colors } = useRookTheme();
   const { width } = useWindowDimensions();
-  const split = width >= 860;
+  const isWide = width >= 980;
+  const styles = useMemo(() => buildStyles(colors), [colors]);
 
   return (
     <View style={styles.page}>
-      <View style={[styles.authPanel, split ? styles.authPanelSplit : styles.authPanelFull]}>
-        <View style={styles.authContent}>
-          <View style={styles.brandRow}><View style={styles.brandMark}>R</View><Text style={styles.wordmark}>Rook</Text></View>
-          <Text style={styles.eyebrow}>{eyebrow}</Text>
-          <Text style={styles.title}>{title}</Text>
-          <Text style={styles.detail}>{detail}</Text>
-          <View style={styles.clerkSlot}>{children}</View>
+      <View
+        style={[
+          styles.frame,
+          { paddingHorizontal: isWide ? 32 : 20 },
+          !isWide && styles.frameCompact,
+        ]}
+      >
+        <View style={styles.header}>
+          <View style={styles.brandRow}>
+            <View style={styles.brandMark}>
+              <RookLogo size={20} color={colors.onInk} />
+            </View>
+            <Text style={styles.wordmark}>Rook</Text>
+          </View>
+        </View>
+
+        <View style={[styles.main, isWide && styles.mainWide]}>
+          <View style={[styles.intro, isWide && styles.introWide]}>
+            <View style={styles.eyebrowPill}>
+              <View style={styles.eyebrowDot} />
+              <Text style={styles.eyebrow}>{eyebrow}</Text>
+            </View>
+            <Text style={[styles.title, isWide && styles.titleWide]}>
+              {title}
+            </Text>
+            <Text style={styles.detail}>{detail}</Text>
+          </View>
+
+          <View style={[styles.formColumn, isWide && styles.formColumnWide]}>
+            <View style={styles.clerkSlot}>{children}</View>
+          </View>
+        </View>
+
+        <View style={styles.footer}>
+          <Text style={styles.footerText}>
+            © {new Date().getFullYear()} Rook
+          </Text>
+          <Text style={styles.footerText}>Built for deliberate work</Text>
         </View>
       </View>
-      {split ? <View style={styles.visualPanel}><Image source={bloomImage} resizeMode="cover" style={styles.visual} /><View style={styles.visualShade} /><View style={styles.visualCopy}><Text style={styles.visualEyebrow}>ROOK WORKROOM</Text><Text style={styles.visualTitle}>Where focus finds momentum.</Text><Text style={styles.visualDetail}>Build one deliberate team at a time, with every decision visible and yours to guide.</Text></View></View> : null}
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  page: { flex: 1, flexDirection: "row", backgroundColor: "#000000" },
-  authPanel: { minHeight: "100%", justifyContent: "center", backgroundColor: "#050506" },
-  authPanelSplit: { width: "46%", minWidth: 450, paddingHorizontal: 56 },
-  authPanelFull: { flex: 1, paddingHorizontal: 24 },
-  authContent: { width: "100%", maxWidth: 430, alignSelf: "flex-start" },
-  brandRow: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 58 },
-  brandMark: { width: 32, height: 32, borderRadius: 11, overflow: "hidden", backgroundColor: "#7563F5", color: "#FFFFFF", fontSize: 15, fontWeight: "900", textAlign: "center", lineHeight: 32 },
-  wordmark: { color: "#FFFFFF", fontSize: 20, fontWeight: "900", letterSpacing: -0.7 },
-  eyebrow: { color: "#70E5BE", fontSize: 10, fontWeight: "900", letterSpacing: 1.5, marginBottom: 10 },
-  title: { color: "#FFFFFF", fontSize: 33, lineHeight: 39, fontWeight: "900", letterSpacing: -1.1, maxWidth: 390 },
-  detail: { color: "#A7ADB8", fontSize: 14, lineHeight: 21, marginTop: 11, marginBottom: 28, maxWidth: 400 },
-  clerkSlot: { alignItems: "flex-start", width: "100%" },
-  visualPanel: { flex: 1, overflow: "hidden", backgroundColor: "#07100F" },
-  visual: { ...StyleSheet.absoluteFillObject, width: "100%", height: "100%" },
-  visualShade: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.22)" },
-  visualCopy: { position: "absolute", left: 56, right: 56, bottom: 58, maxWidth: 410 },
-  visualEyebrow: { color: "#89F1D0", fontSize: 10, fontWeight: "900", letterSpacing: 1.6, marginBottom: 9 },
-  visualTitle: { color: "#FFFFFF", fontSize: 31, lineHeight: 38, fontWeight: "900", letterSpacing: -0.9 },
-  visualDetail: { color: "#C1CBCB", fontSize: 13, lineHeight: 20, marginTop: 10, maxWidth: 360 },
-});
+function buildStyles(colors: RookTokens) {
+  return StyleSheet.create({
+    page: {
+      flex: 1,
+      minHeight: "100%",
+      backgroundColor: colors.canvas,
+    },
+    frame: {
+      flex: 1,
+      width: "100%",
+      maxWidth: 1180,
+      minHeight: "100%",
+      alignSelf: "center",
+      paddingTop: 20,
+      paddingBottom: 28,
+    },
+    frameCompact: {
+      minHeight: 760,
+    },
+    header: {
+      minHeight: 44,
+      flexDirection: "row",
+      alignItems: "center",
+    },
+    brandRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 10,
+    },
+    brandMark: {
+      width: 32,
+      height: 32,
+      borderRadius: 11,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: colors.ink,
+    },
+    wordmark: {
+      color: colors.text,
+      fontSize: 15,
+      fontWeight: "800",
+      letterSpacing: -0.4,
+    },
+    main: {
+      flex: 1,
+      paddingTop: 40,
+      paddingBottom: 40,
+    },
+    mainWide: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: 72,
+      paddingTop: 72,
+      paddingBottom: 72,
+    },
+    intro: {
+      maxWidth: 520,
+    },
+    introWide: {
+      flex: 1,
+    },
+    eyebrowPill: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+      alignSelf: "flex-start",
+      backgroundColor: colors.surfaceAlt,
+      borderRadius: 999,
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+    },
+    eyebrowDot: {
+      width: 6,
+      height: 6,
+      borderRadius: 3,
+      backgroundColor: colors.accent,
+    },
+    eyebrow: {
+      color: colors.textSoft,
+      fontSize: 11.5,
+      fontWeight: "700",
+      letterSpacing: 0.3,
+    },
+    title: {
+      color: colors.text,
+      fontSize: 38,
+      lineHeight: 42,
+      fontWeight: "800",
+      letterSpacing: -1.2,
+      marginTop: 22,
+      maxWidth: 480,
+    },
+    titleWide: {
+      fontSize: 50,
+      lineHeight: 52,
+      letterSpacing: -1.8,
+      maxWidth: 520,
+    },
+    detail: {
+      color: colors.textSoft,
+      fontSize: 15.5,
+      lineHeight: 24,
+      marginTop: 18,
+      maxWidth: 420,
+    },
+    formColumn: {
+      width: "100%",
+      maxWidth: 420,
+      marginTop: 36,
+    },
+    formColumnWide: {
+      marginTop: 0,
+    },
+    clerkSlot: {
+      width: "100%",
+      alignItems: "stretch",
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.line,
+      borderRadius: 24,
+      padding: 20,
+      shadowColor: colors.shadow,
+      shadowOpacity: 0.06,
+      shadowRadius: 24,
+      shadowOffset: { width: 0, height: 10 },
+    },
+    footer: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: 20,
+      borderTopWidth: 1,
+      borderTopColor: colors.line,
+      paddingTop: 16,
+    },
+    footerText: {
+      color: colors.textFaint,
+      fontSize: 11.5,
+    },
+  });
+}

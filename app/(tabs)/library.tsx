@@ -1,21 +1,31 @@
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import { useMemo, useState } from "react";
-import { Alert, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
-import * as FileSystem from "expo-file-system/legacy";
-import * as Sharing from "expo-sharing";
+import { Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
-import { Avatar, EmptyState, IconButton, SectionTitle, StatusPill, palette } from "@/components/rook-primitives";
+import {
+  Card,
+  EmptyState,
+  Field,
+  PrimaryButton,
+  ScreenHeader,
+  SegmentedControl,
+  Sheet,
+  SheetEyebrow,
+  StatusPill,
+  Switch,
+  useRookTheme,
+} from "@/components/rook-primitives";
 import { ScreenContainer } from "@/components/screen-container";
-import { useAuth } from "@/hooks/use-auth";
 import { useDockScroll } from "@/lib/dock-visibility";
 import { useRookNotifications } from "@/lib/rook-notifications";
-import { useWorkroom, type Skill } from "@/lib/workroom-store";
-import { trpc } from "@/lib/trpc";
+import { useWorkroom } from "@/lib/workroom-store";
 
 type LibrarySection = "Skills" | "Routines" | "Files" | "Search" | "Privacy";
+const SECTIONS = ["Skills", "Routines", "Files", "Search", "Privacy"] as const;
 
 export default function LibraryScreen() {
-  const { skills, routines, files, bots, syncStatus, addSkill, addRoutine, toggleRoutine } = useWorkroom();
+  const { colors } = useRookTheme();
+  const { skills, routines, files, bots, addSkill, addRoutine, toggleRoutine } = useWorkroom();
   const { status: notificationStatus, preferences: notificationPreferences, enableAlerts, setPreference } = useRookNotifications();
   const [section, setSection] = useState<LibrarySection>("Skills");
   const [skillOpen, setSkillOpen] = useState(false);
@@ -27,54 +37,337 @@ export default function LibraryScreen() {
   const [search, setSearch] = useState("");
   const dockScroll = useDockScroll();
 
-  const requireBot = () => { if (bots.length) return true; Alert.alert("Create a Bot first", "Skills and routines need a Bot owner. Create one from Workroom or Bots, then return here."); return false; };
-  const searchResults = useMemo(() => { const query = search.trim().toLowerCase(); if (!query) return []; return [...bots.filter((item) => `${item.name} ${item.role} ${item.purpose}`.toLowerCase().includes(query)).map((item) => ({ type: "Bot", title: item.name, detail: item.role })), ...skills.filter((item) => `${item.name} ${item.description}`.toLowerCase().includes(query)).map((item) => ({ type: "Skill", title: item.name, detail: item.description })), ...routines.filter((item) => `${item.name} ${item.summary}`.toLowerCase().includes(query)).map((item) => ({ type: "Routine", title: item.name, detail: item.cadence })), ...files.filter((item) => `${item.name} ${item.owner}`.toLowerCase().includes(query)).map((item) => ({ type: "File", title: item.name, detail: `${item.scope} · ${item.owner}` }))]; }, [bots, files, routines, search, skills]);
-  const createSkill = () => { if (!requireBot()) return; if (!skillName.trim() || !skillDescription.trim()) { Alert.alert("Finish the skill", "Give the process a name and describe what it should do."); return; } addSkill({ name: skillName.trim(), owner: bots[0].name, status: "Draft", description: skillDescription.trim(), version: "v0.1", approvals: "Review the approval boundary before enabling" }); setSkillName(""); setSkillDescription(""); setSkillOpen(false); };
-  const createRoutine = () => { if (!requireBot()) return; if (!routineName.trim() || !routineCadence.trim()) { Alert.alert("Finish the routine", "Give it a name and tell Rook when it should run."); return; } addRoutine({ name: routineName.trim(), owner: bots[0].name, cadence: routineCadence.trim(), nextRun: "Paused until enabled", state: "Paused", summary: "Review the inputs and approval boundary before enabling this routine." }); setRoutineName(""); setRoutineCadence(""); setRoutineOpen(false); setSection("Routines"); };
-  const tabs: LibrarySection[] = ["Skills", "Routines", "Files", "Search", "Privacy"];
+  const requireBot = () => {
+    if (bots.length) return true;
+    Alert.alert("Create a Bot first", "Skills and routines need a Bot owner. Create one from the Workroom or Bots, then return here.");
+    return false;
+  };
 
-  return <ScreenContainer containerClassName="bg-background" className="flex-1" edges={["top", "left", "right"]}>
-    <ScrollView {...dockScroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-      <View style={styles.head}><View><Text style={styles.title}>Library</Text><Text style={styles.lead}>Add only the reusable work, files, and controls you need.</Text></View><IconButton icon={section === "Skills" || section === "Routines" ? "add" : "tune"} label="Library action" onPress={() => section === "Skills" ? requireBot() && setSkillOpen(true) : section === "Routines" ? requireBot() && setRoutineOpen(true) : Alert.alert("Library", "Choose a section to work with the content you have created.")} tone="mint" /></View>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabs}>{tabs.map((tab) => <Pressable key={tab} accessibilityRole="tab" accessibilityState={{ selected: section === tab }} onPress={() => setSection(tab)} style={({ pressed }) => [styles.tab, section === tab && styles.tabSelected, pressed && styles.pressed]}><Text style={[styles.tabText, section === tab && styles.tabTextSelected]}>{tab}</Text></Pressable>)}</ScrollView>
-      {section === "Skills" ? <SkillsSection skills={skills} onCreate={() => requireBot() && setSkillOpen(true)} /> : null}
-      {section === "Routines" ? <View style={styles.panel}><SectionTitle eyebrow="Automation" title="Routines" action={<Pressable accessibilityRole="button" onPress={() => requireBot() && setRoutineOpen(true)} style={({ pressed }) => [styles.textAction, pressed && styles.pressed]}><Text style={styles.textActionText}>NEW</Text></Pressable>} />{routines.length ? <View style={styles.cards}>{routines.map((routine) => <View key={routine.id} style={styles.card}><View style={styles.cardHead}><View style={styles.cardCopy}><Text style={styles.cardTitle}>{routine.name}</Text><Text style={styles.cardMeta}>{routine.owner} · {routine.cadence}</Text></View><StatusPill label={routine.state} tone={routine.state === "Active" ? "mint" : "muted"} /></View><Text style={styles.cardDetail}>{routine.summary}</Text><View style={styles.cardFoot}><Text style={styles.cardMeta}>{routine.nextRun}</Text><Pressable accessibilityRole="button" onPress={() => toggleRoutine(routine.id)} style={({ pressed }) => [styles.smallAction, pressed && styles.pressed]}><Text style={styles.smallActionText}>{routine.state === "Active" ? "Pause" : "Resume"}</Text></Pressable></View></View>)}</View> : <EmptyState icon="schedule" title="No routines yet" detail="Create a routine only after you have a Bot and a repeatable way of working." />}</View> : null}
-      {section === "Files" ? <View style={styles.panel}><SectionTitle eyebrow="Files" title="Attachments" />{files.length ? <View style={styles.cards}>{files.map((file) => <View key={file.id} style={styles.fileRow}><MaterialIcons name={file.name.endsWith(".pdf") ? "picture-as-pdf" : "description"} size={20} color={palette.mint} /><View style={styles.cardCopy}><Text numberOfLines={1} style={styles.cardTitle}>{file.name}</Text><Text style={styles.cardMeta}>{file.size} · {file.owner}</Text></View><Text style={styles.fileScope}>{file.scope}</Text></View>)}</View> : <EmptyState icon="attach-file" title="No files yet" detail="Attach a file from a Bot conversation when it is useful to the work." />}</View> : null}
-      {section === "Search" ? <View style={styles.panel}><SectionTitle eyebrow="Search" title="Find your work" /><View style={styles.search}><MaterialIcons name="search" size={19} color={palette.mist} /><TextInput value={search} onChangeText={setSearch} placeholder="Search Bots, files, skills, routines" placeholderTextColor="#8A8C94" style={styles.searchText} /></View>{search.trim() ? searchResults.length ? <View style={styles.cards}>{searchResults.map((item, index) => <View key={`${item.type}-${item.title}-${index}`} style={styles.searchRow}><Text style={styles.searchType}>{item.type}</Text><View style={styles.cardCopy}><Text style={styles.cardTitle}>{item.title}</Text><Text numberOfLines={1} style={styles.cardMeta}>{item.detail}</Text></View></View>)}</View> : <EmptyState icon="search-off" title="No matching work" detail="Try a Bot name, file, skill, or routine you created." /> : <EmptyState icon="manage-search" title="Search starts here" detail="Your results will appear as you create Bots and add work." />}</View> : null}
-      {section === "Privacy" ? <View style={styles.panel}><SectionTitle eyebrow="Control" title="Privacy and alerts" /><View style={styles.card}><Text style={styles.cardTitle}>Workroom storage</Text><Text style={styles.cardDetail}>Your Bots, messages, tasks, and settings are stored in your authenticated managed cloud workroom, with a local offline fallback on this device.</Text></View><View style={styles.preference}><View><Text style={styles.cardTitle}>Approval alerts</Text><Text style={styles.cardMeta}>Decisions that need you</Text></View><Pressable accessibilityRole="switch" accessibilityState={{ checked: notificationPreferences.approval }} onPress={() => setPreference("approval", !notificationPreferences.approval)} style={({ pressed }) => [styles.toggle, notificationPreferences.approval && styles.toggleOn, pressed && styles.pressed]}><Text style={[styles.toggleText, notificationPreferences.approval && styles.toggleTextOn]}>{notificationPreferences.approval ? "On" : "Off"}</Text></Pressable></View><View style={styles.preference}><View><Text style={styles.cardTitle}>Completion alerts</Text><Text style={styles.cardMeta}>Finished task summaries</Text></View><Pressable accessibilityRole="switch" accessibilityState={{ checked: notificationPreferences.completion }} onPress={() => setPreference("completion", !notificationPreferences.completion)} style={({ pressed }) => [styles.toggle, notificationPreferences.completion && styles.toggleOn, pressed && styles.pressed]}><Text style={[styles.toggleText, notificationPreferences.completion && styles.toggleTextOn]}>{notificationPreferences.completion ? "On" : "Off"}</Text></Pressable></View><Pressable accessibilityRole="button" onPress={() => void enableAlerts()} style={({ pressed }) => [styles.alertButton, pressed && styles.pressed]}><MaterialIcons name="notifications-active" size={18} color="#FFFFFF" /><Text style={styles.alertButtonText}>{notificationStatus === "Enabled" ? "Task alerts enabled" : "Enable task alerts"}</Text></Pressable></View> : null}
-    </ScrollView>
-    <Modal transparent visible={skillOpen} animationType="slide" onRequestClose={() => setSkillOpen(false)}><Pressable style={styles.shade} onPress={() => setSkillOpen(false)}><Pressable style={styles.sheet} onPress={(event) => event.stopPropagation()}><View style={styles.grabber} /><Text style={styles.setupEyebrow}>NEW SKILL</Text><Text style={styles.setupTitle}>Save your own process.</Text><Text style={styles.sheetLead}>Write down what the process does and return to it only after you have tested it.</Text><Text style={styles.fieldLabel}>SKILL NAME</Text><TextInput value={skillName} onChangeText={setSkillName} placeholder="Name this process" placeholderTextColor="#8A8C94" style={styles.field} /><Text style={styles.fieldLabel}>PROCESS DESCRIPTION</Text><TextInput value={skillDescription} onChangeText={setSkillDescription} placeholder="What should this process do?" placeholderTextColor="#8A8C94" multiline style={[styles.field, styles.detailField]} /><Pressable accessibilityRole="button" onPress={createSkill} style={({ pressed }) => [styles.primary, pressed && styles.pressed]}><Text style={styles.primaryText}>Save draft skill</Text><MaterialIcons name="arrow-forward" size={18} color="#FFFFFF" /></Pressable></Pressable></Pressable></Modal>
-    <Modal transparent visible={routineOpen} animationType="slide" onRequestClose={() => setRoutineOpen(false)}><Pressable style={styles.shade} onPress={() => setRoutineOpen(false)}><Pressable style={styles.sheet} onPress={(event) => event.stopPropagation()}><View style={styles.grabber} /><Text style={styles.setupEyebrow}>NEW ROUTINE</Text><Text style={styles.setupTitle}>Set a schedule you trust.</Text><Text style={styles.sheetLead}>It begins paused. Review its inputs and approval boundary before enabling it.</Text><Text style={styles.fieldLabel}>ROUTINE NAME</Text><TextInput value={routineName} onChangeText={setRoutineName} placeholder="Name this routine" placeholderTextColor="#8A8C94" style={styles.field} /><Text style={styles.fieldLabel}>SCHEDULE</Text><TextInput value={routineCadence} onChangeText={setRoutineCadence} placeholder="When should it run?" placeholderTextColor="#8A8C94" style={styles.field} /><Pressable accessibilityRole="button" onPress={createRoutine} style={({ pressed }) => [styles.primary, pressed && styles.pressed]}><Text style={styles.primaryText}>Save paused routine</Text><MaterialIcons name="arrow-forward" size={18} color="#FFFFFF" /></Pressable></Pressable></Pressable></Modal>
-  </ScreenContainer>;
-}
+  const searchResults = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return [];
+    return [
+      ...bots
+        .filter((item) => `${item.name} ${item.role} ${item.purpose}`.toLowerCase().includes(query))
+        .map((item) => ({ type: "Bot", title: item.name, detail: item.role })),
+      ...skills
+        .filter((item) => `${item.name} ${item.description}`.toLowerCase().includes(query))
+        .map((item) => ({ type: "Skill", title: item.name, detail: item.description })),
+      ...routines
+        .filter((item) => `${item.name} ${item.summary}`.toLowerCase().includes(query))
+        .map((item) => ({ type: "Routine", title: item.name, detail: item.cadence })),
+      ...files
+        .filter((item) => `${item.name} ${item.owner}`.toLowerCase().includes(query))
+        .map((item) => ({ type: "File", title: item.name, detail: `${item.scope} · ${item.owner}` })),
+    ];
+  }, [bots, files, routines, search, skills]);
 
-function SkillsSection({ skills, onCreate }: { skills: Skill[]; onCreate: () => void }) { return <View style={styles.panel}><SectionTitle eyebrow="Reusable work" title="Skills" action={<Pressable accessibilityRole="button" onPress={onCreate} style={({ pressed }) => [styles.textAction, pressed && styles.pressed]}><Text style={styles.textActionText}>NEW</Text></Pressable>} />{skills.length ? <View style={styles.cards}>{skills.map((skill) => <View key={skill.id} style={styles.card}><View style={styles.cardHead}><View style={styles.cardCopy}><Text style={styles.cardTitle}>{skill.name}</Text><Text style={styles.cardMeta}>{skill.owner} · {skill.version}</Text></View><StatusPill label={skill.status} tone={skill.status === "Enabled" ? "mint" : skill.status === "Testing" ? "amber" : "muted"} /></View><Text style={styles.cardDetail}>{skill.description}</Text></View>)}</View> : <EmptyState icon="auto-awesome" title="No skills yet" detail="When you have a process worth repeating, save it here in your own words." />}</View>; }
-
-export function AccountControls({ syncStatus }: { syncStatus: string }) {
-  const { user, logout } = useAuth();
-  const { clearWorkroom } = useWorkroom();
-  const records = trpc.records.list.useQuery(undefined, { retry: 1 });
-  const exportQuery = trpc.accountData.export.useQuery(undefined, { enabled: false });
-  const deleteMutation = trpc.accountData.delete.useMutation();
-  const [exporting, setExporting] = useState(false);
-  const exportData = async () => { setExporting(true); try { const result = await exportQuery.refetch(); if (!result.data) throw new Error("No account data returned"); const content = JSON.stringify(result.data, null, 2); if (Platform.OS === "web") { const url = URL.createObjectURL(new Blob([content], { type: "application/json" })); const link = document.createElement("a"); link.href = url; link.download = "rook-account-export.json"; link.click(); URL.revokeObjectURL(url); } else { const uri = `${FileSystem.documentDirectory}rook-account-export.json`; await FileSystem.writeAsStringAsync(uri, content, { encoding: FileSystem.EncodingType.UTF8 }); if (!(await Sharing.isAvailableAsync())) throw new Error("Sharing is unavailable on this device"); await Sharing.shareAsync(uri, { mimeType: "application/json", dialogTitle: "Export Rook account data" }); } } catch { Alert.alert("Export unavailable", "Rook could not prepare your account export right now. Please try again."); } finally { setExporting(false); } };
-  const confirmDelete = () => Alert.alert("Delete all Rook workroom data?", "This permanently removes your Bots, tasks, files, routines, messages, synced alert settings, and registered devices from this account. Your login remains available.", [
-    { text: "Cancel", style: "cancel" },
-    { text: "Continue", style: "destructive", onPress: () => Alert.alert("Final confirmation", "This cannot be undone. Delete your cloud workroom now?", [
-      { text: "Keep data", style: "cancel" },
-      { text: "Delete all data", style: "destructive", onPress: () => { void deleteMutation.mutateAsync({ confirmation: "DELETE" }).then((deleted) => { if (deleted) { clearWorkroom(); Alert.alert("Workroom deleted", "Your account is now an empty Rook workroom."); } }).catch(() => Alert.alert("Deletion unavailable", "Rook could not delete your data right now. Please try again.")); } },
-    ]) },
-  ]);
-  const signOut = () => {
-    if (Platform.OS === "web") {
-      void logout();
+  const createSkill = () => {
+    if (!requireBot()) return;
+    if (!skillName.trim() || !skillDescription.trim()) {
+      Alert.alert("Finish the skill", "Give the process a name and describe what it should do.");
       return;
     }
-    Alert.alert("Sign out of Rook?", "Your cloud workroom stays safely saved to your account.", [{ text: "Cancel", style: "cancel" }, { text: "Sign out", style: "destructive", onPress: () => void logout() }]);
+    addSkill({
+      name: skillName.trim(),
+      owner: bots[0].name,
+      status: "Draft",
+      description: skillDescription.trim(),
+      version: "v0.1",
+      approvals: "Review the approval boundary before enabling",
+    });
+    setSkillName("");
+    setSkillDescription("");
+    setSkillOpen(false);
   };
-  return <View style={styles.panel}><SectionTitle eyebrow="Account" title="Profile and storage" /><View style={styles.card}><View style={styles.fileRow}><Avatar label={user?.name ?? user?.email ?? "U"} color={palette.lavender} icon="person" size={48} /><View style={styles.cardCopy}><Text style={styles.cardTitle}>{user?.name || "Rook account"}</Text><Text style={styles.cardMeta}>{user?.email || "Secure account session"}</Text></View></View><View style={styles.preference}><View><Text style={styles.cardTitle}>Signed in with</Text><Text style={styles.cardMeta}>{user?.loginMethod === "github" ? "GitHub" : user?.loginMethod === "google" ? "Google" : "Clerk"}</Text></View><StatusPill label="Connected" tone="mint" /></View><View style={styles.preference}><View><Text style={styles.cardTitle}>Cloud workroom</Text><Text style={styles.cardMeta}>Managed database per authenticated account</Text></View><StatusPill label={syncStatus} tone={syncStatus === "Synced" ? "mint" : syncStatus === "Saving" || syncStatus === "Connecting" ? "amber" : "muted"} /></View><View style={styles.preference}><View><Text style={styles.cardTitle}>Cloud index</Text><Text style={styles.cardMeta}>{records.data ? `${records.data.bots.length} Bots · ${records.data.tasks.length} tasks · ${records.data.files.length} files` : "Loading independently queryable records"}</Text></View><MaterialIcons name="storage" size={20} color={palette.mint} /></View></View><Pressable accessibilityRole="button" onPress={() => void exportData()} style={({ pressed }) => [styles.alertButton, pressed && styles.pressed]}><MaterialIcons name="ios-share" size={18} color="#FFFFFF" /><Text style={styles.alertButtonText}>{exporting ? "Preparing export…" : "Export account data"}</Text></Pressable><Pressable accessibilityRole="button" onPress={confirmDelete} style={({ pressed }) => [styles.dangerButton, pressed && styles.pressed]}><MaterialIcons name="delete-outline" size={18} color="#B54444" /><Text style={styles.dangerButtonText}>{deleteMutation.isPending ? "Deleting workroom…" : "Delete all workroom data"}</Text></Pressable><Pressable accessibilityRole="button" accessibilityLabel="Sign out of Rook" onPress={signOut} style={({ pressed }) => [styles.signOutButton, pressed && styles.pressed]}><MaterialIcons name="logout" size={18} color={palette.cloud} /><View style={styles.signOutCopy}><Text style={styles.signOutTitle}>Sign out</Text><Text style={styles.signOutDetail}>{Platform.OS === "web" ? "End this browser session" : "End this device session"}</Text></View><MaterialIcons name="chevron-right" size={19} color={palette.mist} /></Pressable></View>;
+
+  const createRoutine = () => {
+    if (!requireBot()) return;
+    if (!routineName.trim() || !routineCadence.trim()) {
+      Alert.alert("Finish the routine", "Give it a name and tell Rook when it should run.");
+      return;
+    }
+    addRoutine({
+      name: routineName.trim(),
+      owner: bots[0].name,
+      cadence: routineCadence.trim(),
+      nextRun: "Paused until enabled",
+      state: "Paused",
+      summary: "Review the inputs and approval boundary before enabling this routine.",
+    });
+    setRoutineName("");
+    setRoutineCadence("");
+    setRoutineOpen(false);
+    setSection("Routines");
+  };
+
+  const titleMeta: Record<LibrarySection, { lead: string; actionLabel: string }> = {
+    Skills: { lead: "Reusable processes saved from real work.", actionLabel: "New skill" },
+    Routines: { lead: "Work that repeats on your cadence.", actionLabel: "New routine" },
+    Files: { lead: "Everything your Bots can reference.", actionLabel: "" },
+    Search: { lead: "Find anything across your workroom.", actionLabel: "" },
+    Privacy: { lead: "Storage and alert controls, in plain language.", actionLabel: "" },
+  };
+
+  return (
+    <ScreenContainer containerClassName="bg-background" className="flex-1" edges={["top", "left", "right"]}>
+      <ScrollView
+        {...dockScroll}
+        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: 34, gap: 20, maxWidth: 720, width: "100%", alignSelf: "center" }}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        <ScreenHeader
+          title="Library"
+          lead={titleMeta[section].lead}
+          action={
+            section === "Skills" || section === "Routines" ? (
+              <PrimaryButton
+                label={section === "Skills" ? "New skill" : "New routine"}
+                icon="add"
+                onPress={() => (section === "Skills" ? requireBot() && setSkillOpen(true) : requireBot() && setRoutineOpen(true))}
+              />
+            ) : undefined
+          }
+        />
+
+        <SegmentedControl options={SECTIONS} selected={section} onSelect={setSection} />
+
+        {section === "Skills" ? (
+          skills.length ? (
+            <View style={{ gap: 10 }}>
+              {skills.map((skill) => (
+                <Card key={skill.id}>
+                  <View style={{ flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={{ color: colors.text, fontSize: 14.5, fontWeight: "600", letterSpacing: -0.1 }}>{skill.name}</Text>
+                      <Text style={{ color: colors.textFaint, fontSize: 12, marginTop: 3 }}>
+                        {skill.owner} · {skill.version}
+                      </Text>
+                    </View>
+                    <StatusPill label={skill.status} tone={skill.status === "Enabled" ? "mint" : "muted"} />
+                  </View>
+                  <Text style={{ color: colors.textSoft, fontSize: 13, lineHeight: 19 }}>{skill.description}</Text>
+                  <Text style={{ color: colors.textFaint, fontSize: 11.5, lineHeight: 16 }}>{skill.approvals}</Text>
+                </Card>
+              ))}
+            </View>
+          ) : (
+            <EmptyState icon="bolt" title="No skills yet" detail="Finish a task worth repeating, then save it as a skill from the result." />
+          )
+        ) : null}
+
+        {section === "Routines" ? (
+          routines.length ? (
+            <View style={{ gap: 10 }}>
+              {routines.map((routine) => (
+                <Card key={routine.id}>
+                  <View style={{ flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={{ color: colors.text, fontSize: 14.5, fontWeight: "600", letterSpacing: -0.1 }}>{routine.name}</Text>
+                      <Text style={{ color: colors.textFaint, fontSize: 12, marginTop: 3 }}>
+                        {routine.owner} · {routine.cadence}
+                      </Text>
+                    </View>
+                    <StatusPill label={routine.state} tone={routine.state === "Active" ? "mint" : "muted"} />
+                  </View>
+                  <Text style={{ color: colors.textSoft, fontSize: 13, lineHeight: 19 }}>{routine.summary}</Text>
+                  <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                    <Text style={{ color: colors.textFaint, fontSize: 11.5 }}>{routine.nextRun}</Text>
+                    <Switch
+                      accessibilityLabel={`${routine.state === "Active" ? "Pause" : "Resume"} routine ${routine.name}`}
+                      checked={routine.state === "Active"}
+                      onToggle={() => toggleRoutine(routine.id)}
+                    />
+                  </View>
+                </Card>
+              ))}
+            </View>
+          ) : (
+            <EmptyState icon="schedule" title="No routines yet" detail="Create a routine only after you have a Bot and a repeatable way of working." />
+          )
+        ) : null}
+
+        {section === "Files" ? (
+          files.length ? (
+            <View style={{ gap: 10 }}>
+              {files.map((file) => (
+                <Card key={file.id} style={{ flexDirection: "row", alignItems: "center", gap: 12, padding: 14 }}>
+                  <View
+                    style={{
+                      width: 38,
+                      height: 38,
+                      borderRadius: 13,
+                      backgroundColor: colors.surfaceAlt,
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <MaterialIcons name={file.name.endsWith(".pdf") ? "picture-as-pdf" : "description"} size={19} color={colors.textSoft} />
+                  </View>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text numberOfLines={1} style={{ color: colors.text, fontSize: 14, fontWeight: "600" }}>
+                      {file.name}
+                    </Text>
+                    <Text style={{ color: colors.textFaint, fontSize: 11.5, marginTop: 2 }}>
+                      {file.size} · {file.owner}
+                    </Text>
+                  </View>
+                  <View style={{ backgroundColor: colors.surfaceAlt, borderRadius: 999, paddingHorizontal: 9, paddingVertical: 4 }}>
+                    <Text style={{ color: colors.textSoft, fontSize: 10.5, fontWeight: "600" }}>{file.scope}</Text>
+                  </View>
+                </Card>
+              ))}
+            </View>
+          ) : (
+            <EmptyState icon="attach-file" title="No files yet" detail="Attach a file from a Bot conversation when it is useful to the work." />
+          )
+        ) : null}
+
+        {section === "Search" ? (
+          <>
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 10,
+                backgroundColor: colors.surface,
+                borderWidth: 1,
+                borderColor: colors.line,
+                borderRadius: 16,
+                paddingHorizontal: 14,
+              }}
+            >
+              <MaterialIcons name="search" size={19} color={colors.textFaint} />
+              <TextInput
+                value={search}
+                onChangeText={setSearch}
+                placeholder="Search Bots, files, skills, routines"
+                placeholderTextColor={colors.placeholder}
+                style={{ flex: 1, color: colors.text, fontSize: 15, height: 48 }}
+                accessibilityLabel="Search your workroom"
+              />
+              {search ? (
+                <Pressable accessibilityRole="button" accessibilityLabel="Clear search" onPress={() => setSearch("")} hitSlop={8}>
+                  <MaterialIcons name="close" size={18} color={colors.textFaint} />
+                </Pressable>
+              ) : null}
+            </View>
+            {search.trim() ? (
+              searchResults.length ? (
+                <View style={{ gap: 10 }}>
+                  {searchResults.map((item, index) => (
+                    <Card key={`${item.type}-${item.title}-${index}`} style={{ flexDirection: "row", alignItems: "center", gap: 12, padding: 14 }}>
+                      <View style={{ backgroundColor: colors.accentSoft, borderRadius: 999, paddingHorizontal: 9, paddingVertical: 4, minWidth: 52, alignItems: "center" }}>
+                        <Text style={{ color: colors.accent, fontSize: 10.5, fontWeight: "700" }}>{item.type}</Text>
+                      </View>
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text numberOfLines={1} style={{ color: colors.text, fontSize: 14, fontWeight: "600" }}>
+                          {item.title}
+                        </Text>
+                        <Text numberOfLines={1} style={{ color: colors.textFaint, fontSize: 11.5, marginTop: 2 }}>
+                          {item.detail}
+                        </Text>
+                      </View>
+                    </Card>
+                  ))}
+                </View>
+              ) : (
+                <EmptyState icon="search-off" title="No matching work" detail="Try a Bot name, file, skill, or routine you created." />
+              )
+            ) : (
+              <EmptyState icon="manage-search" title="Search starts here" detail="Your results will appear as you create Bots and add work." />
+            )}
+          </>
+        ) : null}
+
+        {section === "Privacy" ? (
+          <>
+            <Card>
+              <Text style={{ color: colors.text, fontSize: 14.5, fontWeight: "600", letterSpacing: -0.1 }}>Workroom storage</Text>
+              <Text style={{ color: colors.textSoft, fontSize: 13, lineHeight: 19 }}>
+                Your Bots, messages, tasks, and settings live in your authenticated managed cloud workroom, with a local offline fallback on this
+                device.
+              </Text>
+            </Card>
+            <Card style={{ gap: 0 }}>
+              <PreferenceRow
+                title="Approval alerts"
+                detail="Decisions that need you"
+                checked={notificationPreferences.approval}
+                onToggle={() => setPreference("approval", !notificationPreferences.approval)}
+              />
+              <View style={{ height: 1, backgroundColor: colors.line }} />
+              <PreferenceRow
+                title="Completion alerts"
+                detail="Finished task summaries"
+                checked={notificationPreferences.completion}
+                onToggle={() => setPreference("completion", !notificationPreferences.completion)}
+              />
+            </Card>
+            <Card>
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: colors.text, fontSize: 14, fontWeight: "600" }}>Device delivery</Text>
+                  <Text style={{ color: colors.textFaint, fontSize: 11.5, marginTop: 2 }}>Status: {notificationStatus}</Text>
+                </View>
+                <PrimaryButton label="Enable alerts" onPress={() => void enableAlerts()} />
+              </View>
+            </Card>
+          </>
+        ) : null}
+      </ScrollView>
+
+      {/* New skill */}
+      <Sheet visible={skillOpen} onClose={() => setSkillOpen(false)}>
+        <SheetEyebrow>New skill</SheetEyebrow>
+        <Text style={{ color: colors.text, fontSize: 23, lineHeight: 29, fontWeight: "700", letterSpacing: -0.6 }}>Save a process</Text>
+        <Text style={{ color: colors.textSoft, fontSize: 13.5, lineHeight: 19.5, marginTop: 7, marginBottom: 18 }}>
+          A skill is a reusable way of working your Bots can follow.
+        </Text>
+        <View style={{ gap: 14 }}>
+          <Field label="Name" value={skillName} onChangeText={setSkillName} placeholder="Weekly source brief" autoFocus />
+          <Field
+            label="What it does"
+            value={skillDescription}
+            onChangeText={setSkillDescription}
+            placeholder="Gathers the sources I list and returns a one-page brief."
+            multiline
+          />
+        </View>
+        <View style={{ marginTop: 24 }}>
+          <PrimaryButton label="Save skill" icon="check" onPress={createSkill} />
+        </View>
+      </Sheet>
+
+      {/* New routine */}
+      <Sheet visible={routineOpen} onClose={() => setRoutineOpen(false)}>
+        <SheetEyebrow>New routine</SheetEyebrow>
+        <Text style={{ color: colors.text, fontSize: 23, lineHeight: 29, fontWeight: "700", letterSpacing: -0.6 }}>Repeat the work</Text>
+        <Text style={{ color: colors.textSoft, fontSize: 13.5, lineHeight: 19.5, marginTop: 7, marginBottom: 18 }}>
+          A routine runs a skill on a cadence you control.
+        </Text>
+        <View style={{ gap: 14 }}>
+          <Field label="Name" value={routineName} onChangeText={setRoutineName} placeholder="Monday morning brief" autoFocus />
+          <Field label="When it runs" value={routineCadence} onChangeText={setRoutineCadence} placeholder="Every Monday at 08:00" />
+        </View>
+        <View style={{ marginTop: 24 }}>
+          <PrimaryButton label="Create routine" icon="check" onPress={createRoutine} />
+        </View>
+      </Sheet>
+    </ScreenContainer>
+  );
 }
 
-const styles = StyleSheet.create({
-  content: { paddingHorizontal: 18, paddingTop: 18, paddingBottom: 30, gap: 18, maxWidth: 780, width: "100%", alignSelf: "center" }, head: { flexDirection: "row", justifyContent: "space-between", gap: 14 }, title: { color: palette.cloud, fontSize: 24, fontWeight: "900", letterSpacing: -0.6, lineHeight: 30 }, lead: { color: palette.mist, fontSize: 13, lineHeight: 19, marginTop: 5, maxWidth: 320 }, tabs: { gap: 8 }, tab: { backgroundColor: palette.elevated, borderWidth: 1, borderColor: palette.line, borderRadius: 13, paddingHorizontal: 13, paddingVertical: 9 }, tabSelected: { backgroundColor: palette.graphite, borderColor: palette.cloud }, tabText: { color: palette.mist, fontSize: 12, fontWeight: "800" }, tabTextSelected: { color: palette.cloud }, panel: { gap: 13 }, cards: { gap: 9 }, card: { backgroundColor: palette.elevated, borderWidth: 1, borderColor: palette.line, borderRadius: 15, padding: 14, gap: 9 }, cardHead: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 9 }, cardCopy: { flex: 1, minWidth: 0 }, cardTitle: { color: palette.cloud, fontSize: 14, fontWeight: "800", lineHeight: 19 }, cardMeta: { color: palette.mist, fontSize: 11, lineHeight: 16, marginTop: 3 }, cardDetail: { color: palette.mist, fontSize: 12, lineHeight: 18 }, cardFoot: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 }, textAction: { backgroundColor: palette.elevated, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7 }, textActionText: { color: palette.cloud, fontSize: 10, fontWeight: "900", letterSpacing: 0.7 }, smallAction: { backgroundColor: palette.graphite, borderWidth: 1, borderColor: palette.line, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7, alignItems: "center" }, smallActionText: { color: palette.cloud, fontSize: 11, fontWeight: "800" }, signOutButton: { minHeight: 62, flexDirection: "row", alignItems: "center", gap: 11, backgroundColor: palette.graphite, borderWidth: 1, borderColor: palette.line, borderRadius: 15, paddingHorizontal: 15, paddingVertical: 11 }, signOutCopy: { flex: 1 }, signOutTitle: { color: palette.cloud, fontSize: 14, fontWeight: "900" }, signOutDetail: { color: palette.mist, fontSize: 11, lineHeight: 16, marginTop: 2 }, fileRow: { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: palette.elevated, borderWidth: 1, borderColor: palette.line, borderRadius: 15, padding: 13 }, fileScope: { color: palette.mist, fontSize: 9, fontWeight: "800", maxWidth: 78, textAlign: "right" }, search: { flexDirection: "row", alignItems: "center", gap: 9, backgroundColor: palette.elevated, borderWidth: 1, borderColor: palette.line, borderRadius: 15, paddingHorizontal: 12 }, searchText: { flex: 1, color: palette.cloud, fontSize: 14, height: 46 }, searchRow: { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: palette.elevated, borderWidth: 1, borderColor: palette.line, borderRadius: 15, padding: 12 }, searchType: { color: palette.mist, fontSize: 9, fontWeight: "900", letterSpacing: 0.8, width: 48 }, preference: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10, paddingVertical: 8 }, toggle: { minWidth: 50, alignItems: "center", backgroundColor: palette.elevated, borderWidth: 1, borderColor: palette.line, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8 }, toggleOn: { backgroundColor: "#18B98216", borderColor: "#18B98266" }, toggleText: { color: palette.mist, fontSize: 11, fontWeight: "900" }, toggleTextOn: { color: palette.mint }, alertButton: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, backgroundColor: palette.ink, borderRadius: 14, paddingVertical: 13, marginTop: 4 }, alertButtonText: { color: "#FFFFFF", fontSize: 13, fontWeight: "900" }, dangerButton: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, backgroundColor: "#B5444412", borderWidth: 1, borderColor: "#B5444455", borderRadius: 14, paddingVertical: 13 }, dangerButtonText: { color: "#B54444", fontSize: 13, fontWeight: "900" }, pressed: { opacity: 0.74, transform: [{ scale: 0.98 }] }, shade: { flex: 1, justifyContent: "flex-end", backgroundColor: "#17181B66" }, sheet: { backgroundColor: palette.graphite, borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 18, paddingBottom: 28, paddingTop: 9, borderTopWidth: 1, borderColor: palette.line }, grabber: { width: 38, height: 4, borderRadius: 3, backgroundColor: "#C4C5CB", alignSelf: "center", marginBottom: 17 }, setupEyebrow: { color: palette.mist, fontSize: 10, fontWeight: "900", letterSpacing: 1.1, marginBottom: 7 }, setupTitle: { color: palette.cloud, fontSize: 24, lineHeight: 30, fontWeight: "900", letterSpacing: -0.65 }, sheetLead: { color: palette.mist, fontSize: 13, lineHeight: 19, marginTop: 9, marginBottom: 16 }, fieldLabel: { color: palette.mist, fontSize: 10, letterSpacing: 1.1, fontWeight: "900", marginTop: 11, marginBottom: 6 }, field: { color: palette.cloud, backgroundColor: palette.elevated, borderWidth: 1, borderColor: palette.line, borderRadius: 14, paddingHorizontal: 13, paddingVertical: 11, fontSize: 14 }, detailField: { minHeight: 86, textAlignVertical: "top" }, primary: { marginTop: 20, backgroundColor: palette.ink, borderRadius: 15, paddingVertical: 14, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 }, primaryText: { color: "#FFFFFF", fontSize: 14, fontWeight: "900" },
-});
+function PreferenceRow({ title, detail, checked, onToggle }: { title: string; detail: string; checked: boolean; onToggle: () => void }) {
+  const { colors } = useRookTheme();
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12, paddingVertical: 12 }}>
+      <View style={{ flex: 1 }}>
+        <Text style={{ color: colors.text, fontSize: 14, fontWeight: "600" }}>{title}</Text>
+        <Text style={{ color: colors.textFaint, fontSize: 11.5, marginTop: 2 }}>{detail}</Text>
+      </View>
+      <Switch accessibilityLabel={title} checked={checked} onToggle={onToggle} />
+    </View>
+  );
+}

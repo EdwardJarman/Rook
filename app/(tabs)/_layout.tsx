@@ -1,35 +1,134 @@
+import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import { Tabs } from "expo-router";
 import { Platform, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { RookDesktopSidebar } from "@/components/rook-desktop-sidebar";
-import { RookFloatingDock } from "@/components/rook-floating-dock";
-import { DockVisibilityProvider, useDockVisibility } from "@/lib/dock-visibility";
-
-const DESKTOP_SIDEBAR_BREAKPOINT = 960;
+import { HapticTab } from "@/components/haptic-tab";
+import {
+  DESKTOP_NAV_BREAKPOINT,
+  DESKTOP_STAGE_INSET,
+  RookDesktopSidebar,
+} from "@/components/rook-desktop-sidebar";
+import {
+  DesktopSidebarProvider,
+  useDesktopSidebar,
+} from "@/lib/desktop-sidebar-state";
+import { DockVisibilityProvider } from "@/lib/dock-visibility";
+import { useRookTheme } from "@/lib/ui";
 
 export default function TabLayout() {
-  return <DockVisibilityProvider><RookTabs /></DockVisibilityProvider>;
+  return (
+    <DockVisibilityProvider>
+      <DesktopSidebarProvider>
+        <RookTabs />
+      </DesktopSidebarProvider>
+    </DockVisibilityProvider>
+  );
 }
 
+/**
+ * Desktop keeps the focused workroom rail. Android gets a persistent native
+ * bottom bar: Bots, Library, Updates, and Account are all first-class phone
+ * destinations rather than hidden routes reachable only from header buttons.
+ */
 function RookTabs() {
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const { dockVisible } = useDockVisibility();
-  const desktopSidebar = Platform.OS === "web" && width >= DESKTOP_SIDEBAR_BREAKPOINT;
-  const dockBottom = Platform.OS === "web" ? 18 : Math.max(insets.bottom, 12);
-  const sceneBottomInset = desktopSidebar ? 0 : dockVisible ? 94 + dockBottom : 0;
+  const { colors } = useRookTheme();
+  const { visible: desktopSidebarVisible } = useDesktopSidebar();
+  const isDesktopLayout =
+    Platform.OS === "web" && width >= DESKTOP_NAV_BREAKPOINT;
+  const bottomPadding = Math.max(insets.bottom, 8);
+  const mobileTabHeight = 56 + bottomPadding;
 
   return (
     <Tabs
-      screenOptions={{ headerShown: false, sceneStyle: { paddingBottom: sceneBottomInset, paddingLeft: desktopSidebar ? 264 : 0 } }}
-      tabBar={(props) => desktopSidebar ? <RookDesktopSidebar {...props} /> : <RookFloatingDock {...props} />}
+      screenOptions={{
+        headerShown: false,
+        sceneStyle:
+          isDesktopLayout && desktopSidebarVisible
+            ? DESKTOP_STAGE_INSET
+            : undefined,
+        tabBarHideOnKeyboard: true,
+        tabBarActiveTintColor: colors.ink,
+        tabBarInactiveTintColor: colors.textFaint,
+        tabBarButton: HapticTab,
+        tabBarStyle: isDesktopLayout
+          ? { display: "none" }
+          : {
+              height: mobileTabHeight,
+              paddingTop: 7,
+              paddingBottom: bottomPadding,
+              backgroundColor: colors.canvas,
+              borderTopColor: colors.line,
+              borderTopWidth: 1,
+              elevation: 0,
+            },
+        tabBarLabelStyle: {
+          fontSize: 10.5,
+          fontWeight: "600",
+          marginTop: 1,
+        },
+      }}
+      tabBar={(props) =>
+        isDesktopLayout ? <RookDesktopSidebar {...props} /> : undefined
+      }
     >
-      <Tabs.Screen name="index" options={{ title: "Work", tabBarAccessibilityLabel: "Work" }} />
-      <Tabs.Screen name="bots" options={{ title: "Bots", tabBarAccessibilityLabel: "Bots" }} />
-      <Tabs.Screen name="library" options={{ title: "Library", tabBarAccessibilityLabel: "Library" }} />
-      <Tabs.Screen name="activity" options={{ title: "Updates", tabBarAccessibilityLabel: "Updates" }} />
-      <Tabs.Screen name="account" options={{ title: "Account", tabBarAccessibilityLabel: "Account" }} />
+      <Tabs.Screen
+        name="index"
+        options={{
+          title: "Chat",
+          tabBarAccessibilityLabel: "Open chat",
+          tabBarIcon: ({ color, size }) => (
+            <MaterialIcons name="forum" color={color} size={size} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="bots"
+        options={{
+          title: "Bots",
+          tabBarAccessibilityLabel: "Open Bots",
+          tabBarIcon: ({ color, size }) => (
+            <MaterialIcons name="smart-toy" color={color} size={size} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="library"
+        options={{
+          title: "Library",
+          tabBarAccessibilityLabel: "Open Library",
+          tabBarIcon: ({ color, size }) => (
+            <MaterialIcons name="folder-open" color={color} size={size} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="activity"
+        options={{
+          title: "Updates",
+          tabBarAccessibilityLabel: "Open Updates",
+          tabBarBadge: undefined,
+          tabBarIcon: ({ color, size }) => (
+            <MaterialIcons
+              name="notifications-none"
+              color={color}
+              size={size}
+            />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="account"
+        options={{
+          title: "Account",
+          tabBarAccessibilityLabel: "Open account",
+          tabBarIcon: ({ color, size }) => (
+            <MaterialIcons name="person-outline" color={color} size={size} />
+          ),
+        }}
+      />
     </Tabs>
   );
 }

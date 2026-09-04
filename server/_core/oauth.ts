@@ -1,6 +1,7 @@
 import { COOKIE_NAME, ONE_YEAR_MS } from "../../shared/const.js";
 import type { Express, Request, Response } from "express";
 import { getUserByOpenId, upsertUser } from "../db";
+import { finishMicrosoftAuthorization } from "../integrations/microsoft-excel";
 import { getSessionCookieOptions } from "./cookies";
 import { sdk } from "./sdk";
 
@@ -62,6 +63,32 @@ function buildUserResponse(
 }
 
 export function registerOAuthRoutes(app: Express) {
+  app.get("/api/oauth/microsoft/callback", async (req: Request, res: Response) => {
+    const code = getQueryParam(req, "code");
+    const state = getQueryParam(req, "state");
+    const providerError = getQueryParam(req, "error");
+    const fallback = `${(process.env.APP_ORIGIN || "https://www.rook.lighting").replace(/\/$/, "")}/account`;
+
+    if (providerError) {
+      res.redirect(302, `${fallback}?excel=cancelled`);
+      return;
+    }
+    if (!code || !state) {
+      res.redirect(302, `${fallback}?excel=invalid`);
+      return;
+    }
+
+    try {
+      const result = await finishMicrosoftAuthorization(code, state);
+      const target = new URL(result.returnTo);
+      target.searchParams.set("excel", "connected");
+      res.redirect(302, target.toString());
+    } catch (error) {
+      console.error("[Microsoft OAuth] Callback failed", error);
+      res.redirect(302, `${fallback}?excel=error`);
+    }
+  });
+
   app.get("/api/oauth/callback", async (req: Request, res: Response) => {
     const code = getQueryParam(req, "code");
     const state = getQueryParam(req, "state");

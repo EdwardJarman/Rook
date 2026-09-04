@@ -1,0 +1,52 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Rook",
+  "version": "0.2.0",
+  "identifier": "com.rook.desktop",
+  "build": {
+    "frontendDist": "../dist-app"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Rook",
+        "width": 1280,
+        "height": 860,
+        "minWidth": 960,
+        "minHeight": 640,
+        "resizable": true,
+        "center": true,
+        "decorations": true,
+        "fullscreen": false,
+        "transparent": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' http://127.0.0.1:* http://localhost:* ipc: https://ipc.localhost https://*.rook.lighting https://www.rook.lighting https://clerk.rook.lighting https://*.clerk.accounts.dev https://clerk.accounts.dev; script-src 'self' 'unsafe-inline' https://*.clerk.accounts.dev https://clerk.accounts.dev; frame-src 'self' https://*.clerk.accounts.dev https://clerk.accounts.dev; worker-src 'self' blob:; frame-ancestors 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "targets": ["nsis", "appimage", "dmg"],
+    "category": "Utility",
+    "shortDescription": "Rook — your workroom, on this computer.",
+    "longDescription": "Rook is a calm, Bot-first workroom. The desktop app puts chats, Bots, files, approvals, and your local file workspaces in one Tauri window, and runs a supervised, version-pinned Chromium on your own computer so your Bots can do real work — under your control.",
+    "externalBin": ["binaries/rook-node-sidecar"],
+    "resources": ["resources/chromium"],
+    "windows": {
+      "nsis": {
+        "installerHooks": "./nsis-hooks.nsh"
+      }
+    }
+  },
+  "plugins": {}
+}

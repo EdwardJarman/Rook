@@ -6,7 +6,11 @@ Rook is a calm, Bot-first AI workroom for managing specialized Bots. The design 
 
 ## Brand and color choices
 
-The Rook identity uses a clean, geometric signal motif: a warm electric mint accent against deep ink surfaces. The dark palette is built around **Ink #0B0D11**, **Graphite #151922**, **Elevated #1C2330**, **Cloud #F4F6F8**, **Mist #9AA4B2**, **Mint #77F3C4**, **Amber #F6C65B**, and **Coral #FF7B7B**. The light palette uses an off-white canvas with ink text and a slightly deeper mint accent. These colors provide clear state contrast without a busy or neon aesthetic.
+The Rook identity pairs a warm paper canvas with deep ink surfaces and a single green accent. Primary actions, user messages, and active controls are monochrome ink — the accent is reserved for interactive emphasis, success, and focus. Bot identities render as soft tinted washes rather than saturated fills, keeping the roster colorful but quiet.
+
+The light palette is built around **Canvas #F7F7F4**, **Surface #FFFFFF**, **Text #191C22**, **Muted #565E6B**, **Line #E9E8E2**, **Ink #1A1D23**, and **Accent #0E7C59**. The dark palette is a true ink mode: **Canvas #0A0C10**, **Surface #141820**, **Text #F1F3F6**, **Muted #A6AFBC**, **Line #262C38**, **Ink #ECEFF3** (light primaries on dark), and **Accent #6FE8BC**. Semantic tones — mint, amber, coral — always pair a readable foreground with a soft tinted background and are identical concepts in both schemes.
+
+Design tokens are resolved at runtime through `useRookTheme()` in `lib/ui.ts`, so every surface, including native, follows the user's light or dark preference. Shared primitives in `components/rook-primitives.tsx` (Avatar, buttons, StatusPill, Card, Sheet, Switch, SegmentedControl, Field, EmptyState) consume those tokens so screens stay consistent and theme-correct by construction.
 
 ## Screen list
 
@@ -46,9 +50,9 @@ The user starts a group workroom, selects a lead and specialists, describes the 
 
 ## Layout rules
 
-The Workroom screen uses a fixed, safe-area-aware top bar with the current Bot and connection state. The conversation occupies the middle scroll region. The composer sits above the home indicator, with a clear attach action and a primary send action. Bot switching, task details, skill references, and profile settings open in sheets or full-screen modals so the conversation remains the primary surface.
+The Workroom screen uses a fixed, safe-area-aware top bar with the current Bot and connection state. The conversation occupies the middle scroll region as a clean chat canvas: Bot replies render as plain text rows beside a small avatar, user messages as ink bubbles, and system events as quiet centered notes. The composer is a calm capsule above the home indicator, with a clear attach action and a primary send action that signals when it is armed. Bot switching, task details, skill references, and profile settings open in sheets or full-screen modals so the conversation remains the primary surface.
 
-The navigation includes **Work**, **Bots**, **Library**, **Updates**, and **Account**. Library is now explicitly named rather than implied as “Space”; Account is a direct destination rather than a hidden Library sub-section. Files, routines, skills, search, and privacy remain organized inside Library, while decisions and recent work live in Updates. On wide screens, the same named destinations remain visible without changing the information architecture.
+The navigation includes **Work**, **Bots**, **Library**, **Updates**, and **Account** rendered in a frosted floating dock that hides on scroll-down and returns on scroll-up. Library is explicitly named rather than implied as "Space"; Account is a direct destination rather than a hidden Library sub-section. Files, routines, skills, search, and privacy remain organized inside Library behind a segmented control; decisions and recent work live in Updates. On wide web canvases (960px and up), the dock yields to a quiet left sidebar — a rounded white panel floating on the canvas with the workspace mark, line-icon destinations, and a compact account footer — while each screen moves onto an inset stage beside it. The same named destinations remain visible on every width without changing the information architecture; phones and tablets keep the floating dock exactly as it is.
 
 ## Accessibility requirements
 

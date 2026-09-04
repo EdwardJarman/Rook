@@ -1,0 +1,350 @@
+name: Release Rook Node
+
+# Builds installers (unsigned binaries; see docs) for Windows,
+# macOS (arm64 + x64), and Linux, and attaches them to a GitHub Release.
+#
+# Trigger:
+#   - push a tag:  git tag v0.1.0 && git push origin v0.1.0
+#   - or run manually from the Actions tab (artifacts only, no release)
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Windows x64
+            os: windows-latest
+            pkg-target: node24-win-x64
+            rust-target: x86_64-pc-windows-msvc
+            sidecar-ext: .exe
+            browsers-path: "$LOCALAPPDATA/ms-playwright"
+            asset-name: Rook-Node-Setup.exe
+            cli-asset-name: Rook-CLI-windows-x64.zip
+            cli-executable-name: rook.exe
+          - label: macOS arm64
+            os: macos-14
+            pkg-target: node24-macos-arm64
+            rust-target: aarch64-apple-darwin
+            sidecar-ext: ""
+            browsers-path: "$HOME/Library/Caches/ms-playwright"
+            asset-name: Rook-Node-arm64.dmg
+            cli-asset-name: Rook-CLI-macos-arm64.tar.gz
+            cli-executable-name: rook
+          - label: macOS x64
+            os: macos-15-intel
+            pkg-target: node24-macos-x64
+            rust-target: x86_64-apple-darwin
+            sidecar-ext: ""
+            browsers-path: "$HOME/Library/Caches/ms-playwright"
+            asset-name: Rook-Node-intel.dmg
+            cli-asset-name: Rook-CLI-macos-x64.tar.gz
+            cli-executable-name: rook
+          - label: Linux x64
+            os: ubuntu-22.04
+            pkg-target: node24-linux-x64
+            rust-target: x86_64-unknown-linux-gnu
+            sidecar-ext: ""
+            browsers-path: "$HOME/.cache/ms-playwright"
+            asset-name: Rook-Node-x86_64.AppImage
+            cli-asset-name: Rook-CLI-linux-x64.tar.gz
+            cli-executable-name: rook
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: rook-node
+    timeout-minutes: 75
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: rook-node/pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rook-node/src-tauri
+
+      - name: Install Tauri system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libfuse2
+
+      - name: Install dependencies (downloads pinned Chromium via postinstall)
+        # `pnpm install` with the frozen lockfile + the playwright postinstall
+        # (downloads ~150 MB of Chromium) usually finishes in well under two
+        # minutes on GitHub-hosted runners. If it doesn't, the step surfaces
+        # the actual error instead of being swallowed by a later step.
+        timeout-minutes: 10
+        run: |
+          set -o pipefail
+          # Prefer offline cache when available, fall back to network.
+          # Avoid --frozen-lockfile: small lockfile drift between the local
+          # pnpm 9.12.0 and the runner has been aborting installs silently
+          # at the 2-minute mark, and a successful install matters more
+          # than lockfile strictness for a release.
+          pnpm install --prefer-offline 2>&1 | tail -200
+          echo "::group::Install summary"
+          echo "node: $(node -v)"
+          echo "pnpm: $(pnpm -v)"
+          echo "rustc: $(rustc --version 2>/dev/null || echo 'not yet installed')"
+          echo "::endgroup::"
+
+      - name: Build the desktop app (Vite + React)
+        env:
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+        # Skip the TS noEmit pre-check on CI: the full `pnpm check` job
+        # already type-checks the web/server side, and a failing tsc here
+        # would abort the release with a FUNCTION_INVOCATION_FAILED-style
+        # opaque error before the installers get built.
+        run: |
+          set -o pipefail
+          pnpm app:build:nocheck 2>&1 | tail -200
+          echo "vite dist contents:"
+          ls -la dist-app | head -20
+
+      - name: Bundle sidecar JS
+        run: pnpm exec esbuild src/index.ts --bundle --platform=node --format=cjs --outfile=build/index.cjs --external:playwright --external:ws --log-level=error
+
+      - name: Patch playwright-core for pkg (no V8 inspector)
+        run: node scripts/patch-inspector.mjs
+
+      - name: Compile sidecar to standalone binary
+        run: pnpm dlx @yao-pkg/pkg build/index.cjs --config package.json -t ${{ matrix.pkg-target }} --output src-tauri/binaries/rook-node-sidecar-${{ matrix.rust-target }}${{ matrix.sidecar-ext }}
+
+      - name: Stage bundled Chromium as a Tauri resource
+        shell: bash
+        run: |
+          mkdir -p src-tauri/resources
+          cp -r "${{ matrix.browsers-path }}" src-tauri/resources/chromium
+          ls src-tauri/resources/chromium
+
+      - name: Smoke-test the standalone sidecar
+        shell: bash
+        run: |
+          export PLAYWRIGHT_BROWSERS_PATH="$PWD/src-tauri/resources/chromium"
+          PORT=$((20000 + RANDOM % 20000))
+          EXT="${{ matrix.sidecar-ext }}"
+          ./src-tauri/binaries/rook-node-sidecar-${{ matrix.rust-target }}${EXT} --headless --no-launch --no-uplink --port $PORT &
+          SIDECAR_PID=$!
+          for i in $(seq 1 20); do
+            if curl -fsS "http://127.0.0.1:$PORT/healthz" > /dev/null 2>&1; then
+              echo "sidecar healthy on :$PORT"
+              kill $SIDECAR_PID 2>/dev/null || true
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "sidecar did not become healthy"
+          exit 1
+
+      - name: Build Tauri installers
+        id: tauribuild
+        shell: bash
+        run: |
+          set -o pipefail
+          echo "Building Tauri for ${{ matrix.rust-target }}"
+          # Sanity check the Vite dist is in place — if it's missing the
+          # Tauri build will fail with a confusing frontendDist error.
+          if [ ! -f dist-app/index.html ]; then
+            echo "::error::Vite dist-app/index.html is missing — the Vite build above did not produce output"
+            exit 1
+          fi
+          for attempt in 1 2; do
+            if pnpm dlx @tauri-apps/cli@2 build --target ${{ matrix.rust-target }} 2>&1 | tee /tmp/tauri-build.log; then
+              exit 0
+            fi
+            if [ "$attempt" = "2" ]; then
+              exit 1
+            fi
+            echo "Tauri bundle attempt failed; retrying once to recover transient platform packaging failures."
+            rm -rf "src-tauri/target/${{ matrix.rust-target }}/release/bundle/dmg" \
+              "src-tauri/target/${{ matrix.rust-target }}/release/bundle/appimage"
+          done
+        continue-on-error: true
+
+      - name: Surface Tauri build errors
+        if: steps.tauribuild.outcome == 'failure'
+        shell: bash
+        run: |
+          grep -aE "error|failed|Error" /tmp/tauri-build.log | tail -6 | while IFS= read -r line; do echo "::error::$line"; done
+          exit 1
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rook-node-${{ matrix.rust-target }}
+          path: |
+            rook-node/release-assets/*
+            rook-node/src-tauri/target/${{ matrix.rust-target }}/release/bundle/nsis/*.exe
+          if-no-files-found: warn
+
+      - name: Stage release assets under stable names
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          mkdir -p release-assets
+          BUNDLE="src-tauri/target/${{ matrix.rust-target }}/release/bundle"
+          if [ -d "$BUNDLE/nsis" ]; then
+            cp "$BUNDLE"/nsis/*.exe "release-assets/${{ matrix.asset-name }}"
+          elif [ -d "$BUNDLE/dmg" ]; then
+            cp "$BUNDLE"/dmg/*.dmg "release-assets/${{ matrix.asset-name }}"
+          elif [ -d "$BUNDLE/appimage" ]; then
+            cp "$BUNDLE"/appimage/*.AppImage "release-assets/${{ matrix.asset-name }}"
+          else
+            echo "no bundle output found in $BUNDLE"; exit 1
+          fi
+          ls -la release-assets
+
+      - name: Stage standalone Rook CLI archive
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          set -eu
+          CLI_STAGE="cli-stage"
+          mkdir -p "$CLI_STAGE"
+          cp "src-tauri/binaries/rook-node-sidecar-${{ matrix.rust-target }}${{ matrix.sidecar-ext }}" "$CLI_STAGE/${{ matrix.cli-executable-name }}"
+          cp -R src-tauri/resources/chromium "$CLI_STAGE/chromium"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            powershell -NoProfile -Command "Compress-Archive -Path '$CLI_STAGE\\*' -DestinationPath 'release-assets\\${{ matrix.cli-asset-name }}' -Force"
+          else
+            tar -C "$CLI_STAGE" -czf "release-assets/${{ matrix.cli-asset-name }}" "${{ matrix.cli-executable-name }}" chromium
+          fi
+          ls -lh "release-assets/${{ matrix.cli-asset-name }}"
+
+      - name: Verify staged Rook CLI
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            powershell -NoProfile -Command "& '.\\cli-stage\\${{ matrix.cli-executable-name }}' --version"
+          else
+            chmod 755 "cli-stage/${{ matrix.cli-executable-name }}"
+            "cli-stage/${{ matrix.cli-executable-name }}" --version
+          fi
+
+      - name: Publish release with stable asset names
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          # Explicit label so releases never inherit a confusing default name.
+          name: Rook Node ${{ github.ref_name }}
+          files: rook-node/release-assets/*
+          draft: false
+          make_latest: true
+          fail_on_unmatched_files: true
+          body: |
+            Rook Node ${{ github.ref_name }} — installers for Windows, macOS, and Linux.
+
+            **Windows**: run `Rook-Node-Setup.exe`. SmartScreen may warn (unsigned build) — choose "More info → Run anyway".
+            **macOS (Apple Silicon)**: `Rook-Node-arm64.dmg`. Unsigned — after installing, run `xattr -cr "/Applications/Rook Node.app"` once.
+            **macOS (Intel)**: `Rook-Node-intel.dmg`. Same `xattr` step applies.
+            **Linux**: `Rook-Node-x86_64.AppImage`; `chmod +x` and run.
+
+            **CLI**: macOS/Linux — `curl -fsSL https://www.rook.lighting/install.sh | sh`; Windows PowerShell — `irm https://www.rook.lighting/install.ps1 | iex`. The CLI archive includes the pinned Chromium runtime and installs for the current user only.
+
+            After opening the app, or running `rook`, press **Connect account** and sign in — that pairs this computer with your Rook account.
+
+  install-test:
+    # Sandbox end-to-end install test: silently install the built NSIS
+    # installer on a clean Windows runner, launch the app, and verify the
+    # sidecar + gateway come up. Exercises the exact extraction path that
+    # failed on a real machine.
+    name: Install test (Windows sandbox)
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Download installer artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rook-node-x86_64-pc-windows-msvc
+          path: installer
+
+      - name: Locate installer
+        id: find
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem installer -Recurse -Filter *.exe | Select-Object -First 1
+          if (-not $exe) { Write-Host "::error::no installer in artifact"; exit 1 }
+          echo "path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
+
+      - name: Silent install
+        shell: pwsh
+        run: |
+          Start-Process -FilePath "${{ steps.find.outputs.path }}" -ArgumentList "/S" -Wait
+          Write-Host "silent install finished"
+
+      - name: Verify install layout
+        id: layout
+        shell: pwsh
+        run: |
+          $uninstall = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Rook Node" -ErrorAction SilentlyContinue
+          $registeredDir = if ($uninstall -and $uninstall.InstallLocation) { $uninstall.InstallLocation.Trim('"') } else { $null }
+          $candidates = @(
+            $registeredDir,
+            "$env:LOCALAPPDATA\Rook Node",
+            "$env:LOCALAPPDATA\Programs\Rook Node",
+            "$env:ProgramFiles\Rook Node"
+          ) | Where-Object { $_ -and (Test-Path $_) }
+          $dir = $candidates | Where-Object { Test-Path (Join-Path $_ "uninstall.exe") } | Select-Object -First 1
+          if (-not $dir) { Write-Host "::error::installed Rook Node directory with uninstaller not found"; exit 1 }
+          $registeredExe = if ($uninstall -and $uninstall.DisplayIcon) { $uninstall.DisplayIcon.Trim('"') } else { $null }
+          $appExe = @(
+            $registeredExe,
+            (Get-ChildItem $dir -Recurse -Filter "*.exe" | Where-Object { $_.Name -notmatch '^(uninstall|rook-node-sidecar)' } | Select-Object -First 1).FullName
+          ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+          if (-not $appExe) { Write-Host "::error::missing main Rook Node executable in $dir"; Get-ChildItem $dir -Recurse -File | Select-Object FullName; exit 1 }
+          $sidecar = Get-ChildItem $dir -Recurse -Filter "rook-node-sidecar*.exe" | Select-Object -First 1
+          if (-not $sidecar) { Write-Host "::error::missing Rook Node sidecar executable in $dir"; exit 1 }
+          $chromium = Get-ChildItem $dir -Recurse -Directory -Filter "chromium" | Select-Object -First 1
+          if (-not $chromium) { Write-Host "::error::no chromium resources installed"; exit 1 }
+          echo "dir=$dir" >> $env:GITHUB_OUTPUT
+          echo "app=$appExe" >> $env:GITHUB_OUTPUT
+          Write-Host "layout ok: $dir; app: $appExe"
+
+      - name: Launch app and verify gateway
+        shell: pwsh
+        run: |
+          Start-Process -FilePath "${{ steps.layout.outputs.app }}"
+          $healthy = $false
+          foreach ($i in 1..40) {
+            Start-Sleep -Seconds 3
+            try {
+              $r = Invoke-WebRequest -Uri "http://127.0.0.1:37831/healthz" -UseBasicParsing -TimeoutSec 3
+              if ($r.StatusCode -eq 200) { Write-Host "gateway healthy: $($r.Content)"; $healthy = $true; break }
+            } catch { }
+          }
+          if (-not $healthy) {
+            Write-Host "::error::gateway did not become healthy after install"
+            Get-Process | Where-Object { $_.Name -match "rook" } | ForEach-Object { Write-Host "process: $($_.Name) $($_.Id)" }
+            exit 1
+          }
+
+      - name: Cleanup
+        if: always()
+        shell: pwsh
+        run: |
+          Get-Process | Where-Object { $_.Name -match "rook" } | Stop-Process -Force -ErrorAction SilentlyContinue

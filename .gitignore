@@ -6,6 +6,8 @@ node_modules/
 # Expo
 .expo/
 dist/
+dist-server/
+dist-app/
 web-build/
 expo-env.d.ts
 
@@ -66,3 +68,14 @@ Thumbs.db
 .project-config.json
 .vercel
 .env*
+!.env.example
+
+# Local tool workspaces (never committed)
+.kilo/
+
+# Rook Node build outputs
+rook-node/build/
+rook-node/src-tauri/binaries/
+rook-node/src-tauri/resources/
+rook-node/src-tauri/target/
+rook-node/src-tauri/gen/

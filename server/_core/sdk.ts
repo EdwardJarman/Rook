@@ -3,8 +3,7 @@ import { ForbiddenError } from "../../shared/_core/errors.js";
 import axios, { type AxiosInstance } from "axios";
 import { parse as parseCookieHeader } from "cookie";
 import type { Request } from "express";
-import { SignJWT, jwtVerify } from "jose";
-import type { User } from "../../drizzle/schema";
+import type { User } from "../../shared/database";
 import * as db from "../db";
 import { ENV } from "./env";
 import type {
@@ -163,6 +162,7 @@ class SDKServer {
     payload: SessionPayload,
     options: { expiresInMs?: number } = {},
   ): Promise<string> {
+    const { SignJWT } = await import("jose");
     const issuedAt = Date.now();
     const expiresInMs = options.expiresInMs ?? ONE_YEAR_MS;
     const expirationSeconds = Math.floor((issuedAt + expiresInMs) / 1000);
@@ -187,6 +187,7 @@ class SDKServer {
     }
 
     try {
+      const { jwtVerify } = await import("jose");
       const secretKey = this.getSessionSecret();
       const { payload } = await jwtVerify(cookieValue, secretKey, {
         algorithms: ["HS256"],
@@ -302,7 +303,7 @@ export type AuthenticatedUser = User & {
 function buildCronUser(userInfo: GetUserInfoWithJwtResponse): AuthenticatedUser {
   const now = new Date();
   return {
-    id: -1,
+    id: `cron:${userInfo.openId}`,
     openId: userInfo.openId,
     name: userInfo.name || "Manus Scheduled Task",
     email: null,
