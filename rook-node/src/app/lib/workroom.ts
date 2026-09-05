@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { useKv } from "./store";
+import { readKv, useKv, writeKv } from "./store";
 
 export type Bot = {
   id: string;
@@ -78,6 +78,14 @@ export type Routine = {
   nextRun: string;
 };
 
+export type Conversation = {
+  id: string;
+  title: string;
+  updatedAt: string;
+  botIds: string[];
+  messages: Message[];
+};
+
 export type WorkroomState = {
   bots: Bot[];
   tasks: Task[];
@@ -88,6 +96,9 @@ export type WorkroomState = {
   chatBotIds: string[];
   activeChatBotId: string | null;
   activeWorkspacePath: string | null;
+  /** Archived conversations (the live one is `messages` + activeConversationId). */
+  conversations: Conversation[];
+  activeConversationId: string | null;
 };
 
 const EMPTY: WorkroomState = {
@@ -100,13 +111,38 @@ const EMPTY: WorkroomState = {
   chatBotIds: [],
   activeChatBotId: null,
   activeWorkspacePath: null,
+  conversations: [],
+  activeConversationId: null,
 };
 
 type Listener = (state: WorkroomState) => void;
 
+const PERSIST_KEY = "workroom-history";
+
+type Persisted = {
+  bots: Bot[];
+  conversations: Conversation[];
+};
+
 class WorkroomStore {
   private state: WorkroomState = { ...EMPTY };
   private listeners = new Set<Listener>();
+  private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  private loaded = false;
+
+  constructor() {
+    // Restore bots + archived conversations from the previous session.
+    void readKv<Persisted>(PERSIST_KEY).then((saved) => {
+      this.loaded = true;
+      if (!saved) return;
+      this.state = {
+        ...this.state,
+        bots: Array.isArray(saved.bots) ? saved.bots : [],
+        conversations: Array.isArray(saved.conversations) ? saved.conversations : [],
+      };
+      this.notify();
+    });
+  }
 
   get(): WorkroomState {
     return this.state;
@@ -119,6 +155,21 @@ class WorkroomStore {
 
   private notify() {
     for (const l of this.listeners) l(this.state);
+    this.persistSoon();
+  }
+
+  /** Debounced local persistence of bots + conversation history. */
+  private persistSoon() {
+    if (!this.loaded) return;
+    if (this.saveTimer) clearTimeout(this.saveTimer);
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      const payload: Persisted = {
+        bots: this.state.bots,
+        conversations: this.state.conversations,
+      };
+      void writeKv(PERSIST_KEY, payload).catch(() => undefined);
+    }, 400);
   }
 
   hydrate(partial: Partial<WorkroomState>) {
@@ -128,6 +179,7 @@ class WorkroomStore {
 
   addMessage(msg: Message) {
     this.state = { ...this.state, messages: [...this.state.messages, msg] };
+    this.syncActiveConversation();
     this.notify();
   }
 
@@ -138,7 +190,22 @@ class WorkroomStore {
         m.id === id ? { ...m, ...patch } : m,
       ),
     };
+    this.syncActiveConversation();
     this.notify();
+  }
+
+  /** The live transcript IS the active conversation — keep its record in step. */
+  private syncActiveConversation() {
+    const id = this.state.activeConversationId;
+    if (!id) return;
+    this.state = {
+      ...this.state,
+      conversations: this.state.conversations.map((c) =>
+        c.id === id
+          ? { ...c, messages: [...this.state.messages], updatedAt: new Date().toISOString() }
+          : c,
+      ),
+    };
   }
 
   addApproval(a: Approval) {
@@ -227,6 +294,99 @@ class WorkroomStore {
     this.notify();
   }
 
+  /** Begin a new live conversation record (before its first message exists). */
+  openConversationRecord(conv: Conversation) {
+    this.state = {
+      ...this.state,
+      activeConversationId: conv.id,
+      conversations: [conv, ...this.state.conversations.filter((c) => c.id !== conv.id)],
+    };
+    this.notify();
+  }
+
+  addBotToChatRecord(botId: string) {
+    const id = this.state.activeConversationId;
+    if (!id) return;
+    this.state = {
+      ...this.state,
+      conversations: this.state.conversations.map((c) =>
+        c.id === id && !c.botIds.includes(botId)
+          ? { ...c, botIds: [...c.botIds, botId] }
+          : c,
+      ),
+    };
+  }
+
+  /**
+   * Park the live transcript as an archived conversation and clear the
+   * workroom for a fresh chat.
+   */
+  startNewChat() {
+    const st = this.state;
+    if (st.activeConversationId && st.messages.length > 0) {
+      // Already archived in place by syncActiveConversation; nothing to move.
+    } else if (st.messages.length > 0) {
+      const conv: Conversation = {
+        id: `conv-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+        title: st.messages.find((m) => m.author === "user")?.body.slice(0, 60) ?? "New chat",
+        updatedAt: new Date().toISOString(),
+        botIds: st.chatBotIds,
+        messages: [...st.messages],
+      };
+      this.state = { ...this.state, conversations: [conv, ...this.state.conversations] };
+    }
+    this.state = {
+      ...this.state,
+      messages: [],
+      chatBotIds: [],
+      activeChatBotId: null,
+      activeConversationId: null,
+    };
+    this.notify();
+  }
+
+  /** Swap the live transcript with an archived conversation. */
+  openConversation(id: string) {
+    const st = this.state;
+    const conv = st.conversations.find((c) => c.id === id);
+    if (!conv) return;
+    let conversations = st.conversations;
+    // Archive the current live transcript first, if any.
+    if (st.activeConversationId && st.messages.length > 0) {
+      const live: Conversation = {
+        id: st.activeConversationId,
+        title:
+          st.messages.find((m) => m.author === "user")?.body.slice(0, 60) ?? "New chat",
+        updatedAt: new Date().toISOString(),
+        botIds: st.chatBotIds,
+        messages: [...st.messages],
+      };
+      conversations = conversations.filter((c) => c.id !== live.id);
+      conversations = [live, ...conversations];
+    }
+    this.state = {
+      ...st,
+      conversations: conversations.filter((c) => c.id !== id),
+      messages: [...conv.messages],
+      chatBotIds: conv.botIds,
+      activeChatBotId: conv.botIds[0] ?? null,
+      activeConversationId: id,
+    };
+    this.notify();
+  }
+
+  deleteConversation(id: string) {
+    const isActive = this.state.activeConversationId === id;
+    this.state = {
+      ...this.state,
+      conversations: this.state.conversations.filter((c) => c.id !== id),
+      ...(isActive
+        ? { messages: [], chatBotIds: [], activeChatBotId: null, activeConversationId: null }
+        : {}),
+    };
+    this.notify();
+  }
+
   setWorkspace(path: string | null) {
     this.state = { ...this.state, activeWorkspacePath: path };
     this.notify();
@@ -249,6 +409,8 @@ export function useWorkroom(): WorkroomState & {
   decideApproval: (id: string, state: "approved" | "declined") => void;
   setWorkspace: (path: string | null) => void;
   ensureChatTarget: () => string;
+  openConversation: (id: string) => void;
+  deleteConversation: (id: string) => void;
 } {
   const [state, setState] = useState<WorkroomState>(() => workroom.get());
   useEffect(() => workroom.subscribe(setState), []);
@@ -267,6 +429,18 @@ export function useWorkroom(): WorkroomState & {
   const send = useCallback(async (text: string, attachments: string[] = [], botIdOverride?: string) => {
     const botId = botIdOverride ?? state.activeChatBotId;
     if (!botId) return;
+    // First message of a fresh session starts a titled conversation —
+    // like Claude/Codex, history must never silently vanish.
+    if (!workroom.get().activeConversationId) {
+      workroom.openConversationRecord({
+        id: `conv-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+        title: text.trim().slice(0, 60) || "New chat",
+        updatedAt: new Date().toISOString(),
+        botIds: [botId],
+        messages: [],
+      });
+    }
+    workroom.addBotToChatRecord(botId);
     const userMsg: Message = {
       id: `m-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       botId,
@@ -302,7 +476,7 @@ export function useWorkroom(): WorkroomState & {
   }, [state.activeChatBotId]);
 
   const startNewChat = useCallback(() => {
-    workroom.setActiveChat([], null);
+    workroom.startNewChat();
   }, []);
 
   const addBotToChat = useCallback((botId: string) => {
@@ -334,6 +508,8 @@ export function useWorkroom(): WorkroomState & {
   }, []);
 
   const ensureChatTarget = useCallback(() => workroom.ensureChatTarget(), []);
+  const openConversation = useCallback((id: string) => workroom.openConversation(id), []);
+  const deleteConversation = useCallback((id: string) => workroom.deleteConversation(id), []);
 
   return useMemo(
     () => ({
@@ -346,6 +522,8 @@ export function useWorkroom(): WorkroomState & {
       decideApproval,
       setWorkspace: setWorkspacePath,
       ensureChatTarget,
+      openConversation,
+      deleteConversation,
     }),
     [
       state,
@@ -357,6 +535,8 @@ export function useWorkroom(): WorkroomState & {
       decideApproval,
       setWorkspacePath,
       ensureChatTarget,
+      openConversation,
+      deleteConversation,
     ],
   );
 }

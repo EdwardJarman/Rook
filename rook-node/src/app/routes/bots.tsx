@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Plus, MoreHorizontal, Trash2, Edit3, Bot as BotIcon } from "lucide-react";
 
 import { Avatar, Button, Card, EmptyState, Field, Input, Modal, Pill, Spinner, Textarea, IconButton } from "@/components/primitives";
@@ -26,6 +27,7 @@ function newId() {
 export function BotsPage() {
   const { tokens } = useTheme();
   const { bots } = useWorkroom();
+  const navigate = useNavigate();
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
@@ -81,9 +83,19 @@ export function BotsPage() {
               bot={bot}
               onEdit={() => setEditingId(bot.id)}
               onDelete={() => {
-                workroom.hydrate({
-                  bots: bots.filter((b) => b.id !== bot.id),
-                });
+                if (window.confirm(`Delete ${bot.name}? Their chat history stays in Recent.`)) {
+                  workroom.hydrate({
+                    bots: bots.filter((b) => b.id !== bot.id),
+                  });
+                }
+              }}
+              onStartChat={() => {
+                const st = workroom.get();
+                workroom.setActiveChat(
+                  st.chatBotIds.includes(bot.id) ? st.chatBotIds : [...st.chatBotIds, bot.id],
+                  bot.id,
+                );
+                navigate("/");
               }}
             />
           ))}
@@ -117,10 +129,12 @@ function BotCard({
   bot,
   onEdit,
   onDelete,
+  onStartChat,
 }: {
   bot: Bot;
   onEdit: () => void;
   onDelete: () => void;
+  onStartChat: () => void;
 }) {
   const { tokens } = useTheme();
   const { addBotToChat, focusChatBot } = useWorkroom();
@@ -176,6 +190,7 @@ function BotCard({
           onClick={() => {
             addBotToChat(bot.id);
             focusChatBot(bot.id);
+            onStartChat();
           }}
         >
           Start a chat

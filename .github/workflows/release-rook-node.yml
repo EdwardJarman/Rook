@@ -136,9 +136,10 @@ jobs:
 
       - name: Stage bundled Chromium as a Tauri resource
         shell: bash
+        # Only the playwright-pinned revisions — not the whole runner browser
+        # cache, which carries multiple ~600 MB copies and bloated installs.
         run: |
-          mkdir -p src-tauri/resources
-          cp -r "${{ matrix.browsers-path }}" src-tauri/resources/chromium
+          node scripts/stage-chromium.mjs "${{ matrix.browsers-path }}" src-tauri/resources/chromium
           ls src-tauri/resources/chromium
 
       - name: Smoke-test the standalone sidecar

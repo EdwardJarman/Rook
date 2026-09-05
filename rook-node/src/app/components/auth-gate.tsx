@@ -96,9 +96,8 @@ function NoClerkKeyScreen({ children }: { children: ReactNode }) {
           textAlign: "center",
         }}
       >
-        Clerk publishable key is not configured. Set
-        `VITE_CLERK_PUBLISHABLE_KEY` when building the desktop app to enable
-        sign-in. The rest of the app is still usable.
+        Cloud sync is off in this build — chats stay on this computer. To
+        enable sign-in and cloud sync, update to the latest Rook release.
       </div>
     </div>
   );

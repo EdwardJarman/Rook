@@ -15,12 +15,46 @@ import { useTheme } from "@/lib/theme";
 
 export function AccountPage() {
   const { tokens } = useTheme();
-  const { signOut, user, isLoaded } = useSafeAuth();
+  const { signOut, user, isLoaded, mode } = useSafeAuth();
 
   if (!isLoaded) {
     return (
       <div style={{ padding: 24 }}>
         <Spinner />
+      </div>
+    );
+  }
+
+  if (mode === "offline" || !user) {
+    return (
+      <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 14 }}>
+        <header>
+          <h1
+            style={{
+              margin: 0,
+              fontSize: 22,
+              fontWeight: 750,
+              letterSpacing: -0.4,
+              color: tokens.text,
+            }}
+          >
+            Account
+          </h1>
+          <p style={{ margin: "6px 0 0", color: tokens.textSoft, fontSize: 13 }}>
+            Manage your sign-in, data, and connected devices.
+          </p>
+        </header>
+        <Card>
+          <h2 style={{ margin: 0, fontSize: 14.5, fontWeight: 700 }}>Running locally</h2>
+          <p style={{ margin: "4px 0 12px", fontSize: 12.5, color: tokens.textSoft, lineHeight: 1.5 }}>
+            This build of Rook isn't signed in — chats and files stay on this
+            computer. Connect your Rook account from the Computer page to sync
+            Bots, skills, and history across devices.
+          </p>
+          <Button variant="secondary" onClick={() => { window.location.hash = "#/computer"; }}>
+            Go to Computer
+          </Button>
+        </Card>
       </div>
     );
   }

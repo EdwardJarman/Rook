@@ -19,8 +19,8 @@ Sub-agent fan-out was attempted 4× (download flow, desktop runtime, release CI,
 | 4 | Release CI + asset integrity | 🔄 | Fixed `patch-inspector.mjs` non-idempotency (real CI-failure path: pnpm store cache can persist the patched file → script exited 1). Artifact upload now includes dmg/AppImage outputs; added `verify-release-assets.mjs` gate (fails loudly on missing/small assets) wired into the workflow. YAML validated. |
 | 5 | **Real installer built from current code** | ✅ (rebuilding w/ Activity) | Full local pipeline ran: sidecar rebuilt from source (pkg, 199 MB) → smoke-tested healthy → Chromium staged → **NSIS installer built (654 MB) → silently installed on this machine → launched → gateway `{"ok":true}` → window paints the full workroom** (verified via non-invasive window capture; user's screen otherwise untouched). Welcome hero + enabled composer visible in the installed build. |
 | 6 | Publish working release (v0.2.x) | ⏳ | ⚠️ **Key finding: latest published release is v0.1.20** — the v0.2.0 "release" from the handoff is not public. Public download currently ships the OLD app. Publishing needs a GitHub token (none in env) — will stage asset + exact commands. |
-| 7 | Remaining parity (activity feed, voice, model picker) | ⏳ | |
-| 8 | Fresh-eyes critic vs Claude/Codex desktop | ⏳ | blocked on agent capacity; retried periodically |
+| 7 | Remaining parity | 🔄 | Added /activity route + sidebar (parity with web Activity tab) and native keyboard layer (Ctrl+N new chat, Ctrl+, settings, Ctrl+1–8 nav) — shipped in the 23:20 installer build. Still open: voice input, model picker (needs server-side model param), tray icon, auto-update. Desktop vitest suite: 68/68 green. |
+| 8 | Fresh-eyes critic vs Claude/Codex desktop | 🔄 | Download-flow critic round 1: **FAIL** with 8 reproduced bugs → all fixed → round-2 critic now running. Desktop-app critic round 1 now running against the installed build. |
 | 9 | Integration journey pass | ⏳ | |
 
 ## Verification artifacts

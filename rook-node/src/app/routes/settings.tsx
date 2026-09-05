@@ -95,7 +95,7 @@ export function SettingsPage() {
             gap: 8,
           }}
         >
-          <Info label="Version" value={status.version ?? "—"} />
+          <Info label="Version" value={status.version ?? __APP_VERSION__} />
           <Info label="Data folder" value={status.dataHome ?? "—"} mono />
           <Info label="Gateway" value=":37831" mono />
         </div>

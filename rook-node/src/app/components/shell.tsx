@@ -1,4 +1,5 @@
-import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { useEffect } from "react";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   Bot,
   Folder,
@@ -40,10 +41,45 @@ const NAV: NavItem[] = [
 
 export function AppShell() {
   const { tokens, resolved } = useTheme();
-  const { chatBotIds, startNewChat, addBotToChat, focusChatBot, bots } =
-    useWorkroom();
+  const {
+    chatBotIds,
+    startNewChat,
+    addBotToChat,
+    focusChatBot,
+    bots,
+    conversations,
+    activeConversationId,
+    openConversation,
+  } = useWorkroom();
   const status = useNodeStatus();
   const location = useLocation();
+  const navigate = useNavigate();
+
+  // Native-app keyboard layer: Ctrl+N new chat, Ctrl+, settings,
+  // Ctrl+1..8 jump to sidebar destinations — the muscle memory Claude and
+  // Codex desktop users already have.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+      const key = e.key.toLowerCase();
+      if (key === "n") {
+        e.preventDefault();
+        startNewChat();
+        navigate("/");
+      } else if (key === ",") {
+        e.preventDefault();
+        navigate("/settings");
+      } else if (/^[1-9]$/.test(key)) {
+        const item = NAV[Number(key) - 1];
+        if (item) {
+          e.preventDefault();
+          navigate(item.to);
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [navigate, startNewChat]);
 
   return (
     <div
@@ -110,8 +146,78 @@ export function AppShell() {
             gap: 10,
             paddingTop: 12,
             borderTop: `1px solid ${tokens.line}`,
+            minHeight: 0,
           }}
         >
+          {conversations.length > 0 ? (
+            <div style={{ paddingLeft: 4, minHeight: 0, display: "flex", flexDirection: "column" }}>
+              <div
+                style={{
+                  fontSize: 10.5,
+                  fontWeight: 700,
+                  letterSpacing: 0.7,
+                  textTransform: "uppercase",
+                  color: tokens.textFaint,
+                  marginBottom: 8,
+                }}
+              >
+                Recent
+              </div>
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 2,
+                  maxHeight: 180,
+                  overflow: "auto",
+                }}
+              >
+                {conversations.slice(0, 12).map((c) => {
+                  const active = c.id === activeConversationId;
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => {
+                        openConversation(c.id);
+                        navigate("/");
+                      }}
+                      title={c.title}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        padding: "6px 8px",
+                        borderRadius: 10,
+                        background: active ? tokens.accentSoft : "transparent",
+                        border: "none",
+                        cursor: "pointer",
+                        textAlign: "left",
+                        color: tokens.text,
+                        width: "100%",
+                      }}
+                    >
+                      <MessageCircle size={13} color={active ? tokens.accent : tokens.textFaint} />
+                      <span
+                        style={{
+                          fontSize: 12.5,
+                          fontWeight: active ? 700 : 500,
+                          flex: 1,
+                          minWidth: 0,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {c.title}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+
           <div style={{ paddingLeft: 4 }}>
             <div
               style={{
@@ -133,7 +239,7 @@ export function AppShell() {
                   padding: "4px 6px",
                 }}
               >
-                No Bots yet. Create one in the Bots tab.
+                No Bots yet — just start typing, or visit the Bots tab.
               </div>
             ) : (
               <div
@@ -363,7 +469,7 @@ function NodeStatusFooter() {
           fontVariantNumeric: "tabular-nums",
         }}
       >
-        v{status.version ?? "—"}
+        v{status.version ?? __APP_VERSION__}
       </div>
     </div>
   );

@@ -411,7 +411,7 @@ function BotStrip() {
           padding: "6px 10px",
         }}
       >
-        No Bots yet. Create one in the Bots tab to start a conversation.
+        No Bots yet — you can still just start typing, or create a Bot in the Bots tab.
       </div>
     );
   }
