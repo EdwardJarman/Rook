@@ -1,112 +1,74 @@
 /**
- * Local persistence for desktop-app-only state.
+ * Local persistence for desktop-app-only state: linked folders, recent
+ * workspaces, theme preference, bots, and conversation history.
  *
- * Uses `tauri-plugin-store` when running in the Tauri shell, and
- * `localStorage` as a dev fallback. Stores the user's linked folders, the
- * most recent workspaces, theme preference (mirrored in the theme module),
- * and the "run on login" toggle.
+ * Backed by WebView2's localStorage under the app's own profile dir
+ * (%LOCALAPPDATA%/com.rook.desktop/EBWebView). This is deliberate: it
+ * survives app restarts and reinstalls, needs no extra permissions, and
+ * was the only path that ever actually persisted here — the
+ * tauri-plugin-store JS route silently failed (file stayed `{}`) while the
+ * catch swallowed the error, so the plugin branch was removed. If the
+ * 5–10 MB localStorage quota ever becomes a constraint, revisit with
+ * read_text_file/write_text_file through the existing shell commands.
  */
 import { useCallback, useEffect, useState } from "react";
 
-import { isTauri } from "./node-bridge";
-
-type Store = {
-  get<T>(key: string): Promise<T | null>;
-  set<T>(key: string, value: T): Promise<void>;
-  delete(key: string): Promise<void>;
-  save?(): Promise<void>;
-};
-// The Tauri plugin's `delete` returns `Promise<boolean>`; we coerce to void
-// for our own use sites.
-type AnyTauriStore = { get: <T>(k: string) => Promise<T | null>; set: <T>(k: string, v: T) => Promise<void>; delete: (k: string) => Promise<unknown>; save?: () => Promise<void> };
-
-let _store: Store | null = null;
-let _storePromise: Promise<Store> | null = null;
-
 const PREFIX = "rook:";
 
-async function getStore(): Promise<Store> {
-  if (_store) return _store;
-  if (_storePromise) return _storePromise;
-  _storePromise = (async () => {
-    if (isTauri()) {
-      try {
-        // Lazy import — only present inside the Tauri runtime.
-        const mod = (await import(
-          /* @vite-ignore */ "@tauri-apps/plugin-store"
-        )) as unknown as { Store: { load: (f: string) => Promise<AnyTauriStore> } };
-        const loaded = await mod.Store.load("rook-desktop.json");
-        _store = {
-          get: loaded.get.bind(loaded),
-          set: loaded.set.bind(loaded),
-          async delete(key) {
-            await loaded.delete(key);
-          },
-          save: loaded.save?.bind(loaded),
-        } satisfies Store;
-      } catch {
-        /* fall through to localStorage */
-      }
-    }
-    const memory: Record<string, unknown> = {};
-    if (typeof window !== "undefined") {
-      try {
-        for (let i = 0; i < window.localStorage.length; i++) {
-          const k = window.localStorage.key(i);
-          if (k && k.startsWith(PREFIX)) {
-            const v = window.localStorage.getItem(k);
-            if (v !== null) {
-              try {
-                memory[k.slice(PREFIX.length)] = JSON.parse(v);
-              } catch {
-                /* ignore */
-              }
+function memoryFallback(): Record<string, unknown> {
+  const memory: Record<string, unknown> = {};
+  if (typeof window !== "undefined") {
+    try {
+      for (let i = 0; i < window.localStorage.length; i++) {
+        const k = window.localStorage.key(i);
+        if (k && k.startsWith(PREFIX)) {
+          const v = window.localStorage.getItem(k);
+          if (v !== null) {
+            try {
+              memory[k.slice(PREFIX.length)] = JSON.parse(v);
+            } catch {
+              /* ignore malformed entries */
             }
           }
         }
-      } catch {
-        /* ignore */
       }
+    } catch {
+      /* private mode etc. — memory only */
     }
-    _store = {
-      async get<T>(key: string) {
-        return (memory[key] as T) ?? null;
-      },
-      async set<T>(key: string, value: T) {
-        memory[key] = value;
-        try {
-          window.localStorage.setItem(PREFIX + key, JSON.stringify(value));
-        } catch {
-          /* ignore */
-        }
-      },
-      async delete(key: string) {
-        delete memory[key];
-        try {
-          window.localStorage.removeItem(PREFIX + key);
-        } catch {
-          /* ignore */
-        }
-      },
-    };
-    return _store;
-  })();
-  return _storePromise;
+  }
+  return memory;
+}
+
+let memory: Record<string, unknown> | null = null;
+
+function ensureMemory(): Record<string, unknown> {
+  if (!memory) memory = memoryFallback();
+  return memory;
 }
 
 export async function readKv<T>(key: string): Promise<T | null> {
-  const store = await getStore();
-  return store.get<T>(key);
+  const mem = ensureMemory();
+  return (mem[key] as T) ?? null;
 }
 
 export async function writeKv<T>(key: string, value: T): Promise<void> {
-  const store = await getStore();
-  await store.set(key, value);
+  const mem = ensureMemory();
+  mem[key] = value;
+  try {
+    window.localStorage.setItem(PREFIX + key, JSON.stringify(value));
+  } catch {
+    /* quota exceeded or storage blocked — memory-only for this session */
+  }
 }
 
 export async function deleteKv(key: string): Promise<void> {
-  const store = await getStore();
-  await store.delete(key);
+  const mem = ensureMemory();
+  delete mem[key];
+  try {
+    window.localStorage.removeItem(PREFIX + key);
+  } catch {
+    /* ignore */
+  }
 }
 
 export function useKv<T>(key: string, initial: T): [T, (next: T) => void] {

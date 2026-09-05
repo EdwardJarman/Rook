@@ -1,12 +1,21 @@
 # Rook Desktop — Live Progress
 
-Last updated: 2026-09-04, ~22:30 (wave 1)
+Last updated: 2026-09-05
 
-## Goal
-A Rook desktop app + download experience at the standard of the Claude and Codex desktop apps — fast and obvious to get, install, and use, with full parity to the web app and rock-solid error recovery.
+## Where things stand
+- **v0.2.1 installer built, installed, and verified on this machine** — 255 MB (was 654 MB), gateway healthy, window paints, history works.
+- **Download flow: critic PASS** (round 2) — live version/size, hero CTA, honest phone handling, FAQ fixed.
+- **Desktop app: critic round 1 FAIL → all findings fixed and builder-verified in the installed app** (banner copy, Start-a-chat navigation + delete confirm, RECENT history with restore, Account offline card, v0.2.1 shown). Round-2 critic was attempted 3× but is blocked by intermittent model capacity — retried between other work.
+- **Bonus bug caught post-critic:** the Tauri store plugin buffers writes until save() — conversation persistence silently didn't flush to disk in the installed app (browser fallback worked, masking it). Fixed in store.ts (writeKv now flushes); final installer rebuilding.
 
-## Working mode note
-Sub-agent fan-out was attempted 4× (download flow, desktop runtime, release CI, and a foreground retry); every spawn hit a model concurrency limit in this environment. The work is being executed sequentially in the main loop instead, same piece-by-piece standard, with fresh-eyes critic agents to be retried as capacity allows.
+## Loop state
+| Piece | Round 1 | Fixes | Round 2 |
+|---|---|---|---|
+| Download flow | FAIL (8 bugs) | all fixed | **PASS** |
+| Desktop app | FAIL (7 aspects) | all 6 re-verifiable findings fixed | running |
+
+## What was built (commits 4dae847, ad5f0ac on main, unpushed)
+See `docs/release-v0.2.1-runbook.md` for the single remaining manual step (push + tag — needs the user's GitHub token), and `docs/desktop-parity-roadmap.md` for the honest remaining gaps (real-AI streaming, model picker, voice, tray, auto-update, deep links, MCP).
 
 ## Pieces & status
 
