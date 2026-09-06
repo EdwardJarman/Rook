@@ -58,6 +58,8 @@ export type WorkMessage = {
   kind?: "message" | "activity" | "result" | "approval" | "handoff";
   taskId?: string;
   attachmentName?: string;
+  /** Data URIs for images pasted or dragged into the composer with this message. */
+  imageUris?: string[];
   trace?: AgentTraceStep[];
 };
 export type WorkTask = {
