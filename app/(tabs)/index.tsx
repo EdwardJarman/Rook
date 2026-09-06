@@ -478,9 +478,13 @@ export default function ChatScreen() {
 
   const canSend =
     Boolean(composer.trim()) &&
+    Boolean(activeBot) &&
     !recorderState.isRecording &&
     !replyMutation.isPending &&
     !voiceMutation.isPending;
+  /* The button looks armed once there's text, even with no Bot in the room
+     yet — tapping it should prompt adding one instead of silently no-oping. */
+  const needsBotToSend = Boolean(composer.trim()) && !activeBot;
   const roomHasBots = chatBots.length > 0 || activeChatId !== "chat-legacy";
   const isPhoneExperience = isCompactLayout;
   const stageDropProps = botDropTargetProps({
@@ -1354,13 +1358,23 @@ export default function ChatScreen() {
                     accessibilityLabel={
                       canSend
                         ? "Send message"
-                        : recorderState.isRecording
-                          ? "Stop recording"
-                          : "Record voice message"
+                        : needsBotToSend
+                          ? "Add a Bot to send this message"
+                          : recorderState.isRecording
+                            ? "Stop recording"
+                            : "Record voice message"
                     }
-                    onPress={() =>
-                      canSend ? void handleSend() : void handleVoice()
-                    }
+                    onPress={() => {
+                      if (canSend) {
+                        void handleSend();
+                        return;
+                      }
+                      if (needsBotToSend) {
+                        setPickerOpen(true);
+                        return;
+                      }
+                      void handleVoice();
+                    }}
                     disabled={
                       replyMutation.isPending || voiceMutation.isPending
                     }
@@ -1370,10 +1384,15 @@ export default function ChatScreen() {
                       borderRadius: 21,
                       backgroundColor: canSend
                         ? colors.ink
-                        : recorderState.isRecording
-                          ? colors.coral
-                          : colors.canvas,
-                      borderWidth: canSend || recorderState.isRecording ? 0 : 1,
+                        : needsBotToSend
+                          ? tint(colors.accent, 0.14)
+                          : recorderState.isRecording
+                            ? colors.coral
+                            : colors.canvas,
+                      borderWidth:
+                        canSend || recorderState.isRecording || needsBotToSend
+                          ? 0
+                          : 1,
                       borderColor: colors.lineStrong,
                       alignItems: "center",
                       justifyContent: "center",
@@ -1389,17 +1408,21 @@ export default function ChatScreen() {
                       name={
                         canSend
                           ? "arrow-upward"
-                          : recorderState.isRecording
-                            ? "stop"
-                            : voiceMutation.isPending
-                              ? "more-horiz"
-                              : "mic"
+                          : needsBotToSend
+                            ? "person-add-alt-1"
+                            : recorderState.isRecording
+                              ? "stop"
+                              : voiceMutation.isPending
+                                ? "more-horiz"
+                                : "mic"
                       }
                       size={canSend ? 20 : 21}
                       color={
                         canSend || recorderState.isRecording
                           ? colors.onInk
-                          : colors.text
+                          : needsBotToSend
+                            ? colors.accent
+                            : colors.text
                       }
                     />
                   </Pressable>
