@@ -174,7 +174,15 @@ function SessionNavigator() {
   }
 
   return (
-    <Stack screenOptions={{ headerShown: false }}>
+    // Native-stack's own scene background defaults to white regardless of the
+    // app's palette, so without this every screen transition and rounded-corner
+    // gap briefly shows white through dark mode. Pin it to the current canvas.
+    <Stack
+      screenOptions={{
+        headerShown: false,
+        contentStyle: { backgroundColor: colors.canvas },
+      }}
+    >
       <Stack.Screen name="index" />
       <Stack.Screen name="sign-in" />
       <Stack.Screen name="sign-up" />
