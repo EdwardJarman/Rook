@@ -21,6 +21,33 @@ type SendDetail = {
 
 let initialized = false;
 
+/**
+ * Auth token source for tRPC calls. The Clerk context injects the real
+ * getter (useAuth().getToken) once the provider mounts; the window.Clerk
+ * global remains a fallback.
+ */
+let tokenGetter: (() => Promise<string | null>) | null = null;
+
+export function setTokenGetter(getter: (() => Promise<string | null>) | null) {
+  tokenGetter = getter;
+}
+
+async function currentToken(): Promise<string | null> {
+  if (tokenGetter) {
+    try {
+      return await tokenGetter();
+    } catch {
+      /* fall through to the global */
+    }
+  }
+  try {
+    const w = window as unknown as { Clerk?: { session?: { getToken: () => Promise<string | null> } } };
+    return (await w.Clerk?.session?.getToken?.()) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function mountSendBridge() {
   if (initialized) return () => undefined;
   initialized = true;
@@ -51,14 +78,7 @@ async function deliver(detail: SendDetail) {
   // Try the live tRPC call. If anything goes wrong, surface a useful
   // local message so the chat remains usable.
   try {
-    const client = getTrpcClient(async () => {
-      try {
-        const w = window as unknown as { Clerk?: { session?: { getToken: () => Promise<string | null> } } };
-        return (await w.Clerk?.session?.getToken?.()) ?? null;
-      } catch {
-        return null;
-      }
-    });
+    const client = getTrpcClient(currentToken);
     if (!client) throw new Error("trpc client unavailable");
     // Cast: the desktop app types the router as `unknown` so the
     // server-side route surface remains version-agnostic. We assert the
@@ -83,17 +103,34 @@ async function deliver(detail: SendDetail) {
       pending: false,
     });
   } catch (err) {
+    const authenticated = Boolean(await currentToken().catch(() => null));
     workroom.updateMessage(replyId, {
-      body: friendlyFallback(text, bot.name, attachments),
+      body: friendlyFallback(text, bot.name, attachments, authenticated),
       pending: false,
     });
     console.warn("[rook] chat reply failed:", (err as Error).message);
   }
 }
 
-function friendlyFallback(text: string, name: string, attachments: string[]): string {
+function friendlyFallback(
+  text: string,
+  name: string,
+  attachments: string[],
+  authenticated: boolean,
+): string {
   const trimmed = text.trim();
   const at = attachments.length > 0 ? ` and the ${attachments.length} file${attachments.length === 1 ? "" : "s"} you attached` : "";
+  if (authenticated) {
+    return [
+      `I couldn't reach the Rook service just now, ${name ? `this is ${name}` : ""}.`.trim(),
+      trimmed.length > 0
+        ? `I have your message: “${trimmed.slice(0, 280)}${trimmed.length > 280 ? "…" : ""}”${at}.`
+        : "",
+      "Check your internet connection and send it again — your message is safe here.",
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
   return [
     `Hi — I'm ${name}.`,
     trimmed.length > 0

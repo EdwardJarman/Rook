@@ -3,6 +3,7 @@ import { type ReactNode, useEffect, useState } from "react";
 
 import { SignInPage } from "@/routes/sign-in";
 import { offlineAuth, SafeAuthProvider, type SafeAuth } from "@/lib/safe-auth";
+import { setTokenGetter } from "@/lib/send-bridge";
 
 /**
  * Reads the Clerk publishable key from Vite env. The Tauri shell injects
@@ -33,9 +34,18 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
 function AuthGateInner({ children }: { children: ReactNode }) {
   // Clerk's `isSignedIn` is null while loading.
-  const { isSignedIn, isLoaded, signOut } = useAuth();
+  const { isSignedIn, isLoaded, signOut, getToken } = useAuth();
   const { user } = useUser();
   const [timedOut, setTimedOut] = useState(false);
+
+  // Feed the session token to the tRPC layer so chat replies authenticate
+  // against the production API (the send bridge cannot use React hooks).
+  useEffect(() => {
+    if (!isLoaded) return;
+    setTokenGetter(() => getToken());
+    return () => setTokenGetter(null);
+  }, [isLoaded, getToken]);
+
   // If Clerk never finishes loading (network blocked, key invalid, etc.)
   // surface a clear error after 8 s rather than hanging on "Loading…".
   useEffect(() => {
