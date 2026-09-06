@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   Bot,
@@ -8,6 +8,7 @@ import {
   CheckCheck,
   Activity,
   MessageCircle,
+  Search,
   Settings,
   User,
   Cpu,
@@ -17,7 +18,7 @@ import {
 import { useTheme } from "@/lib/theme";
 import { useWorkroom } from "@/lib/workroom";
 import { useNodeStatus } from "@/lib/use-node-status";
-import { Pill, Spinner, Button } from "@/components/primitives";
+import { useSafeAuth } from "@/lib/safe-auth";
 import { cn } from "@/lib/cn";
 
 type NavItem = {
@@ -27,37 +28,40 @@ type NavItem = {
   end?: boolean;
 };
 
-const NAV: NavItem[] = [
+const CHAT_NAV: NavItem[] = [
   { to: "/", label: "Workroom", icon: MessageCircle, end: true },
+];
+
+const WORKSPACE_NAV: NavItem[] = [
   { to: "/bots", label: "Bots", icon: Bot },
-  { to: "/library", label: "Library", icon: Folder },
-  { to: "/files", label: "Files", icon: FileText },
+  { to: "/files", label: "Files", icon: Folder },
+  { to: "/library", label: "Library", icon: FileText },
   { to: "/computer", label: "Computer", icon: Monitor },
   { to: "/approvals", label: "Approvals", icon: CheckCheck },
   { to: "/activity", label: "Activity", icon: Activity },
-  { to: "/account", label: "Account", icon: User },
-  { to: "/settings", label: "Settings", icon: Settings },
 ];
+
+const ALL_NAV: NavItem[] = [...CHAT_NAV, ...WORKSPACE_NAV];
 
 export function AppShell() {
   const { tokens, resolved } = useTheme();
   const {
-    chatBotIds,
     startNewChat,
-    addBotToChat,
-    focusChatBot,
-    bots,
     conversations,
     activeConversationId,
     openConversation,
+    approvals,
   } = useWorkroom();
   const status = useNodeStatus();
   const location = useLocation();
   const navigate = useNavigate();
+  const [query, setQuery] = useState("");
+  const [searchFocused, setSearchFocused] = useState(false);
 
-  // Native-app keyboard layer: Ctrl+N new chat, Ctrl+, settings,
-  // Ctrl+1..8 jump to sidebar destinations — the muscle memory Claude and
-  // Codex desktop users already have.
+  const pendingCount = approvals.filter((a) => a.state === "pending").length;
+
+  // Native-app keyboard layer: Ctrl+N new chat, Ctrl+K search, Ctrl+, settings,
+  // Ctrl+1..9 jump to sidebar destinations.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
@@ -69,8 +73,11 @@ export function AppShell() {
       } else if (key === ",") {
         e.preventDefault();
         navigate("/settings");
+      } else if (key === "k") {
+        e.preventDefault();
+        setSearchFocused(true);
       } else if (/^[1-9]$/.test(key)) {
-        const item = NAV[Number(key) - 1];
+        const item = ALL_NAV[Number(key) - 1];
         if (item) {
           e.preventDefault();
           navigate(item.to);
@@ -81,228 +88,190 @@ export function AppShell() {
     return () => window.removeEventListener("keydown", onKey);
   }, [navigate, startNewChat]);
 
+  const q = query.trim().toLowerCase();
+
+  const visibleChats = useMemo(() => {
+    const all = [
+      ...(activeConversationId
+        ? conversations.filter((c) => c.id === activeConversationId)
+        : []),
+      ...conversations.filter((c) => c.id !== activeConversationId),
+    ];
+    if (!q) return all.slice(0, 14);
+    return all.filter((c) => c.title.toLowerCase().includes(q)).slice(0, 14);
+  }, [conversations, activeConversationId, q]);
+
+  const visibleNav = useMemo(() => {
+    if (!q) return WORKSPACE_NAV;
+    return WORKSPACE_NAV.filter((n) => n.label.toLowerCase().includes(q));
+  }, [q]);
+
   return (
     <div
       style={{
         display: "grid",
         gridTemplateColumns: "var(--sidebar-width) 1fr",
-        height: "100vh",
+        height: "100%",
+        minHeight: 0,
         background: tokens.canvas,
         color: tokens.text,
       }}
     >
       <aside
         style={{
-          background: tokens.surface,
+          background: tokens.canvas,
           borderRight: `1px solid ${tokens.line}`,
           display: "flex",
           flexDirection: "column",
-          padding: "16px 12px 12px",
-          gap: 14,
+          padding: "14px 10px 10px",
+          gap: 10,
+          minHeight: 0,
         }}
       >
         <Brand />
         <NewChatButton onClick={startNewChat} />
-        <nav
-          aria-label="Primary"
+        <SearchField
+          value={query}
+          onChange={setQuery}
+          focused={searchFocused}
+          setFocused={setSearchFocused}
+        />
+
+        <div
           style={{
+            flex: 1,
+            minHeight: 0,
+            overflowY: "auto",
+            display: "flex",
+            flexDirection: "column",
+            gap: 4,
+          }}
+        >
+          {visibleChats.length > 0 ? (
+            <SidebarSection
+              label={q ? "Chats" : "Recent"}
+              count={q ? undefined : conversations.length}
+            >
+              {visibleChats.map((c) => {
+                const active = c.id === activeConversationId;
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => {
+                      openConversation(c.id);
+                      navigate("/");
+                    }}
+                    title={c.title}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 9,
+                      padding: "7px 9px",
+                      borderRadius: 9,
+                      background: active ? tokens.surfaceAlt : "transparent",
+                      border: "none",
+                      cursor: "pointer",
+                      textAlign: "left",
+                      color: active ? tokens.text : tokens.textSoft,
+                      width: "100%",
+                    }}
+                  >
+                    <MessageCircle
+                      size={13.5}
+                      color={active ? tokens.accent : tokens.textFaint}
+                    />
+                    <span
+                      style={{
+                        fontSize: 12.5,
+                        fontWeight: active ? 650 : 450,
+                        flex: 1,
+                        minWidth: 0,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {c.title}
+                    </span>
+                  </button>
+                );
+              })}
+              {q && visibleChats.length === 0 ? (
+                <div style={{ fontSize: 12, color: tokens.textFaint, padding: "4px 9px" }}>
+                  No matching chats
+                </div>
+              ) : null}
+            </SidebarSection>
+          ) : null}
+
+          {visibleNav.length > 0 ? (
+            <SidebarSection label={q ? "Pages" : "Workspace"}>
+              {visibleNav.map((item) => {
+                const Icon = item.icon;
+                const showDot = item.to === "/approvals" && pendingCount > 0;
+                return (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    end={item.end}
+                    style={({ isActive }) => ({
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 9,
+                      padding: "7px 9px",
+                      borderRadius: 9,
+                      fontSize: 12.5,
+                      fontWeight: 550,
+                      color: isActive ? tokens.text : tokens.textSoft,
+                      background: isActive ? tokens.surfaceAlt : "transparent",
+                      textDecoration: "none",
+                    })}
+                  >
+                    <Icon
+                      size={14.5}
+                      strokeWidth={1.9}
+                      color={tokens.textFaint}
+                    />
+                    <span style={{ flex: 1 }}>{item.label}</span>
+                    {showDot ? (
+                      <span
+                        aria-label={`${pendingCount} pending approvals`}
+                        style={{
+                          minWidth: 16,
+                          height: 16,
+                          borderRadius: 999,
+                          background: tokens.accent,
+                          color: tokens.onInk,
+                          fontSize: 9.5,
+                          fontWeight: 800,
+                          display: "grid",
+                          placeItems: "center",
+                          padding: "0 4px",
+                        }}
+                      >
+                        {pendingCount}
+                      </span>
+                    ) : null}
+                  </NavLink>
+                );
+              })}
+            </SidebarSection>
+          ) : null}
+        </div>
+
+        <div
+          style={{
+            borderTop: `1px solid ${tokens.line}`,
+            paddingTop: 8,
             display: "flex",
             flexDirection: "column",
             gap: 2,
           }}
         >
-          {NAV.map((item) => {
-            const Icon = item.icon;
-            return (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end={item.end}
-                style={({ isActive }) => ({
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  padding: "9px 12px",
-                  borderRadius: 12,
-                  fontSize: 13.5,
-                  fontWeight: 600,
-                  color: isActive ? tokens.onInk : tokens.textSoft,
-                  background: isActive ? tokens.ink : "transparent",
-                  textDecoration: "none",
-                })}
-              >
-                <Icon size={17} strokeWidth={1.8} />
-                <span>{item.label}</span>
-              </NavLink>
-            );
-          })}
-        </nav>
-
-        <div
-          style={{
-            marginTop: "auto",
-            display: "flex",
-            flexDirection: "column",
-            gap: 10,
-            paddingTop: 12,
-            borderTop: `1px solid ${tokens.line}`,
-            minHeight: 0,
-          }}
-        >
-          {conversations.length > 0 ? (
-            <div style={{ paddingLeft: 4, minHeight: 0, display: "flex", flexDirection: "column" }}>
-              <div
-                style={{
-                  fontSize: 10.5,
-                  fontWeight: 700,
-                  letterSpacing: 0.7,
-                  textTransform: "uppercase",
-                  color: tokens.textFaint,
-                  marginBottom: 8,
-                }}
-              >
-                Recent
-              </div>
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 2,
-                  maxHeight: 180,
-                  overflow: "auto",
-                }}
-              >
-                {conversations.slice(0, 12).map((c) => {
-                  const active = c.id === activeConversationId;
-                  return (
-                    <button
-                      key={c.id}
-                      type="button"
-                      onClick={() => {
-                        openConversation(c.id);
-                        navigate("/");
-                      }}
-                      title={c.title}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 8,
-                        padding: "6px 8px",
-                        borderRadius: 10,
-                        background: active ? tokens.accentSoft : "transparent",
-                        border: "none",
-                        cursor: "pointer",
-                        textAlign: "left",
-                        color: tokens.text,
-                        width: "100%",
-                      }}
-                    >
-                      <MessageCircle size={13} color={active ? tokens.accent : tokens.textFaint} />
-                      <span
-                        style={{
-                          fontSize: 12.5,
-                          fontWeight: active ? 700 : 500,
-                          flex: 1,
-                          minWidth: 0,
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {c.title}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ) : null}
-
-          <div style={{ paddingLeft: 4 }}>
-            <div
-              style={{
-                fontSize: 10.5,
-                fontWeight: 700,
-                letterSpacing: 0.7,
-                textTransform: "uppercase",
-                color: tokens.textFaint,
-                marginBottom: 8,
-              }}
-            >
-              Your Bots
-            </div>
-            {bots.length === 0 ? (
-              <div
-                style={{
-                  fontSize: 12,
-                  color: tokens.textFaint,
-                  padding: "4px 6px",
-                }}
-              >
-                No Bots yet — just start typing, or visit the Bots tab.
-              </div>
-            ) : (
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 2,
-                  maxHeight: 200,
-                  overflow: "auto",
-                }}
-              >
-                {bots.map((bot) => {
-                  const active = chatBotIds.includes(bot.id);
-                  return (
-                    <button
-                      key={bot.id}
-                      type="button"
-                      onClick={() => {
-                        if (!active) addBotToChat(bot.id);
-                        focusChatBot(bot.id);
-                      }}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 8,
-                        padding: "6px 8px",
-                        borderRadius: 10,
-                        background: active ? tokens.accentSoft : "transparent",
-                        border: "none",
-                        cursor: "pointer",
-                        textAlign: "left",
-                        color: tokens.text,
-                      }}
-                    >
-                      <span
-                        style={{
-                          width: 8,
-                          height: 8,
-                          borderRadius: 999,
-                          background: active ? tokens.accent : tokens.lineStrong,
-                        }}
-                      />
-                      <span
-                        style={{
-                          fontSize: 12.5,
-                          fontWeight: 600,
-                          flex: 1,
-                          minWidth: 0,
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {bot.name}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          <NodeStatusFooter />
+          <AccountRow />
+          <SettingsRow />
+          <StatusLine />
         </div>
       </aside>
 
@@ -319,23 +288,21 @@ export function AppShell() {
           className="titlebar"
           data-tauri-drag-region
           style={{
-            background: tokens.surface,
-            borderBottom: `1px solid ${tokens.line}`,
+            background: tokens.canvas,
+            borderBottom: "none",
+            height: 40,
           }}
         >
           <span
             style={{
               fontSize: 12,
-              color: tokens.textSoft,
-              fontWeight: 600,
-              letterSpacing: 0.2,
+              color: tokens.textFaint,
+              fontWeight: 500,
+              letterSpacing: 0.1,
             }}
           >
             {humanizeRoute(location.pathname)}
           </span>
-          <span style={{ flex: 1 }} />
-          <NodePill />
-          <ThemeBadge scheme={resolved} />
         </header>
 
         <div
@@ -352,6 +319,43 @@ export function AppShell() {
   );
 }
 
+function SidebarSection({
+  label,
+  count,
+  children,
+}: {
+  label: string;
+  count?: number;
+  children: React.ReactNode;
+}) {
+  const { tokens } = useTheme();
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          padding: "6px 9px 3px",
+          fontSize: 10.5,
+          fontWeight: 600,
+          letterSpacing: 0.8,
+          textTransform: "uppercase",
+          color: tokens.textFaint,
+        }}
+      >
+        {label}
+        {typeof count === "number" && count > 0 ? (
+          <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0 }}>
+            · {count}
+          </span>
+        ) : null}
+      </div>
+      {children}
+    </div>
+  );
+}
+
 function Brand() {
   const { tokens } = useTheme();
   return (
@@ -359,37 +363,25 @@ function Brand() {
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 10,
-        padding: "0 6px 0 4px",
+        gap: 9,
+        padding: "2px 8px 6px",
       }}
     >
       <div
         style={{
-          width: 32,
-          height: 32,
-          borderRadius: 10,
+          width: 26,
+          height: 26,
+          borderRadius: 8,
           background: tokens.ink,
           color: tokens.onInk,
           display: "grid",
           placeItems: "center",
         }}
       >
-        <Cpu size={18} strokeWidth={2.2} />
+        <Cpu size={15} strokeWidth={2.2} />
       </div>
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: -0.3 }}>
-          Rook
-        </div>
-        <div
-          style={{
-            fontSize: 10.5,
-            color: tokens.textFaint,
-            letterSpacing: 0.6,
-            textTransform: "uppercase",
-          }}
-        >
-          Your workroom
-        </div>
+      <div style={{ fontSize: 14.5, fontWeight: 700, letterSpacing: -0.2 }}>
+        Rook
       </div>
     </div>
   );
@@ -406,100 +398,243 @@ function NewChatButton({ onClick }: { onClick: () => void }) {
         alignItems: "center",
         justifyContent: "center",
         gap: 7,
-        padding: "9px 12px",
-        borderRadius: 12,
+        padding: "8px 12px",
+        borderRadius: 10,
         background: tokens.ink,
         color: tokens.onInk,
         border: "none",
-        fontSize: 13,
-        fontWeight: 700,
+        fontSize: 12.5,
+        fontWeight: 650,
         letterSpacing: -0.1,
         cursor: "pointer",
       }}
     >
-      <Plus size={16} strokeWidth={2.4} />
+      <Plus size={14.5} strokeWidth={2.4} />
       New chat
     </button>
   );
 }
 
-function NodeStatusFooter() {
-  const status = useNodeStatus();
+function SearchField({
+  value,
+  onChange,
+  focused,
+  setFocused,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  focused: boolean;
+  setFocused: (next: boolean) => void;
+}) {
   const { tokens } = useTheme();
-  const dotColor = !status.listening
-    ? tokens.amber
-    : status.paired
-      ? tokens.accent
-      : tokens.textFaint;
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <div
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 7,
+        padding: "6px 9px",
+        borderRadius: 9,
+        background: tokens.surfaceAlt,
+        border: `1px solid ${focused ? tokens.lineStrong : "transparent"}`,
+      }}
+    >
+      <Search size={13.5} color={tokens.textFaint} />
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        placeholder="Search"
+        aria-label="Search chats and pages"
         style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          fontSize: 12,
-          color: tokens.textSoft,
+          flex: 1,
+          minWidth: 0,
+          border: "none",
+          outline: "none",
+          background: "transparent",
+          color: tokens.text,
+          fontSize: 12.5,
+          fontFamily: "inherit",
         }}
-      >
-        <span
+      />
+      {value ? (
+        <button
+          type="button"
+          onClick={() => onChange("")}
+          aria-label="Clear search"
           style={{
-            width: 8,
-            height: 8,
-            borderRadius: 999,
-            background: dotColor,
-            boxShadow:
-              dotColor === tokens.accent ? `0 0 0 4px ${tokens.accentSoft}` : "none",
+            border: "none",
+            background: "transparent",
+            color: tokens.textFaint,
+            fontSize: 12,
+            cursor: "pointer",
+            padding: 0,
           }}
-        />
-        <span>
-          {status.listening
-            ? status.paired
-              ? "Connected"
-              : "Listening"
-            : status.running
-              ? "Starting…"
-              : "Offline"}
+        >
+          ✕
+        </button>
+      ) : (
+        <span
+          aria-hidden
+          style={{
+            fontSize: 10,
+            color: tokens.textFaint,
+            border: `1px solid ${tokens.lineStrong}`,
+            borderRadius: 4,
+            padding: "0 4px",
+            fontWeight: 600,
+          }}
+        >
+          K
         </span>
-      </div>
-      <div
-        style={{
-          fontSize: 11,
-          color: tokens.textFaint,
-          fontVariantNumeric: "tabular-nums",
-        }}
-      >
-        v{status.version ?? __APP_VERSION__}
-      </div>
+      )}
     </div>
   );
 }
 
-function NodePill() {
-  const status = useNodeStatus();
-  if (!status.listening) return <Pill label="Offline" tone="muted" />;
-  if (!status.paired) return <Pill label="Listening" tone="amber" />;
-  return <Pill label="Connected" tone="mint" />;
-}
-
-function ThemeBadge({ scheme }: { scheme: string }) {
+function AccountRow() {
   const { tokens } = useTheme();
+  const { mode, user } = useSafeAuth();
+  const navigate = useNavigate();
+  const name = mode === "clerk" && user ? (user.fullName ?? user.email ?? "Signed in") : "This computer";
+  const sub = mode === "clerk" && user ? (user.email ?? "") : "Not signed in";
+  const initial =
+    mode === "clerk" && user ? (user.initials ?? "R") : "R";
   return (
-    <span
-      className="no-drag"
+    <button
+      type="button"
+      onClick={() => navigate("/account")}
       style={{
-        fontSize: 10.5,
-        fontWeight: 700,
-        letterSpacing: 0.6,
-        textTransform: "uppercase",
-        color: tokens.textFaint,
-        padding: "4px 8px",
-        borderRadius: 8,
-        background: tokens.surfaceAlt,
+        display: "flex",
+        alignItems: "center",
+        gap: 9,
+        padding: "6px 9px",
+        borderRadius: 9,
+        border: "none",
+        background: "transparent",
+        cursor: "pointer",
+        textAlign: "left",
+        color: tokens.text,
+        width: "100%",
       }}
     >
-      {scheme}
-    </span>
+      <span
+        style={{
+          width: 24,
+          height: 24,
+          borderRadius: 999,
+          background: tokens.accentSoft,
+          color: tokens.accent,
+          fontSize: 11,
+          fontWeight: 800,
+          display: "grid",
+          placeItems: "center",
+          flexShrink: 0,
+        }}
+      >
+        {initial}
+      </span>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <span
+          style={{
+            display: "block",
+            fontSize: 12.5,
+            fontWeight: 600,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {name}
+        </span>
+        <span
+          style={{
+            display: "block",
+            fontSize: 11,
+            color: tokens.textFaint,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {sub || "Account"}
+        </span>
+      </span>
+      <User size={13} color={tokens.textFaint} />
+    </button>
+  );
+}
+
+function SettingsRow() {
+  const { tokens } = useTheme();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const active = location.pathname === "/settings";
+  return (
+    <NavLink
+      to="/settings"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 9,
+        padding: "6px 9px",
+        borderRadius: 9,
+        border: "none",
+        background: active ? tokens.surfaceAlt : "transparent",
+        color: tokens.textSoft,
+        fontSize: 12.5,
+        fontWeight: 550,
+        textDecoration: "none",
+      }}
+    >
+      <Settings size={14.5} strokeWidth={1.9} color={tokens.textFaint} />
+      Settings
+    </NavLink>
+  );
+}
+
+function StatusLine() {
+  const status = useNodeStatus();
+  const { tokens } = useTheme();
+  const dotColor = !status.listening
+    ? tokens.textFaint
+    : status.paired
+      ? tokens.accent
+      : tokens.amber;
+  const label = status.listening
+    ? status.paired
+      ? "Connected"
+      : "Listening"
+    : status.running
+      ? "Starting…"
+      : "Offline";
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        padding: "4px 9px 2px",
+        fontSize: 10.5,
+        color: tokens.textFaint,
+      }}
+      title={`Rook Node ${label} · v${status.version ?? __APP_VERSION__}`}
+    >
+      <span
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: 999,
+          background: dotColor,
+        }}
+      />
+      <span>{label}</span>
+      <span style={{ opacity: 0.6 }}>·</span>
+      <span style={{ fontVariantNumeric: "tabular-nums" }}>
+        v{__APP_VERSION__}
+      </span>
+    </div>
   );
 }
 
@@ -511,3 +646,5 @@ function humanizeRoute(pathname: string): string {
     .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
     .join(" · ");
 }
+
+export { cn };

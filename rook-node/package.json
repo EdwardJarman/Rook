@@ -1,6 +1,6 @@
 {
   "name": "@rook/node",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Rook desktop — full chat, Bots, files, and a local Rook Node in one Tauri window. The sidecar (supervised Chromium + cloud uplink) lives in src/.",

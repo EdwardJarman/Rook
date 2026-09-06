@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Sun, Moon, Monitor, Copy, LogOut } from "lucide-react";
+import { Sun, Moon, Monitor, Copy, LogOut, User } from "lucide-react";
 
 import { Button, Card, Field, Input, Pill, Segmented, Switch } from "@/components/primitives";
 import { useTheme, type Scheme } from "@/lib/theme";
@@ -9,7 +9,7 @@ import { useSafeAuth } from "@/lib/safe-auth";
 export function SettingsPage() {
   const { tokens, scheme, setScheme } = useTheme();
   const status = useNodeStatus();
-  const { signOut } = useSafeAuth();
+  const { signOut, mode } = useSafeAuth();
   const [runOnLogin, setRunOnLogin] = useState(false);
   const [serverUrl, setServerUrl] = useState<string>(status.serverUrl ?? "");
 
@@ -95,19 +95,30 @@ export function SettingsPage() {
             gap: 8,
           }}
         >
-          <Info label="Version" value={status.version ?? __APP_VERSION__} />
+          <Info label="Version" value={__APP_VERSION__} />
           <Info label="Data folder" value={status.dataHome ?? "—"} mono />
           <Info label="Gateway" value=":37831" mono />
         </div>
         <div style={{ marginTop: 14 }}>
-          <Button
-            variant="secondary"
-            onClick={() => {
-              signOut();
-            }}
-          >
-            <LogOut size={14} /> Sign out
-          </Button>
+          {mode === "clerk" ? (
+            <Button
+              variant="secondary"
+              onClick={() => {
+                signOut();
+              }}
+            >
+              <LogOut size={14} /> Sign out
+            </Button>
+          ) : (
+            <Button
+              variant="secondary"
+              onClick={() => {
+                window.location.hash = "#/account";
+              }}
+            >
+              <User size={14} /> Account
+            </Button>
+          )}
         </div>
       </Card>
     </div>

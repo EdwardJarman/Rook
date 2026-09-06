@@ -74,7 +74,7 @@ function AuthGateInner({ children }: { children: ReactNode }) {
 
 function NoClerkKeyScreen({ children }: { children: ReactNode }) {
   return (
-    <div style={{ height: "100vh", display: "grid", gridTemplateRows: "1fr auto" }}>
+    <div style={{ height: "100vh", display: "grid", gridTemplateRows: "minmax(0, 1fr) auto" }}>
       <SafeAuthProvider value={offlineAuth}>
       <div
         style={{
@@ -82,6 +82,7 @@ function NoClerkKeyScreen({ children }: { children: ReactNode }) {
           overflow: "auto",
           background: "var(--rook-canvas)",
           color: "var(--rook-text)",
+          minHeight: 0,
         }}
       >
         {children}
@@ -89,11 +90,12 @@ function NoClerkKeyScreen({ children }: { children: ReactNode }) {
       </SafeAuthProvider>
       <div
         style={{
-          padding: "10px 16px",
-          background: "var(--rook-amber-soft)",
-          color: "var(--rook-amber)",
-          fontSize: 12,
+          padding: "6px 16px",
+          background: "var(--rook-surface-alt)",
+          color: "var(--rook-text-soft)",
+          fontSize: 11.5,
           textAlign: "center",
+          borderTop: "1px solid var(--rook-line)",
         }}
       >
         Cloud sync is off in this build — chats stay on this computer. To

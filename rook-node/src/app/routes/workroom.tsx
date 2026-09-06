@@ -1,39 +1,24 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Paperclip,
-  Send,
-  Sparkles,
+  ArrowUp,
   Folder,
-  ChevronRight,
   Bot as BotIcon,
-  RefreshCcw,
+  Sparkles,
   X,
   Check,
   XCircle,
   FileText,
-  Image as ImageIcon,
+  Paperclip,
+  RefreshCcw,
 } from "lucide-react";
 
-import { Avatar, Button, Card, Pill, Spinner } from "@/components/primitives";
+import { Avatar, Button, Spinner } from "@/components/primitives";
 import { Markdown } from "@/components/markdown";
 import { useTheme } from "@/lib/theme";
 import { useWorkroom, type Message, type Bot } from "@/lib/workroom";
 import { useLinkedFolders } from "@/lib/workspaces";
-import { pickFolder, readTextFile, isTauri } from "@/lib/node-bridge";
+import { pickFolder, isTauri } from "@/lib/node-bridge";
 import { cn } from "@/lib/cn";
-
-const BOT_COLORS = [
-  "#0E7C59",
-  "#3E63DD",
-  "#7C3AED",
-  "#D97706",
-  "#DC2626",
-  "#0891B2",
-  "#DB2777",
-  "#65A30D",
-];
-
-const BOT_ICONS = ["bot", "sparkles", "search", "pen", "code", "image", "shield", "mail"];
 
 function newId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
@@ -57,16 +42,16 @@ export function WorkroomPage() {
   const { folders: linkedFolders, add: addLinkedFolder } = useLinkedFolders();
   const [composer, setComposer] = useState("");
   const [attachments, setAttachments] = useState<string[]>([]);
-  const [showWorkspacePicker, setShowWorkspacePicker] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const activeBot: Bot | null = useMemo(
     () => bots.find((b) => b.id === activeChatBotId) ?? null,
     [bots, activeChatBotId],
   );
+  const pending = approvals.filter((a) => a.state === "pending");
 
   useEffect(() => {
-    // Auto-scroll the transcript to the bottom on new messages.
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
@@ -75,8 +60,6 @@ export function WorkroomPage() {
   const submit = () => {
     const trimmed = composer.trim();
     if (!trimmed) return;
-    // Talking always works — even before any Bot exists (a built-in
-    // assistant is provisioned on first send, like Claude/Codex).
     const botId = ensureChatTarget();
     void send(trimmed, attachments, botId);
     setComposer("");
@@ -92,46 +75,45 @@ export function WorkroomPage() {
     }
   };
 
+  const openFolder = async () => {
+    const folder = await addLinkedFolder();
+    if (folder) setWorkspace(folder.path);
+  };
+
   return (
     <div
       style={{
-        display: "grid",
-        gridTemplateColumns: "minmax(0, 1fr) 320px",
-        gap: 16,
-        padding: 16,
+        display: "flex",
+        flexDirection: "column",
         height: "100%",
         minHeight: 0,
       }}
     >
-      <section
+      {bots.length > 0 ? (
+        <div style={{ padding: "2px 24px 0" }}>
+          <BotStrip />
+        </div>
+      ) : null}
+
+      <div
+        ref={scrollRef}
         style={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: "auto",
           display: "flex",
           flexDirection: "column",
-          minHeight: 0,
-          gap: 12,
+          padding: "8px 24px 12px",
         }}
       >
-        <header
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-            padding: "4px 4px 0",
-          }}
-        >
-          <BotStrip />
-        </header>
-
         <div
-          ref={scrollRef}
           style={{
-            flex: 1,
-            minHeight: 0,
-            overflowY: "auto",
+            width: "100%",
+            maxWidth: 760,
+            margin: "0 auto",
             display: "flex",
             flexDirection: "column",
-            gap: 12,
-            padding: "4px 4px 8px",
+            gap: 14,
           }}
         >
           {messages.length === 0 ? (
@@ -147,166 +129,79 @@ export function WorkroomPage() {
             messages.map((m) => <MessageRow key={m.id} message={m} />)
           )}
         </div>
+      </div>
 
-        <Composer
-          value={composer}
-          onChange={setComposer}
-          onSubmit={submit}
-          onAttach={onAttach}
-          attachments={attachments}
-          onRemoveAttachment={(name) =>
-            setAttachments((a) => a.filter((x) => x !== name))
-          }
-          activeBot={activeBot}
-        />
-      </section>
-
-      <aside
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: 12,
-          minHeight: 0,
-        }}
-      >
-        <Card>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              marginBottom: 8,
-            }}
-          >
-            <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase", color: tokens.textFaint }}>
-              Workspace
-            </div>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => setShowWorkspacePicker((v) => !v)}
-            >
-              {showWorkspacePicker ? "Close" : "Change"}
-            </Button>
-          </div>
-          {activeWorkspacePath ? (
-            <WorkspaceSummary path={activeWorkspacePath} />
-          ) : (
-            <div style={{ fontSize: 13, color: tokens.textSoft }}>
-              No folder selected. Open one so Bots can read and write files
-              here — like Codex and Claude desktop.
-            </div>
-          )}
-          <div style={{ marginTop: 12 }}>
-            <Button
-              size="sm"
-              variant="primary"
-              onClick={async () => {
-                const folder = await addLinkedFolder();
-                if (folder) setWorkspace(folder.path);
+      <div style={{ padding: "0 24px 14px" }}>
+        <div style={{ width: "100%", maxWidth: 760, margin: "0 auto", position: "relative" }}>
+          {pending.length > 0 ? (
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+                marginBottom: 10,
               }}
             >
-              <Folder size={14} />
-              Open folder
-            </Button>
-          </div>
-          {showWorkspacePicker ? (
-            <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 6 }}>
-              {linkedFolders.length === 0 ? (
-                <div style={{ fontSize: 12, color: tokens.textFaint }}>
-                  No recent folders yet.
+              {pending.slice(0, 3).map((a) => (
+                <ApprovalCard
+                  key={a.id}
+                  summary={a.summary}
+                  reason={a.reason}
+                  onApprove={() => decideApproval(a.id, "approved")}
+                  onDecline={() => decideApproval(a.id, "declined")}
+                />
+              ))}
+              {pending.length > 3 ? (
+                <div style={{ fontSize: 11.5, color: tokens.textFaint }}>
+                  +{pending.length - 3} more in Approvals
                 </div>
-              ) : (
-                linkedFolders.map((f) => (
-                  <button
-                    key={f.id}
-                    type="button"
-                    onClick={() => {
-                      setWorkspace(f.path);
-                      setShowWorkspacePicker(false);
-                    }}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 8,
-                      padding: "8px 10px",
-                      borderRadius: 10,
-                      background:
-                        f.path === activeWorkspacePath
-                          ? tokens.accentSoft
-                          : tokens.surfaceAlt,
-                      border: "none",
-                      textAlign: "left",
-                      cursor: "pointer",
-                      color: tokens.text,
-                    }}
-                  >
-                    <Folder size={14} color={tokens.accent} />
-                    <div style={{ minWidth: 0, flex: 1 }}>
-                      <div style={{ fontSize: 13, fontWeight: 600 }}>{f.name}</div>
-                      <div
-                        style={{
-                          fontSize: 11.5,
-                          color: tokens.textFaint,
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {f.path}
-                      </div>
-                    </div>
-                  </button>
-                ))
-              )}
+              ) : null}
             </div>
           ) : null}
-        </Card>
 
-        <Card style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-          <div
-            style={{
-              fontSize: 12,
-              fontWeight: 700,
-              letterSpacing: 0.6,
-              textTransform: "uppercase",
-              color: tokens.textFaint,
-              marginBottom: 8,
+          <Composer
+            value={composer}
+            onChange={setComposer}
+            onSubmit={submit}
+            onAttach={onAttach}
+            attachments={attachments}
+            onRemoveAttachment={(name) =>
+              setAttachments((a) => a.filter((x) => x !== name))
+            }
+            activeBot={activeBot}
+            workspacePath={activeWorkspacePath}
+            pickerOpen={pickerOpen}
+            setPickerOpen={setPickerOpen}
+            openFolder={openFolder}
+            linkedFolders={linkedFolders}
+            setWorkspace={(p) => {
+              setWorkspace(p);
+              setPickerOpen(false);
             }}
-          >
-            Approvals
-          </div>
-          {approvals.filter((a) => a.state === "pending").length === 0 ? (
-            <div style={{ fontSize: 12.5, color: tokens.textFaint }}>
-              No pending approvals. Sensitive actions show up here.
-            </div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {approvals
-                .filter((a) => a.state === "pending")
-                .map((a) => (
-                  <ApprovalCard
-                    key={a.id}
-                    summary={a.summary}
-                    reason={a.reason}
-                    onApprove={() => decideApproval(a.id, "approved")}
-                    onDecline={() => decideApproval(a.id, "declined")}
-                  />
-                ))}
-            </div>
-          )}
-        </Card>
-      </aside>
+          />
+        </div>
+      </div>
     </div>
   );
 }
 
 const SUGGESTIONS = [
-  { icon: "📁", label: "Summarize a folder", text: "Summarize what's in my open workspace folder and flag anything that looks stale." },
-  { icon: "🔍", label: "Research with sources", text: "Research a topic I give you and bring back a short brief with sources." },
-  { icon: "✍️", label: "Draft a document", text: "Draft a one-page status report from the files in this workspace." },
-  { icon: "🧹", label: "Tidy up (ask first)", text: "Find duplicate and old files here, then propose a cleanup plan for my approval." },
+  { icon: "📁", label: "Summarize a folder" },
+  { icon: "🔍", label: "Research with sources" },
+  { icon: "✍️", label: "Draft a document" },
+  { icon: "🧹", label: "Tidy up (ask first)" },
 ];
+
+const SUGGESTION_TEXTS: Record<string, string> = {
+  "Summarize a folder":
+    "Summarize what's in my open workspace folder and flag anything that looks stale.",
+  "Research with sources":
+    "Research a topic I give you and bring back a short brief with sources.",
+  "Draft a document":
+    "Draft a one-page status report from the files in this workspace.",
+  "Tidy up (ask first)":
+    "Find duplicate and old files here, then propose a cleanup plan for my approval.",
+};
 
 function WelcomeHero({
   botName,
@@ -327,69 +222,82 @@ function WelcomeHero({
         alignItems: "center",
         textAlign: "center",
         gap: 10,
-        maxWidth: 560,
-        padding: "32px 16px",
+        maxWidth: 620,
+        padding: "48px 16px 24px",
+        backgroundImage:
+          "radial-gradient(circle at 1px 1px, " +
+          tokens.line +
+          " 1px, transparent 0)",
+        backgroundSize: "22px 22px",
+        backgroundPosition: "center",
+        borderRadius: 24,
       }}
     >
       <div
         style={{
-          width: 52,
-          height: 52,
-          borderRadius: 16,
-          background: tokens.accentSoft,
-          color: tokens.accent,
+          width: 44,
+          height: 44,
+          borderRadius: 14,
+          background: tokens.ink,
+          color: tokens.onInk,
           display: "grid",
           placeItems: "center",
         }}
       >
-        <Sparkles size={24} strokeWidth={2} />
+        <Sparkles size={20} strokeWidth={2} />
       </div>
       <h1
         style={{
-          margin: "6px 0 0",
-          fontSize: 26,
-          fontWeight: 800,
-          letterSpacing: -0.6,
+          margin: "8px 0 0",
+          fontSize: 24,
+          fontWeight: 750,
+          letterSpacing: -0.5,
           color: tokens.text,
         }}
       >
         {hasBots ? `What should ${botName} do first?` : "What can I help with?"}
       </h1>
-      <p style={{ margin: 0, fontSize: 13.5, color: tokens.textSoft, lineHeight: 1.6 }}>
-        Type below to start — no setup needed. Open a workspace folder to let
-        Rook read and write files with your approval.
+      <p
+        style={{
+          margin: "0 0 8px",
+          fontSize: 13,
+          color: tokens.textSoft,
+          lineHeight: 1.6,
+          maxWidth: 420,
+        }}
+      >
+        Type below to start — no setup needed. Open a workspace folder and Rook
+        will read and write files with your approval.
       </p>
       <div
         style={{
-          marginTop: 10,
-          display: "grid",
-          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+          display: "flex",
+          flexWrap: "wrap",
+          justifyContent: "center",
           gap: 8,
-          width: "100%",
         }}
       >
         {SUGGESTIONS.map((s) => (
           <button
             key={s.label}
             type="button"
-            onClick={() => onPick(s.text)}
+            onClick={() => onPick(SUGGESTION_TEXTS[s.label])}
             style={{
-              display: "flex",
+              display: "inline-flex",
               alignItems: "center",
-              gap: 10,
-              padding: "12px 14px",
-              borderRadius: 14,
+              gap: 7,
+              padding: "7px 13px",
+              borderRadius: 999,
               background: tokens.surface,
               border: `1px solid ${tokens.line}`,
               cursor: "pointer",
-              textAlign: "left",
               color: tokens.text,
             }}
           >
-            <span style={{ fontSize: 16 }} aria-hidden>
+            <span style={{ fontSize: 12.5 }} aria-hidden>
               {s.icon}
             </span>
-            <span style={{ fontSize: 12.5, fontWeight: 600 }}>{s.label}</span>
+            <span style={{ fontSize: 12, fontWeight: 550 }}>{s.label}</span>
           </button>
         ))}
       </div>
@@ -402,20 +310,6 @@ function BotStrip() {
   const { bots, chatBotIds, addBotToChat, focusChatBot, startNewChat } =
     useWorkroom();
 
-  if (bots.length === 0) {
-    return (
-      <div
-        style={{
-          fontSize: 12.5,
-          color: tokens.textSoft,
-          padding: "6px 10px",
-        }}
-      >
-        No Bots yet — you can still just start typing, or create a Bot in the Bots tab.
-      </div>
-    );
-  }
-
   return (
     <div
       style={{
@@ -423,24 +317,24 @@ function BotStrip() {
         alignItems: "center",
         gap: 8,
         overflowX: "auto",
-        flex: 1,
+        padding: "6px 0",
       }}
     >
       <button
         type="button"
         onClick={startNewChat}
         style={{
-          padding: "6px 10px",
+          padding: "5px 11px",
           borderRadius: 999,
-          background: tokens.surfaceAlt,
-          color: tokens.textSoft,
-          border: "none",
-          fontSize: 12,
+          background: "transparent",
+          color: tokens.textFaint,
+          border: `1px dashed ${tokens.lineStrong}`,
+          fontSize: 11.5,
           fontWeight: 600,
           cursor: "pointer",
         }}
       >
-        + Bot
+        + New
       </button>
       {bots.map((bot) => {
         const inChat = chatBotIds.includes(bot.id);
@@ -455,17 +349,17 @@ function BotStrip() {
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 8,
-              padding: "5px 12px 5px 6px",
+              gap: 7,
+              padding: "4px 12px 4px 5px",
               borderRadius: 999,
-              background: inChat ? tokens.accentSoft : tokens.surface,
+              background: inChat ? tokens.accentSoft : "transparent",
               border: `1px solid ${inChat ? tokens.accent : tokens.line}`,
               color: tokens.text,
               cursor: "pointer",
             }}
           >
-            <Avatar size={26} color={bot.color} icon={bot.icon} />
-            <span style={{ fontSize: 12.5, fontWeight: 600 }}>{bot.name}</span>
+            <Avatar size={22} color={bot.color} icon={bot.icon} />
+            <span style={{ fontSize: 12, fontWeight: 600 }}>{bot.name}</span>
           </button>
         );
       })}
@@ -483,10 +377,10 @@ function MessageRow({ message }: { message: Message }) {
       <div
         style={{
           alignSelf: "center",
-          fontSize: 11.5,
+          fontSize: 11,
           color: tokens.textFaint,
           background: tokens.surfaceAlt,
-          padding: "4px 10px",
+          padding: "3px 10px",
           borderRadius: 999,
         }}
       >
@@ -504,38 +398,39 @@ function MessageRow({ message }: { message: Message }) {
         gap: 10,
         alignItems: "flex-start",
         flexDirection: isUser ? "row-reverse" : "row",
-        maxWidth: "min(720px, 92%)",
-        alignSelf: isUser ? "flex-end" : "flex-start",
+        width: "100%",
       }}
     >
       {!isUser ? (
         bot ? (
-          <Avatar size={32} color={bot.color} icon={bot.icon} />
+          <Avatar size={28} color={bot.color} icon={bot.icon} />
         ) : (
           <div
             style={{
-              width: 32,
-              height: 32,
-              borderRadius: 12,
+              width: 28,
+              height: 28,
+              borderRadius: 10,
               background: tokens.surfaceAlt,
               color: tokens.textFaint,
               display: "grid",
               placeItems: "center",
+              flexShrink: 0,
             }}
           >
-            <BotIcon size={16} />
+            <BotIcon size={14} />
           </div>
         )
       ) : null}
       <div
         style={{
-          background: isUser ? tokens.ink : tokens.surface,
+          maxWidth: "78%",
+          background: isUser ? tokens.ink : "transparent",
           color: isUser ? tokens.onInk : tokens.text,
-          border: isUser ? "none" : `1px solid ${tokens.line}`,
+          border: "none",
           borderRadius: 16,
-          padding: "10px 14px",
+          padding: isUser ? "9px 14px" : "2px 2px",
           fontSize: 13.5,
-          lineHeight: 1.55,
+          lineHeight: 1.6,
           whiteSpace: "pre-wrap",
           wordBreak: "break-word",
           display: "flex",
@@ -546,23 +441,33 @@ function MessageRow({ message }: { message: Message }) {
         {message.attachmentName ? (
           <div
             style={{
-              display: "flex",
+              display: "inline-flex",
+              alignSelf: isUser ? "flex-end" : "flex-start",
               alignItems: "center",
               gap: 6,
-              fontSize: 12,
+              fontSize: 11.5,
               color: isUser ? tokens.onInk : tokens.textSoft,
-              opacity: 0.9,
+              opacity: 0.85,
             }}
           >
-            <FileText size={14} />
+            <FileText size={13} />
             {message.attachmentName}
           </div>
         ) : null}
         <div>
           {message.pending ? (
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                color: tokens.textFaint,
+              }}
+            >
               <Spinner size={12} /> thinking…
             </span>
+          ) : isUser ? (
+            message.body
           ) : (
             <Markdown text={message.body} />
           )}
@@ -580,6 +485,12 @@ function Composer({
   attachments,
   onRemoveAttachment,
   activeBot,
+  workspacePath,
+  pickerOpen,
+  setPickerOpen,
+  openFolder,
+  linkedFolders,
+  setWorkspace,
 }: {
   value: string;
   onChange: (next: string) => void;
@@ -588,12 +499,18 @@ function Composer({
   attachments: string[];
   onRemoveAttachment: (name: string) => void;
   activeBot: Bot | null;
+  workspacePath: string | null;
+  pickerOpen: boolean;
+  setPickerOpen: (next: boolean) => void;
+  openFolder: () => void;
+  linkedFolders: { id: string; name: string; path: string }[];
+  setWorkspace: (path: string) => void;
 }) {
   const { tokens } = useTheme();
   const [armed, setArmed] = useState(false);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
+  const canSend = value.trim().length > 0;
 
-  // Auto-grow
   useEffect(() => {
     const el = textAreaRef.current;
     if (!el) return;
@@ -604,15 +521,18 @@ function Composer({
   return (
     <div
       style={{
-        border: `1px solid ${armed ? tokens.ink : tokens.line}`,
+        border: `1px solid ${armed ? tokens.lineStrong : tokens.line}`,
         background: tokens.surface,
         borderRadius: 18,
-        padding: 10,
+        padding: "12px 12px 9px",
         display: "flex",
         flexDirection: "column",
         gap: 8,
-        boxShadow: armed ? "0 0 0 3px " + tokens.focus : "none",
+        boxShadow: armed
+          ? `0 0 0 3px ${tokens.focus}`
+          : "0 1px 2px rgba(0,0,0,0.03)",
         transition: "border-color 120ms, box-shadow 120ms",
+        position: "relative",
       }}
     >
       {attachments.length > 0 ? (
@@ -624,10 +544,10 @@ function Composer({
                 display: "inline-flex",
                 alignItems: "center",
                 gap: 6,
-                padding: "4px 10px",
+                padding: "3px 10px",
                 borderRadius: 999,
                 background: tokens.surfaceAlt,
-                fontSize: 12,
+                fontSize: 11.5,
                 color: tokens.text,
               }}
             >
@@ -643,6 +563,7 @@ function Composer({
                   cursor: "pointer",
                   color: tokens.textFaint,
                   display: "inline-flex",
+                  padding: 0,
                 }}
               >
                 <X size={12} />
@@ -651,6 +572,7 @@ function Composer({
           ))}
         </div>
       ) : null}
+
       <textarea
         ref={textAreaRef}
         value={value}
@@ -664,9 +586,7 @@ function Composer({
           }
         }}
         placeholder={
-          activeBot
-            ? `Message ${activeBot.name}…`
-            : "Ask Rook anything — or drop in a file"
+          activeBot ? `Message ${activeBot.name}…` : "Ask Rook anything"
         }
         rows={1}
         style={{
@@ -678,8 +598,10 @@ function Composer({
           fontSize: 14,
           color: tokens.text,
           lineHeight: 1.5,
+          padding: "0 4px",
         }}
       />
+
       <div
         style={{
           display: "flex",
@@ -687,56 +609,173 @@ function Composer({
           gap: 6,
         }}
       >
-        <Button variant="ghost" size="sm" onClick={onAttach} title="Attach a file">
-          <Paperclip size={14} />
-          Attach
-        </Button>
-        <div style={{ flex: 1 }} />
-        <Button
-          variant="primary"
-          size="sm"
-          onClick={onSubmit}
-          disabled={!value.trim()}
-        >
-          <Send size={14} />
-          Send
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function WorkspaceSummary({ path }: { path: string }) {
-  const { tokens } = useTheme();
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 10,
-        padding: 10,
-        background: tokens.surfaceAlt,
-        border: `1px solid ${tokens.line}`,
-        borderRadius: 12,
-      }}
-    >
-      <Folder size={16} color={tokens.accent} />
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{ fontSize: 12.5, fontWeight: 600, color: tokens.text }}>
-          {path.split(/[\\/]/).pop()}
-        </div>
-        <div
+        <button
+          type="button"
+          onClick={onAttach}
+          title="Attach a file"
+          aria-label="Attach a file"
           style={{
-            fontSize: 11.5,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 28,
+            height: 28,
+            borderRadius: 9,
+            border: "none",
+            background: "transparent",
             color: tokens.textFaint,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
+            cursor: "pointer",
           }}
         >
-          {path}
-        </div>
+          <Paperclip size={15} />
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setPickerOpen(!pickerOpen)}
+          title={workspacePath ?? "Open a workspace folder"}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            maxWidth: 260,
+            padding: "4px 10px",
+            borderRadius: 999,
+            border: "none",
+            background: workspacePath ? tokens.surfaceAlt : "transparent",
+            color: workspacePath ? tokens.text : tokens.textFaint,
+            fontSize: 11.5,
+            fontWeight: 550,
+            cursor: "pointer",
+          }}
+        >
+          <Folder size={13} color={workspacePath ? tokens.accent : tokens.textFaint} />
+          <span
+            style={{
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {workspacePath
+              ? workspacePath.split(/[\\/]/).pop()
+              : "Open folder"}
+          </span>
+        </button>
+
+        <div style={{ flex: 1 }} />
+
+        <button
+          type="button"
+          onClick={onSubmit}
+          disabled={!canSend}
+          aria-label="Send message"
+          style={{
+            width: 30,
+            height: 30,
+            borderRadius: 999,
+            border: "none",
+            background: canSend ? tokens.ink : tokens.surfaceAlt,
+            color: canSend ? tokens.onInk : tokens.textFaint,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: canSend ? "pointer" : "default",
+            transition: "background 120ms, color 120ms",
+          }}
+        >
+          <ArrowUp size={16} strokeWidth={2.4} />
+        </button>
       </div>
+
+      {pickerOpen ? (
+        <div
+          style={{
+            position: "absolute",
+            bottom: "calc(100% + 8px)",
+            left: 0,
+            minWidth: 280,
+            background: tokens.elevated,
+            border: `1px solid ${tokens.line}`,
+            borderRadius: 12,
+            padding: 6,
+            boxShadow: `0 8px 24px ${tokens.scrim}`,
+            display: "flex",
+            flexDirection: "column",
+            gap: 2,
+            zIndex: 20,
+          }}
+        >
+          <div
+            style={{
+              fontSize: 10.5,
+              fontWeight: 600,
+              letterSpacing: 0.7,
+              textTransform: "uppercase",
+              color: tokens.textFaint,
+              padding: "4px 8px 6px",
+            }}
+          >
+            Workspace folder
+          </div>
+          {linkedFolders.map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              onClick={() => setWorkspace(f.path)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "7px 8px",
+                borderRadius: 8,
+                background: f.path === workspacePath ? tokens.accentSoft : "transparent",
+                border: "none",
+                textAlign: "left",
+                cursor: "pointer",
+                color: tokens.text,
+              }}
+            >
+              <Folder size={13} color={tokens.accent} />
+              <span
+                style={{
+                  fontSize: 12.5,
+                  fontWeight: 550,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {f.name}
+              </span>
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={() => {
+              openFolder();
+              setPickerOpen(false);
+            }}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "7px 8px",
+              borderRadius: 8,
+              border: "none",
+              background: "transparent",
+              textAlign: "left",
+              cursor: "pointer",
+              color: tokens.textSoft,
+              fontSize: 12.5,
+              fontWeight: 550,
+            }}
+          >
+            <Folder size={13} />
+            Choose a folder…
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -757,21 +796,21 @@ function ApprovalCard({
     <div
       style={{
         border: `1px solid ${tokens.line}`,
-        borderRadius: 12,
-        padding: 10,
+        borderRadius: 14,
+        padding: "10px 12px",
         background: tokens.surface,
         display: "flex",
         flexDirection: "column",
         gap: 6,
       }}
     >
-      <div style={{ fontSize: 12.5, fontWeight: 600 }}>{summary}</div>
+      <div style={{ fontSize: 12.5, fontWeight: 650 }}>{summary}</div>
       <div style={{ fontSize: 11.5, color: tokens.textSoft }}>{reason}</div>
       <div style={{ display: "flex", gap: 6 }}>
         <Button size="sm" variant="primary" onClick={onApprove}>
           <Check size={12} /> Approve
         </Button>
-        <Button size="sm" variant="danger" onClick={onDecline}>
+        <Button size="sm" variant="ghost" onClick={onDecline}>
           <XCircle size={12} /> Decline
         </Button>
       </div>
@@ -779,6 +818,6 @@ function ApprovalCard({
   );
 }
 
-// --- BotAvatar stub (uses BotIdentityMark via Avatar) -------------------------
-// We re-export a typed alias so the JSX above reads naturally.
-export { Avatar };
+// WorkspaceSummary kept for the Files route parity; unused here after the
+// quiet redesign folded the workspace picker into the composer.
+export { RefreshCcw, cn, newId };
