@@ -16,5 +16,10 @@ Last updated: 2026-09-06, release day
 - Desktop app: round-1 FAIL → all findings fixed + verified; round-2 critic running against the signed-in build.
 - Pipeline: all 4 build legs green; sandbox install-test green (silent install → layout → launch → gateway healthy).
 
+## Critic verdicts (final)
+- Download flow: **PASS** (round 2).
+- Desktop app: **PASS** (round 2; aspect scores 7–8/10, Claude/Codex win on polish margins only). All round-1 FAIL reasons fixed and independently verified: working sign-in, no dev-speak banner, no fake account controls, history + chat fixes shipped in the same release.
+- Flagged remaining gap: the Clerk "Development mode" badge — the app uses the test-mode Clerk instance (identical to the production web app). Needs a production Clerk instance + pk_live key in CI secrets before wide distribution.
+
 ## Remaining
 - `docs/desktop-parity-roadmap.md`: streaming replies, model picker, voice, tray, auto-update, deep links, MCP.

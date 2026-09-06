@@ -4,7 +4,16 @@ Source: the fresh-eyes critic review of the running v0.2.1 build
 (2026-09-04) against the Claude and Codex desktop apps. Items are ordered
 by impact on a real user's first week.
 
-## 0. Real conversations (the critic's single biggest gap)
+## 0. Production Clerk instance (top gap from the round-2 critic)
+
+The sign-in flow ships with Clerk's "Development mode" badge because the
+repo uses the test-mode publishable key (the production web app does
+too). Before wide distribution: create the production Clerk instance in
+the Clerk dashboard, put its pk_live key into the
+VITE_CLERK_PUBLISHABLE_KEY secret, and migrate users. Everything else on
+the auth surface is ship-quality per the round-2 review.
+
+## 0b. Real conversations (the critic's single biggest gap)
 
 The chat surface works end-to-end (send → tRPC `workroom.reply` → reply
 rendered as markdown), but when the app isn't signed in the reply is a
