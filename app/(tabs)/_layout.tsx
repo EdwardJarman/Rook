@@ -45,10 +45,13 @@ function RookTabs() {
     <Tabs
       screenOptions={{
         headerShown: false,
+        // React Navigation's bottom-tabs scene container defaults to a light
+        // background; without this it bleeds through as a white border in
+        // the desktop stage gutter (and at raw screen edges) in dark mode.
         sceneStyle:
           isDesktopLayout && desktopSidebarVisible
-            ? DESKTOP_STAGE_INSET
-            : undefined,
+            ? { ...DESKTOP_STAGE_INSET, backgroundColor: colors.canvas }
+            : { backgroundColor: colors.canvas },
         tabBarHideOnKeyboard: true,
         tabBarActiveTintColor: colors.ink,
         tabBarInactiveTintColor: colors.textFaint,
