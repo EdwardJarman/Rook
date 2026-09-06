@@ -12,6 +12,7 @@ import { useRouter } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
+  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -42,6 +43,11 @@ import {
 import { MathNotation } from "@/components/math-notation";
 import { ScreenContainer } from "@/components/screen-container";
 import { botDropTargetProps, useBotDrag } from "@/lib/bot-drag";
+import {
+  composerPasteProps,
+  imageDropTargetProps,
+  type PastedImage,
+} from "@/lib/composer-images";
 import {
   insertBotMention,
   matchingBotsForMention,
@@ -111,6 +117,8 @@ export default function ChatScreen() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [connectorsOpen, setConnectorsOpen] = useState(false);
   const [excelAttached, setExcelAttached] = useState(false);
+  const [pendingImages, setPendingImages] = useState<PastedImage[]>([]);
+  const [imageDropActive, setImageDropActive] = useState(false);
   const replyMutation = trpc.workroom.reply.useMutation();
   const voiceMutation = trpc.voice.transcribe.useMutation();
   const modelCatalog = trpc.ai.models.useQuery(undefined, {
@@ -207,7 +215,8 @@ export default function ChatScreen() {
 
   const handleSend = async () => {
     const clean = composer.trim();
-    if (!clean || !activeBot) return;
+    const images = pendingImages;
+    if ((!clean && !images.length) || !activeBot) return;
     if (!resolvedModel) {
       Alert.alert(
         "No model available",
@@ -220,11 +229,12 @@ export default function ChatScreen() {
     // Auto-Review: classify risk into Low/Medium/High rather than a single
     // approve-or-not boolean. Low risk (drafting, research, reading) never
     // creates approval friction; only Medium/High pause for a decision.
-    const risk = assessRisk(clean);
+    const messageBody = clean || (images.length ? "Shared an image." : "");
+    const risk = assessRisk(messageBody);
     const requiresReview = risk.tier !== "Low";
     const task = workroom.addTask({
       botId: activeBot.id,
-      title: clean.length > 52 ? `${clean.slice(0, 52)}…` : clean,
+      title: messageBody.length > 52 ? `${messageBody.slice(0, 52)}…` : messageBody,
       status: requiresReview ? "Approval required" : "Planning",
       summary: requiresReview
         ? "Waiting for your decision before any sensitive step."
@@ -246,10 +256,12 @@ export default function ChatScreen() {
     workroom.addMessage({
       botId: activeBot.id,
       author: "user",
-      body: clean,
+      body: messageBody,
       conversationId: activeChatId,
+      imageUris: images.length ? images.map((image) => image.uri) : undefined,
     });
     setComposer("");
+    setPendingImages([]);
     if (requiresReview) {
       workroom.addApproval({
         botId: activeBot.id,
@@ -287,7 +299,7 @@ export default function ChatScreen() {
         botRole: activeBot.role,
         botPurpose: activeBot.purpose,
         model: resolvedModel.id,
-        message: clean,
+        message: messageBody,
         userTimeZone: deviceTimeZone(),
         connectors: excelAttached ? ["microsoft-excel"] : [],
         recentContext: visibleMessages
@@ -366,6 +378,21 @@ export default function ChatScreen() {
       });
     }
   };
+
+  const addPendingImages = (images: PastedImage[]) => {
+    if (!images.length) return;
+    setPendingImages((current) => [...current, ...images]);
+  };
+  const removePendingImage = (uri: string) =>
+    setPendingImages((current) => current.filter((image) => image.uri !== uri));
+  const composerImageDropProps = imageDropTargetProps({
+    onEnter: () => setImageDropActive(true),
+    onLeave: () => setImageDropActive(false),
+    onImages: (images) => {
+      setImageDropActive(false);
+      addPendingImages(images);
+    },
+  }) as object;
 
   const handleAttach = async () => {
     if (!activeBot) return;
@@ -476,15 +503,16 @@ export default function ChatScreen() {
     setDrawerOpen(false);
   };
 
+  const hasComposerContent = Boolean(composer.trim()) || pendingImages.length > 0;
   const canSend =
-    Boolean(composer.trim()) &&
+    hasComposerContent &&
     Boolean(activeBot) &&
     !recorderState.isRecording &&
     !replyMutation.isPending &&
     !voiceMutation.isPending;
   /* The button looks armed once there's text, even with no Bot in the room
      yet — tapping it should prompt adding one instead of silently no-oping. */
-  const needsBotToSend = Boolean(composer.trim()) && !activeBot;
+  const needsBotToSend = hasComposerContent && !activeBot;
   const roomHasBots = chatBots.length > 0 || activeChatId !== "chat-legacy";
   const isPhoneExperience = isCompactLayout;
   const stageDropProps = botDropTargetProps({
@@ -984,15 +1012,40 @@ export default function ChatScreen() {
                                 maxWidth: "100%",
                               }}
                             >
-                              <Text
-                                style={{
-                                  color: colors.onInk,
-                                  fontSize: 15,
-                                  lineHeight: 21.5,
-                                }}
-                              >
-                                {message.body}
-                              </Text>
+                              {message.imageUris?.length ? (
+                                <View
+                                  style={{
+                                    flexDirection: "row",
+                                    flexWrap: "wrap",
+                                    gap: 6,
+                                    marginBottom: message.body ? 8 : 0,
+                                  }}
+                                >
+                                  {message.imageUris.map((uri) => (
+                                    <Image
+                                      key={uri}
+                                      source={{ uri }}
+                                      style={{
+                                        width: 140,
+                                        height: 140,
+                                        borderRadius: 12,
+                                      }}
+                                      resizeMode="cover"
+                                    />
+                                  ))}
+                                </View>
+                              ) : null}
+                              {message.body ? (
+                                <Text
+                                  style={{
+                                    color: colors.onInk,
+                                    fontSize: 15,
+                                    lineHeight: 21.5,
+                                  }}
+                                >
+                                  {message.body}
+                                </Text>
+                              ) : null}
                               {message.attachmentName ? (
                                 <FileChip name={message.attachmentName} />
                               ) : null}
@@ -1177,13 +1230,18 @@ export default function ChatScreen() {
               }}
             >
               <View
+                {...composerImageDropProps}
                 style={{
                   borderRadius: 28,
-                  borderWidth: 1,
-                  borderColor: composerFocused
-                    ? tint(colors.accent, 0.35)
-                    : colors.line,
-                  backgroundColor: colors.surface,
+                  borderWidth: imageDropActive ? 1.5 : 1,
+                  borderColor: imageDropActive
+                    ? colors.accent
+                    : composerFocused
+                      ? tint(colors.accent, 0.35)
+                      : colors.line,
+                  backgroundColor: imageDropActive
+                    ? tint(colors.accent, 0.06)
+                    : colors.surface,
                   paddingHorizontal: 12,
                   paddingTop: 10,
                   paddingBottom: 9,
@@ -1193,12 +1251,57 @@ export default function ChatScreen() {
                   gap: 5,
                 }}
               >
+                {pendingImages.length ? (
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      flexWrap: "wrap",
+                      gap: 8,
+                      marginBottom: 2,
+                    }}
+                  >
+                    {pendingImages.map((image) => (
+                      <View key={image.uri} style={{ position: "relative" }}>
+                        <Image
+                          source={{ uri: image.uri }}
+                          style={{
+                            width: 56,
+                            height: 56,
+                            borderRadius: 10,
+                            borderWidth: 1,
+                            borderColor: colors.line,
+                          }}
+                        />
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={`Remove ${image.name}`}
+                          onPress={() => removePendingImage(image.uri)}
+                          style={{
+                            position: "absolute",
+                            top: -6,
+                            right: -6,
+                            width: 18,
+                            height: 18,
+                            borderRadius: 9,
+                            backgroundColor: colors.ink,
+                            alignItems: "center",
+                            justifyContent: "center",
+                          }}
+                        >
+                          <MaterialIcons name="close" size={12} color={colors.onInk} />
+                        </Pressable>
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+
                 <TextInput
                   nativeID="rook-composer-input"
                   value={composer}
                   onChangeText={setComposer}
                   onFocus={() => setComposerFocused(true)}
                   onBlur={() => setComposerFocused(false)}
+                  {...composerPasteProps(addPendingImages)}
                   placeholder={
                     activeBot
                       ? "Type your message here…"
