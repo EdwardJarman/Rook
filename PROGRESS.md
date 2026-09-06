@@ -1,6 +1,14 @@
 # Rook Desktop — Live Progress
 
-Last updated: 2026-09-06 (evening) — **v0.3.1 shipped: "Quiet" redesign + real AI backend + installer fix**
+Last updated: 2026-09-06 (night) — **AI replies fixed end to end (server-side, live now)**
+
+## AI quality fix (user-reported "slow, weird, unnatural, sucky")
+Chain verified layer by layer; two blockers were found and fixed:
+1. **CORS rejected the desktop shell** (the "couldn't reach the Rook service" error with perfect internet): the API's CORS allowlist didn't include the Tauri origin `http://tauri.localhost`, so the preflight returned 403 before any request was made. Fixed in `server/_core/app.ts`; deployed to production and verified live (preflight now 204).
+2. **The auto model route picked arbitrary free models** — some leak raw classifier output ("User Safety: safe / Response Safety: safe") and rate-limit slowly. `selectedModel` now curates: prefers gpt-oss / deepseek / qwen3 / llama-3.3-70b / gemini-2.x / mistral-small-nemo (ranked by context), falls back to the strongest tool-capable model, and "auto" normalizes into the picker.
+3. **Defensive reply cleanup** — classifier-style scaffold lines are stripped from replies server-side; the system prompt now asks for a warm, natural, direct voice and forbids revealing internal safety/moderation annotations.
+4. **Speed** — date/time questions no longer trigger a web-search round trip ("today" removed from the search trigger; the live clock already answers them).
+5. Desktop now sends the bot's selected model through `workroom.reply` (needs the next installer; server-side fixes are live immediately).
 
 ## v0.3.1 (latest)
 1. **"Quiet" redesign** — light mode is white cream (#FAF9F4), dark mode is pitch black (#000, T3 Code-style); sidebar rebuilt as a quiet rail (New chat, working search with Ctrl+K, Recent chats, compact Workspace tools with an approvals badge, Account + Settings + one-line status at the bottom); workroom is a single centered column — borderless bot replies, ink user bubbles, round send button, folder/approvals chips in the composer footer, dot-grid welcome hero. Shipped as v0.3.0.
