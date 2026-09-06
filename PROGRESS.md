@@ -1,8 +1,11 @@
 # Rook Desktop — Live Progress
 
-Last updated: 2026-09-06, release day
+Last updated: 2026-09-06 (later) — **v0.2.2 shipped: auth CAPTCHA fixed**
 
-## 🎉 v0.2.1 IS LIVE
+## Auth fixed (user-reported)
+The user hit "The CAPTCHA failed to load" during sign-up/sign-in and the flow bounced back to the auth screen. Root cause: the Tauri CSP allowlisted `clerk.accounts.dev` but not `challenges.cloudflare.com`, where Clerk's bot-protection widget loads. Fixed the CSP (Turnstile script/frame/connect + Google OAuth origins + Clerk telemetry + worker-src). Verified in the installed app: sign-up now goes straight from Continue → "Verify your email" with no CAPTCHA error. Shipped as **v0.2.2** — published, all CI legs green including the sandbox install test; public download serves it.
+
+## v0.2.1 shipped
 **https://github.com/EdwardJarman/Rook/releases/tag/v0.2.1** is published with all 8 assets (Setup.exe 243 MB, both DMGs, AppImage, 4 CLI archives) and `releases/latest/download/...` now serves it. The live www.rook.lighting/download shows "Download for Windows · 243 MB · v0.2.1". The public CI-built installer was downloaded from the release, installed, launched, health-checked (gateway `{"ok":true}`), and it shows the full **sign-in screen** (Clerk) — sign-in now works for real users.
 
 ## What it took to ship (all fixed in CI)
