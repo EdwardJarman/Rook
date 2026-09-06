@@ -311,19 +311,24 @@ jobs:
         id: layout
         shell: pwsh
         run: |
-          $uninstall = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Rook Node" -ErrorAction SilentlyContinue
-          $registeredDir = if ($uninstall -and $uninstall.InstallLocation) { $uninstall.InstallLocation.Trim('"') } else { $null }
+          # v0.2.x installs as "Rook" (productName in tauri.conf.json); the
+          # old sidecar-only app was "Rook Node". Accept either.
+          $uninstall = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like 'Rook*' }
+          $registeredDirs = @($uninstall | ForEach-Object { if ($_.InstallLocation) { $_.InstallLocation.Trim('"') } })
           $candidates = @(
-            $registeredDir,
+            $registeredDirs,
+            "$env:LOCALAPPDATA\Rook",
+            "$env:LOCALAPPDATA\Programs\Rook",
             "$env:LOCALAPPDATA\Rook Node",
             "$env:LOCALAPPDATA\Programs\Rook Node",
-            "$env:ProgramFiles\Rook Node"
-          ) | Where-Object { $_ -and (Test-Path $_) }
+            "$env:ProgramFiles\Rook"
+          ) | ForEach-Object { $_ } | Where-Object { $_ -and (Test-Path $_) }
           $dir = $candidates | Where-Object { Test-Path (Join-Path $_ "uninstall.exe") } | Select-Object -First 1
-          if (-not $dir) { Write-Host "::error::installed Rook Node directory with uninstaller not found"; exit 1 }
+          if (-not $dir) { Write-Host "::error::installed Rook directory with uninstaller not found"; Get-ChildItem "$env:LOCALAPPDATA" -Directory | Where-Object Name -like 'Rook*' | Select-Object FullName; exit 1 }
           $registeredExe = if ($uninstall -and $uninstall.DisplayIcon) { $uninstall.DisplayIcon.Trim('"') } else { $null }
           $appExe = @(
             $registeredExe,
+            (Get-ChildItem $dir -Recurse -Filter "rook-node.exe" | Select-Object -First 1).FullName,
             (Get-ChildItem $dir -Recurse -Filter "*.exe" | Where-Object { $_.Name -notmatch '^(uninstall|rook-node-sidecar)' } | Select-Object -First 1).FullName
           ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
           if (-not $appExe) { Write-Host "::error::missing main Rook Node executable in $dir"; Get-ChildItem $dir -Recurse -File | Select-Object FullName; exit 1 }
