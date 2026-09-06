@@ -34,7 +34,7 @@ describe("desktop workroom composition", () => {
     expect(sidebarState).toContain("hide: () => setVisible(false)");
     expect(sidebarState).toContain("show: () => setVisible(true)");
     expect(tabsLayout).toContain("isDesktopLayout && desktopSidebarVisible");
-    expect(tabsLayout).toContain("? DESKTOP_STAGE_INSET");
+    expect(tabsLayout).toContain("...DESKTOP_STAGE_INSET");
     expect(chatScreen).toContain("!desktopSidebarVisible");
     expect(chatScreen).toContain("onPress={showDesktopSidebar}");
     expect(desktopSidebar).toContain(
