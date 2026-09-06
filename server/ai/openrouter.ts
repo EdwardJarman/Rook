@@ -250,8 +250,42 @@ const selectedModel = async (
   const catalog = await listOpenRouterModels();
   const requested = catalog.find((model) => model.id === requestedModel);
   if (requested && (!needsTools || requested.supportsTools)) return requested.id;
+  if (requestedModel === OPENROUTER_AUTO_MODEL) {
+    return pickAutoModel(catalog, needsTools);
+  }
   return OPENROUTER_AUTO_MODEL;
 };
+
+/**
+ * Quality ranking for the auto route. OpenRouter's free catalog mixes
+ * excellent models with tiny safety-tuned ones that leak internal
+ * scaffolding ("User Safety: safe …"), so "whatever is available" is not
+ * good enough — prefer strong generalist families first, then fall back
+ * to anything tool-capable.
+ */
+const AUTO_MODEL_PREFERENCES: RegExp[] = [
+  /gpt-oss/i,
+  /deepseek\/deepseek-(?:chat|v3|seek)/i,
+  /qwen\d?\/qwen3?(?:\.|-main|-coder)/i,
+  /meta-llama\/llama-3\.3-70b/i,
+  /google\/gemini-2\.\d/i,
+  /mistralai\/(?:mistral-small-3|mistral-nemo)/i,
+  /nvidia\/(?:nemotron-4|llama-3\.)/i,
+];
+
+export function pickAutoModel(catalog: RookAiModel[], needsTools: boolean): string {
+  const eligible = catalog.filter(
+    (model) => model.automatic !== true && model.id !== OPENROUTER_AUTO_MODEL && (!needsTools || model.supportsTools),
+  );
+  for (const pattern of AUTO_MODEL_PREFERENCES) {
+    const match = eligible
+      .filter((model) => pattern.test(model.id))
+      .sort((a, b) => b.contextLength - a.contextLength)[0];
+    if (match) return match.id;
+  }
+  const fallback = eligible.sort((a, b) => b.contextLength - a.contextLength)[0];
+  return fallback?.id ?? OPENROUTER_AUTO_MODEL;
+}
 
 export async function invokeOpenRouter(
   params: InvokeParams,

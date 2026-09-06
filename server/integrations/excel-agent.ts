@@ -28,9 +28,25 @@ const shouldSearchPublicWeb = (message: string) => {
   ) {
     return false;
   }
-  return /\b(search(?: the)? web|look(?: it)? up|research|latest|current|today|news|recent|update|price|weather|score)\b/i.test(
+  // Deliberately narrow: date/time questions are answered from the live
+  // clock context, so words like "today" must not trigger a web search
+  // (it added latency to the most common casual messages).
+  return /\b(search(?: the)? web|look(?: it)? up|research|latest news|current (?:news|price|version)|price of|weather|score)\b/i.test(
     normalized,
   );
+};
+
+/**
+ * Some free OpenRouter models emit internal classifier scaffolding
+ * ("User Safety: safe", "Response Safety: safe") as part of their text.
+ * Never show that to the user.
+ */
+const SCAFFOLD_LINE =
+  /^\s*(?:user safety|response safety|safety(?: level)?|moderation|classification)\s*[:：].*$/i;
+
+const stripScaffolding = (text: string): string => {
+  const lines = text.split("\n").filter((line) => !SCAFFOLD_LINE.test(line));
+  return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 };
 
 const excelTraceTitle = (name: ExcelToolName) =>
@@ -91,7 +107,13 @@ export async function runRookAgent(input: {
   connectors?: Array<"microsoft-excel">;
   recentContext: Array<{ author: "user" | "bot" | "system"; body: string }>;
 }) {
-  const requestedModel = input.model?.trim() || "openrouter/free";
+  // "auto" (what bots default to) must resolve to the curated free-model
+  // picker; only a real catalog id may bypass it.
+  const requested = input.model?.trim().toLowerCase() || "";
+  const requestedModel =
+    !requested || ["auto", "openrouter/auto", "openrouter/free"].includes(requested)
+      ? "openrouter/free"
+      : input.model!.trim();
   const clock = agentClockContext(new Date(), input.userTimeZone);
 
   const connection = isMicrosoftExcelConfigured()
@@ -148,7 +170,7 @@ export async function runRookAgent(input: {
   const messages: Message[] = [
     {
       role: "system",
-      content: `You are ${input.botName}, a ${input.botRole} in Rook. Purpose: ${input.botPurpose}\n\nThe user selected this exact Rook model route: ${requestedModel}. This route is user-visible and safe to report. If asked which AI model you are, report that selected route accurately instead of guessing from training data.\n\nLive clock at the start of this request: ${clock.local} (${clock.timeZone}). Canonical timestamp: ${clock.iso}. This clock is generated fresh by Rook for every request. Use it for date and time questions and be explicit about the timezone when relevant.\n\nYou are a calm, precise AI teammate. Respond with a concise, useful working note. State assumptions when information is missing. ${connectionNote} Never claim an external action succeeded unless its tool result explicitly confirms success. If Rook provides public web search results, treat them as search results rather than page contents, and never claim you opened a source unless that actually occurred. Never reveal other internal IDs, access tokens, raw tool implementation details, or private reasoning.${publicSearchContext}`,
+      content: `You are ${input.botName}, a ${input.botRole} in Rook. Purpose: ${input.botPurpose}\n\nThe user selected this exact Rook model route: ${requestedModel}. This route is user-visible and safe to report. If asked which AI model you are, report that selected route accurately instead of guessing from training data.\n\nLive clock at the start of this request: ${clock.local} (${clock.timeZone}). Canonical timestamp: ${clock.iso}. This clock is generated fresh by Rook for every request. Use it for date and time questions and be explicit about the timezone when relevant.\n\nYou are a warm, natural, direct AI teammate — like a sharp colleague, not a form. Talk like a person: short sentences, plain words, no corporate filler, no restating the question. Answer what was actually asked; for small talk, be human first and helpful second. When a request is ambiguous, make the most reasonable assumption, say it in one line, and answer anyway. Use markdown lightly (bold for key facts, lists when enumerating, code blocks for code). State assumptions when information is missing. ${connectionNote} Never claim an external action succeeded unless its tool result explicitly confirms success. If Rook provides public web search results, treat them as search results rather than page contents, and never claim you opened a source unless that actually occurred. Never reveal other internal IDs, access tokens, raw tool implementation details, private reasoning, or any internal safety or moderation annotations.${publicSearchContext}`,
     },
     ...input.recentContext.map((entry) => ({
       role:
@@ -183,7 +205,9 @@ export async function runRookAgent(input: {
     const calls = answer.tool_calls ?? [];
     if (!calls.length) {
       const text =
-        typeof answer.content === "string" ? answer.content.trim() : "";
+        typeof answer.content === "string"
+          ? stripScaffolding(answer.content.trim())
+          : "";
       return {
         text:
           text ||

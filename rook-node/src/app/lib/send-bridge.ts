@@ -92,6 +92,7 @@ async function deliver(detail: SendDetail) {
       botName: bot.name,
       botRole: bot.role,
       botPurpose: bot.purpose,
+      model: bot.model && bot.model !== "auto" ? bot.model : undefined,
       message: text,
       recentContext: workroom
         .get()
