@@ -19,6 +19,12 @@ function allowedOrigins() {
     process.env.EXPO_WEB_PREVIEW_URL?.replace(/\/$/, "") || "",
     "http://localhost:8081",
     "http://localhost:8082",
+    // Tauri desktop shell: Windows/Linux serve http://tauri.localhost,
+    // macOS uses tauri://localhost; include both spellings to be safe.
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    "tauri://localhost",
+    "http://localhost:5173",
   ].filter(Boolean));
 }
 
