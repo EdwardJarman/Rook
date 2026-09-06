@@ -15,6 +15,7 @@ import {
   initialWindowMetrics,
 } from "react-native-safe-area-context";
 import type { EdgeInsets, Metrics, Rect } from "react-native-safe-area-context";
+import { Analytics } from "@vercel/analytics/react";
 
 import "@/lib/_core/nativewind-pressable";
 import { RookNotificationProvider } from "@/lib/rook-notifications";
@@ -257,6 +258,7 @@ function RookApplication() {
           <SafeAreaFrameContext.Provider value={frame}>
             <SafeAreaInsetsContext.Provider value={insets}>
               {content}
+              <Analytics />
             </SafeAreaInsetsContext.Provider>
           </SafeAreaFrameContext.Provider>
         ) : (

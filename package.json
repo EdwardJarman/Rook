@@ -39,6 +39,7 @@
     "@trpc/client": "11.7.2",
     "@trpc/react-query": "11.7.2",
     "@trpc/server": "11.7.2",
+    "@vercel/analytics": "^2.0.1",
     "ai": "7.0.68",
     "axios": "^1.13.2",
     "clsx": "^2.1.1",
