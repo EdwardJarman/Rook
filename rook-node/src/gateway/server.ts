@@ -177,6 +177,53 @@ export class Gateway {
         response.end(JSON.stringify({ approvals: this.node.pendingApprovals() }));
         return;
       }
+      if (url.pathname === "/api/leases") {
+        // Loopback-only, same trust boundary as /api/status: the desktop
+        // shell's own window reads this to render a takeover banner when a
+        // Bot is actively working, without needing the authenticated
+        // WebSocket device-binding handshake used by remote controllers.
+        response.writeHead(200, {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+          "Cache-Control": "no-store",
+        });
+        response.end(JSON.stringify({ leases: this.node.leases.all() }));
+        return;
+      }
+      if (url.pathname === "/api/take-over" && request.method === "POST") {
+        const form = new URLSearchParams(await readBody(request));
+        const botId = form.get("botId") ?? "";
+        if (!botId) {
+          response.writeHead(400, { "Content-Type": "application/json" });
+          response.end(JSON.stringify({ ok: false, message: "botId is required" }));
+          return;
+        }
+        const lease = this.node.leases.takeOver(botId, "desktop-shell");
+        this.node.recordEvent(botId, "takeover", { deviceId: "desktop-shell", fencing: lease.fencing });
+        response.writeHead(200, {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+        });
+        response.end(JSON.stringify({ ok: true, lease }));
+        return;
+      }
+      if (url.pathname === "/api/release" && request.method === "POST") {
+        const form = new URLSearchParams(await readBody(request));
+        const botId = form.get("botId") ?? "";
+        if (!botId) {
+          response.writeHead(400, { "Content-Type": "application/json" });
+          response.end(JSON.stringify({ ok: false, message: "botId is required" }));
+          return;
+        }
+        const lease = this.node.leases.giveToBot(botId);
+        this.node.recordEvent(botId, "release", { deviceId: "desktop-shell", fencing: lease.fencing });
+        response.writeHead(200, {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+        });
+        response.end(JSON.stringify({ ok: true, lease }));
+        return;
+      }
       if (url.pathname === "/api/disconnect" && request.method === "POST") {
         this.node.db.clearCloudIdentity();
         response.writeHead(200, {

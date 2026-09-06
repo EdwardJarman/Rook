@@ -8,17 +8,63 @@ import {
   PlayCircle,
   XCircle,
   CheckCircle2,
+  Hand,
+  Bot as BotIcon,
 } from "lucide-react";
 
 import { Button, Card, EmptyState, IconButton, Pill } from "@/components/primitives";
 import { useTheme } from "@/lib/theme";
 import { useNodeStatus } from "@/lib/use-node-status";
-import { startSidecar, stopSidecar, openConnect, disconnect } from "@/lib/node-bridge";
+import {
+  startSidecar,
+  stopSidecar,
+  openConnect,
+  disconnect,
+  listLeases,
+  takeOverBot,
+  releaseBot,
+  type LeaseRecord,
+} from "@/lib/node-bridge";
+import { useWorkroom } from "@/lib/workroom";
+
+const LEASE_POLL_MS = 2_000;
+
+/** Polls /api/leases so the takeover banner reflects the sidecar's real state. */
+function useLeases(): LeaseRecord[] {
+  const [leases, setLeases] = useState<LeaseRecord[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const tick = async () => {
+      if (cancelled) return;
+      const next = await listLeases();
+      if (!cancelled) setLeases(next);
+      timer = setTimeout(tick, LEASE_POLL_MS);
+    };
+    void tick();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
+  return leases;
+}
 
 export function ComputerPage() {
   const { tokens } = useTheme();
   const status = useNodeStatus();
+  const { bots } = useWorkroom();
+  const leases = useLeases();
   const [busy, setBusy] = useState(false);
+  const [leaseBusyId, setLeaseBusyId] = useState<string | null>(null);
+
+  /** Bots the Bot itself is actively driving right now — candidates for takeover. */
+  const workingLeases = leases.filter((lease) => lease.state === "BOT");
+  /** A Bot this desktop window has already taken control of. */
+  const humanLeases = leases.filter((lease) => lease.state === "HUMAN");
+
+  const botName = (botId: string) =>
+    bots.find((bot) => bot.id === botId)?.name ?? "A Bot";
 
   return (
     <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 14 }}>
@@ -69,6 +115,109 @@ export function ComputerPage() {
           </Button>
         )}
       </header>
+
+      {workingLeases.length || humanLeases.length ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {workingLeases.map((lease) => (
+            <div
+              key={lease.botId}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+                padding: "12px 14px",
+                borderRadius: 14,
+                background: tokens.amberSoft,
+                border: `1px solid ${tokens.amber}22`,
+              }}
+            >
+              <div
+                style={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: 11,
+                  background: `${tokens.amber}22`,
+                  color: tokens.amber,
+                  display: "grid",
+                  placeItems: "center",
+                  flexShrink: 0,
+                }}
+              >
+                <BotIcon size={17} />
+              </div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 700 }}>
+                  {botName(lease.botId)} is working
+                </div>
+                <div style={{ fontSize: 12, color: tokens.textSoft, marginTop: 1 }}>
+                  Take over if it needs a CAPTCHA solved, a login confirmed,
+                  or you just want to step in.
+                </div>
+              </div>
+              <Button
+                variant="secondary"
+                loading={leaseBusyId === lease.botId}
+                onClick={async () => {
+                  setLeaseBusyId(lease.botId);
+                  await takeOverBot(lease.botId);
+                  setLeaseBusyId(null);
+                }}
+              >
+                <Hand size={14} /> Take over
+              </Button>
+            </div>
+          ))}
+          {humanLeases.map((lease) => (
+            <div
+              key={lease.botId}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+                padding: "12px 14px",
+                borderRadius: 14,
+                background: tokens.accentSoft,
+                border: `1px solid ${tokens.accent}22`,
+              }}
+            >
+              <div
+                style={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: 11,
+                  background: `${tokens.accent}22`,
+                  color: tokens.accent,
+                  display: "grid",
+                  placeItems: "center",
+                  flexShrink: 0,
+                }}
+              >
+                <Hand size={17} />
+              </div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 700 }}>
+                  You're in control of {botName(lease.botId)}
+                </div>
+                <div style={{ fontSize: 12, color: tokens.textSoft, marginTop: 1 }}>
+                  The Bot's input is paused. Release when you're done so it
+                  can continue.
+                </div>
+              </div>
+              <Button
+                variant="primary"
+                loading={leaseBusyId === lease.botId}
+                onClick={async () => {
+                  setLeaseBusyId(lease.botId);
+                  await releaseBot(lease.botId);
+                  setLeaseBusyId(null);
+                }}
+              >
+                <PlayCircle size={14} /> Release to Bot
+              </Button>
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       <Card>
         <div

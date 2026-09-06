@@ -32,10 +32,13 @@ export function ExcelConnectionCard() {
   const status = trpc.excel.status.useQuery(undefined, { retry: 1 });
   const authorize = trpc.excel.authorizationUrl.useMutation();
   const disconnect = trpc.excel.disconnect.useMutation();
-  const workbooks = trpc.excel.workbooks.useQuery(undefined, {
-    enabled: status.data?.connected === true,
-    retry: 1,
-  });
+  const disconnectAccount = trpc.excel.disconnectAccount.useMutation();
+  const setPrimaryAccount = trpc.excel.setPrimaryAccount.useMutation();
+  const [activeAccountId, setActiveAccountId] = useState<string | undefined>(undefined);
+  const workbooks = trpc.excel.workbooks.useQuery(
+    { accountId: activeAccountId },
+    { enabled: status.data?.connected === true },
+  );
   const [expanded, setExpanded] = useState(false);
   const [selected, setSelected] = useState<{ id: string; driveId: string; name: string; webUrl: string | null } | null>(null);
   const [range, setRange] = useState("A1:F12");
@@ -101,6 +104,36 @@ export function ExcelConnectionCard() {
     );
   };
 
+  const disconnectOneAccount = (accountId: string, label: string) => {
+    Alert.alert(
+      `Remove ${label}?`,
+      "Rook will delete its stored tokens for this account. Your workbook stays exactly as it is.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Remove",
+          style: "destructive",
+          onPress: () => {
+            void disconnectAccount
+              .mutateAsync({ accountId })
+              .then(async () => {
+                if (activeAccountId === accountId) setActiveAccountId(undefined);
+                await Promise.all([utils.excel.status.invalidate(), utils.excel.workbooks.invalidate()]);
+              })
+              .catch(() => Alert.alert("Removal failed", "Rook could not remove this account. Please try again."));
+          },
+        },
+      ],
+    );
+  };
+
+  const makePrimary = (accountId: string) => {
+    void setPrimaryAccount
+      .mutateAsync({ accountId })
+      .then(() => utils.excel.status.invalidate())
+      .catch(() => Alert.alert("Could not switch accounts", "Please try again."));
+  };
+
   const openWorkbook = async () => {
     if (!selected?.webUrl) return;
     try {
@@ -133,17 +166,73 @@ export function ExcelConnectionCard() {
 
       {connected ? (
         <>
-          <View style={[styles.connectionStrip, { backgroundColor: colors.surfaceAlt }]}>
-            <View style={styles.connectionCopy}>
-              <Text numberOfLines={1} style={[styles.accountName, { color: colors.text }]}>
-                {status.data?.displayName || status.data?.email || "Microsoft account"}
-              </Text>
-              <Text numberOfLines={1} style={[styles.accountEmail, { color: colors.textFaint }]}>
-                {status.data?.email || "Files.ReadWrite access"}
-              </Text>
-            </View>
-            <MaterialIcons name="verified-user" size={18} color={excelGreen} />
+          <View style={styles.accountList}>
+            {(status.data?.accounts ?? []).map((account) => {
+              const isActive = (activeAccountId ?? status.data?.accounts?.find((a) => a.isPrimary)?.accountId) === account.accountId;
+              return (
+                <Pressable
+                  key={account.accountId}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Use ${account.displayName || account.email || "this Microsoft account"} for new lookups`}
+                  onPress={() => setActiveAccountId(account.accountId)}
+                  style={({ pressed }) => [
+                    styles.connectionStrip,
+                    {
+                      backgroundColor: isActive ? tint(excelGreen, 0.08) : colors.surfaceAlt,
+                      borderWidth: isActive ? 1 : 0,
+                      borderColor: tint(excelGreen, 0.35),
+                    },
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <View style={styles.connectionCopy}>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                      <Text numberOfLines={1} style={[styles.accountName, { color: colors.text }]}>
+                        {account.displayName || account.email || "Microsoft account"}
+                      </Text>
+                      {account.isPrimary ? (
+                        <View style={[styles.primaryBadge, { backgroundColor: tint(excelGreen, 0.14) }]}>
+                          <Text style={{ color: excelGreen, fontSize: 9.5, fontWeight: "800" }}>DEFAULT</Text>
+                        </View>
+                      ) : null}
+                    </View>
+                    <Text numberOfLines={1} style={[styles.accountEmail, { color: colors.textFaint }]}>
+                      {account.email || (account.status === "reauthorize" ? "Needs reconnecting" : "Files.ReadWrite access")}
+                    </Text>
+                  </View>
+                  {!account.isPrimary ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Make ${account.displayName || account.email || "this account"} the default`}
+                      onPress={() => makePrimary(account.accountId)}
+                      style={({ pressed }) => [styles.iconButton, { backgroundColor: colors.surface }, pressed && styles.pressed]}
+                    >
+                      <MaterialIcons name="star-outline" size={16} color={colors.textSoft} />
+                    </Pressable>
+                  ) : null}
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Remove ${account.displayName || account.email || "this account"}`}
+                    onPress={() => disconnectOneAccount(account.accountId, account.displayName || account.email || "this account")}
+                    style={({ pressed }) => [styles.iconButton, { backgroundColor: colors.surface }, pressed && styles.pressed]}
+                  >
+                    <MaterialIcons name="close" size={16} color={colors.textFaint} />
+                  </Pressable>
+                </Pressable>
+              );
+            })}
           </View>
+
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Connect another Microsoft account"
+            onPress={() => void connectMicrosoft()}
+            disabled={authorize.isPending}
+            style={({ pressed }) => [styles.addAccountRow, pressed && styles.pressed]}
+          >
+            <MaterialIcons name="add" size={16} color={excelGreen} />
+            <Text style={{ color: excelGreen, fontSize: 12.5, fontWeight: "700" }}>Add another account</Text>
+          </Pressable>
 
           <View style={styles.permissionRow}>
             <View style={[styles.permissionDot, { backgroundColor: excelGreen }]} />
@@ -335,6 +424,9 @@ const styles = StyleSheet.create({
   subtitle: { fontSize: 11.5, lineHeight: 16, marginTop: 2 },
   connectionStrip: { minHeight: 56, borderRadius: 16, flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 14, paddingVertical: 10 },
   connectionCopy: { flex: 1, minWidth: 0 },
+  accountList: { gap: 7 },
+  primaryBadge: { borderRadius: 6, paddingHorizontal: 5, paddingVertical: 2 },
+  addAccountRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, minHeight: 34 },
   accountName: { fontSize: 13.5, lineHeight: 18, fontWeight: "600" },
   accountEmail: { fontSize: 11.5, lineHeight: 16, marginTop: 1 },
   permissionRow: { flexDirection: "row", alignItems: "flex-start", gap: 8, paddingHorizontal: 2 },

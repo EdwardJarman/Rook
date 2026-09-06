@@ -45,6 +45,7 @@ export type InsertPushDevice = {
 
 export type MicrosoftConnection = {
   id: string;
+  accountId: string;
   userId: string;
   microsoftUserId: string;
   displayName: string | null;
@@ -54,17 +55,19 @@ export type MicrosoftConnection = {
   expiresAt: Date;
   scopes: string;
   status: "connected" | "reauthorize";
+  isPrimary: boolean;
   createdAt: Date;
   updatedAt: Date;
 };
 
 export type InsertMicrosoftConnection = Omit<
   MicrosoftConnection,
-  "id" | "createdAt" | "updatedAt"
+  "id" | "createdAt" | "updatedAt" | "isPrimary"
 > & {
   displayName?: string | null;
   email?: string | null;
   status?: "connected" | "reauthorize";
+  isPrimary?: boolean;
 };
 
 export type ExcelActionState =

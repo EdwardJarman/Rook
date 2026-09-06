@@ -141,7 +141,10 @@ export default function ActivityScreen() {
                           </Text>
                         </View>
                       </View>
-                      <StatusPill label={`${approval.risk} risk`} tone="amber" />
+                      <StatusPill
+                        label={`${approval.risk} risk`}
+                        tone={approval.risk === "High" ? "coral" : "amber"}
+                      />
                     </View>
                     <Text style={{ color: colors.textSoft, fontSize: 13, lineHeight: 19 }}>{approval.detail}</Text>
                     <View style={{ flexDirection: "row", gap: 10 }}>

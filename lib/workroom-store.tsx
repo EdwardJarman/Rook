@@ -70,6 +70,8 @@ export type WorkTask = {
   nextAction: string;
   risk: "Low" | "Medium" | "High";
   steps: { id: string; label: string; state: "done" | "active" | "pending" }[];
+  /** Group workroom: every owner this task has had, oldest first. */
+  handoffHistory?: { botId: string; at: string }[];
 };
 export type Skill = {
   id: string;
@@ -163,6 +165,8 @@ type WorkroomContextValue = {
     status: TaskStatus,
     nextAction?: string,
   ) => void;
+  /** Group workroom: reassign an in-progress task to a different Bot in the room. */
+  handOffTask: (taskId: string, toBotId: string, note?: string) => void;
   addSkill: (skill: Omit<Skill, "id">) => void;
   addApproval: (approval: Omit<Approval, "id" | "createdAt" | "state">) => void;
   addRoutine: (routine: Omit<Routine, "id">) => void;
@@ -417,6 +421,44 @@ export function WorkroomProvider({ children }: { children: ReactNode }) {
       ),
     [],
   );
+  const handOffTask = useCallback(
+    (taskId: string, toBotId: string, note?: string) => {
+      const task = tasks.find((item) => item.id === taskId);
+      if (!task || task.botId === toBotId) return;
+      const fromBot = bots.find((bot) => bot.id === task.botId);
+      const toBot = bots.find((bot) => bot.id === toBotId);
+      if (!toBot) return;
+      const at = timeNow();
+      setTasks((current) =>
+        current.map((item) =>
+          item.id === taskId
+            ? {
+                ...item,
+                botId: toBotId,
+                handoffHistory: [
+                  ...(item.handoffHistory ?? [{ botId: item.botId, at: item.startedAt }]),
+                  { botId: toBotId, at },
+                ],
+              }
+            : item,
+        ),
+      );
+      addMessage({
+        botId: toBotId,
+        author: "system",
+        conversationId: `chat-legacy`,
+        body: `${fromBot?.name ?? "A teammate"} handed “${task.title}” to ${toBot.name}${note ? `: ${note}` : "."}`,
+        kind: "handoff",
+        taskId,
+      });
+      addActivity({
+        title: `Handoff: ${task.title}`,
+        detail: `${fromBot?.name ?? "Unassigned"} → ${toBot.name}`,
+        tone: "mint",
+      });
+    },
+    [addActivity, addMessage, bots, tasks],
+  );
   const addSkill = useCallback(
     (skill: Omit<Skill, "id">) => {
       setSkills((current) => [{ ...skill, id: makeId("skill") }, ...current]);
@@ -563,6 +605,7 @@ export function WorkroomProvider({ children }: { children: ReactNode }) {
       addMessage,
       addTask,
       updateTaskStatus,
+      handOffTask,
       addSkill,
       addApproval,
       addRoutine,
@@ -595,6 +638,7 @@ export function WorkroomProvider({ children }: { children: ReactNode }) {
       addMessage,
       addTask,
       updateTaskStatus,
+      handOffTask,
       addSkill,
       addApproval,
       addRoutine,

@@ -64,11 +64,13 @@ import {
 } from "@/lib/chat-markdown";
 import { splitMathNotation } from "@/lib/math-notation";
 import {
-  approvalReason,
+  assessRisk,
   fileSizeLabel,
-  requiresApproval,
+  guessDeliverableTitle,
+  isDeliverableWorthy,
+  wordCount,
 } from "@/lib/workroom-helpers";
-import { useWorkroom, type Bot } from "@/lib/workroom-store";
+import { useWorkroom, type Bot, type WorkMessage } from "@/lib/workroom-store";
 
 /**
  * Rook is one room.
@@ -182,6 +184,20 @@ export default function ChatScreen() {
   const pendingCount = approvals.filter(
     (approval) => approval.state === "Pending",
   ).length;
+  const [handoffOpen, setHandoffOpen] = useState(false);
+  /* Group workroom: the most recent open task owned by the active Bot in this chat. */
+  const activeTaskForHandoff = useMemo(() => {
+    if (!activeBot) return undefined;
+    return workroom.tasks.find(
+      (task) =>
+        task.botId === activeBot.id &&
+        !["Completed", "Cancelled", "Failed"].includes(task.status),
+    );
+  }, [activeBot, workroom.tasks]);
+  const handoffCandidates = useMemo(
+    () => chatBots.filter((bot) => bot.id !== activeBot?.id),
+    [chatBots, activeBot?.id],
+  );
 
   /* Keep the newest message in view as the thread grows. */
   useEffect(() => {
@@ -201,7 +217,11 @@ export default function ChatScreen() {
       );
       return;
     }
-    const requiresReview = requiresApproval(clean);
+    // Auto-Review: classify risk into Low/Medium/High rather than a single
+    // approve-or-not boolean. Low risk (drafting, research, reading) never
+    // creates approval friction; only Medium/High pause for a decision.
+    const risk = assessRisk(clean);
+    const requiresReview = risk.tier !== "Low";
     const task = workroom.addTask({
       botId: activeBot.id,
       title: clean.length > 52 ? `${clean.slice(0, 52)}…` : clean,
@@ -212,7 +232,7 @@ export default function ChatScreen() {
       nextAction: requiresReview
         ? "Review the proposed action."
         : "Review the result and decide what happens next.",
-      risk: requiresReview ? "Medium" : "Low",
+      risk: risk.tier,
       steps: [
         {
           id: "scope",
@@ -234,8 +254,8 @@ export default function ChatScreen() {
       workroom.addApproval({
         botId: activeBot.id,
         title: task.title,
-        detail: approvalReason(clean),
-        risk: "Medium",
+        detail: risk.reason,
+        risk: risk.tier === "High" ? "High" : "Medium",
       });
       void sendTaskAlert({
         kind: "approval",
@@ -247,7 +267,7 @@ export default function ChatScreen() {
         botId: activeBot.id,
         author: "bot",
         conversationId: activeChatId,
-        body: `I can prepare the work, but I need your approval before this step. ${approvalReason(clean)}`,
+        body: `I can prepare the work, but I need your approval before this step. ${risk.reason}`,
         kind: "approval",
         taskId: task.id,
       });
@@ -311,7 +331,11 @@ export default function ChatScreen() {
         author: "bot",
         conversationId: activeChatId,
         body: response.text,
-        kind: response.approvals.length ? "approval" : "message",
+        kind: response.approvals.length
+          ? "approval"
+          : isDeliverableWorthy(response.text)
+            ? "result"
+            : "message",
         trace: response.trace,
         taskId: task.id,
       });
@@ -454,9 +478,13 @@ export default function ChatScreen() {
 
   const canSend =
     Boolean(composer.trim()) &&
+    Boolean(activeBot) &&
     !recorderState.isRecording &&
     !replyMutation.isPending &&
     !voiceMutation.isPending;
+  /* The button looks armed once there's text, even with no Bot in the room
+     yet — tapping it should prompt adding one instead of silently no-oping. */
+  const needsBotToSend = Boolean(composer.trim()) && !activeBot;
   const roomHasBots = chatBots.length > 0 || activeChatId !== "chat-legacy";
   const isPhoneExperience = isCompactLayout;
   const stageDropProps = botDropTargetProps({
@@ -856,6 +884,48 @@ export default function ChatScreen() {
                   </Pressable>
                 ) : null}
 
+                {activeTaskForHandoff && handoffCandidates.length ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Hand off ${activeTaskForHandoff.title} to another Bot in the room`}
+                    onPress={() => setHandoffOpen(true)}
+                    style={({ pressed }) => [
+                      {
+                        flexDirection: "row",
+                        alignItems: "center",
+                        gap: 9,
+                        paddingHorizontal: 13,
+                        paddingVertical: 10,
+                        borderRadius: 14,
+                        backgroundColor: colors.surfaceAlt,
+                        opacity: pressed ? 0.72 : 1,
+                      },
+                    ]}
+                  >
+                    <MaterialIcons
+                      name="swap-horiz"
+                      size={16}
+                      color={colors.textSoft}
+                    />
+                    <Text
+                      numberOfLines={1}
+                      style={{
+                        flex: 1,
+                        color: colors.textSoft,
+                        fontSize: 12.5,
+                        fontWeight: "600",
+                      }}
+                    >
+                      Hand off “{activeTaskForHandoff.title}” to another Bot
+                    </Text>
+                    <MaterialIcons
+                      name="chevron-right"
+                      size={18}
+                      color={colors.textFaint}
+                    />
+                  </Pressable>
+                ) : null}
+
                 {visibleMessages.length ? (
                   <View style={{ gap: 14, paddingTop: 2 }}>
                     {visibleMessages.map((message) => {
@@ -938,6 +1008,33 @@ export default function ChatScreen() {
                               {message.createdAt}
                             </Text>
                           </View>
+                        );
+                      }
+                      if (message.kind === "result") {
+                        return (
+                          <DeliverableCard
+                            key={message.id}
+                            message={message}
+                            bot={source}
+                            onSave={() => {
+                              const title = guessDeliverableTitle(
+                                message.body,
+                              );
+                              workroom.addFile({
+                                name: `${title}.md`,
+                                size: fileSizeLabel(message.body.length),
+                                scope: "Selected-Bot shared",
+                                owner: source?.name ?? "Rook",
+                              });
+                              workroom.addMessage({
+                                botId: message.botId,
+                                author: "system",
+                                conversationId: activeChatId,
+                                body: `Saved “${title}” to Library → Files.`,
+                                kind: "activity",
+                              });
+                            }}
+                          />
                         );
                       }
                       if (message.kind === "approval") {
@@ -1261,13 +1358,23 @@ export default function ChatScreen() {
                     accessibilityLabel={
                       canSend
                         ? "Send message"
-                        : recorderState.isRecording
-                          ? "Stop recording"
-                          : "Record voice message"
+                        : needsBotToSend
+                          ? "Add a Bot to send this message"
+                          : recorderState.isRecording
+                            ? "Stop recording"
+                            : "Record voice message"
                     }
-                    onPress={() =>
-                      canSend ? void handleSend() : void handleVoice()
-                    }
+                    onPress={() => {
+                      if (canSend) {
+                        void handleSend();
+                        return;
+                      }
+                      if (needsBotToSend) {
+                        setPickerOpen(true);
+                        return;
+                      }
+                      void handleVoice();
+                    }}
                     disabled={
                       replyMutation.isPending || voiceMutation.isPending
                     }
@@ -1277,10 +1384,15 @@ export default function ChatScreen() {
                       borderRadius: 21,
                       backgroundColor: canSend
                         ? colors.ink
-                        : recorderState.isRecording
-                          ? colors.coral
-                          : colors.canvas,
-                      borderWidth: canSend || recorderState.isRecording ? 0 : 1,
+                        : needsBotToSend
+                          ? tint(colors.accent, 0.14)
+                          : recorderState.isRecording
+                            ? colors.coral
+                            : colors.canvas,
+                      borderWidth:
+                        canSend || recorderState.isRecording || needsBotToSend
+                          ? 0
+                          : 1,
                       borderColor: colors.lineStrong,
                       alignItems: "center",
                       justifyContent: "center",
@@ -1296,17 +1408,21 @@ export default function ChatScreen() {
                       name={
                         canSend
                           ? "arrow-upward"
-                          : recorderState.isRecording
-                            ? "stop"
-                            : voiceMutation.isPending
-                              ? "more-horiz"
-                              : "mic"
+                          : needsBotToSend
+                            ? "person-add-alt-1"
+                            : recorderState.isRecording
+                              ? "stop"
+                              : voiceMutation.isPending
+                                ? "more-horiz"
+                                : "mic"
                       }
                       size={canSend ? 20 : 21}
                       color={
                         canSend || recorderState.isRecording
                           ? colors.onInk
-                          : colors.text
+                          : needsBotToSend
+                            ? colors.accent
+                            : colors.text
                       }
                     />
                   </Pressable>
@@ -1502,6 +1618,84 @@ export default function ChatScreen() {
         onClose={() => setCreateOpen(false)}
         onCreated={(bot) => addBotToChat(bot.id)}
       />
+
+      {/* Group workroom: hand a task from the active Bot to another Bot in the room. */}
+      <Sheet visible={handoffOpen} onClose={() => setHandoffOpen(false)}>
+        <SheetEyebrow>Hand off</SheetEyebrow>
+        <Text
+          style={{
+            color: colors.text,
+            fontSize: 20,
+            lineHeight: 26,
+            fontWeight: "700",
+            letterSpacing: -0.4,
+          }}
+        >
+          {activeTaskForHandoff?.title ?? "Choose who takes this"}
+        </Text>
+        <Text
+          style={{
+            color: colors.textSoft,
+            fontSize: 13.5,
+            lineHeight: 19.5,
+            marginTop: 6,
+            marginBottom: 16,
+          }}
+        >
+          The receiving Bot gets a note in the room and this task moves to
+          their queue.
+        </Text>
+        <View style={{ gap: 8 }}>
+          {handoffCandidates.map((bot) => (
+            <Pressable
+              key={bot.id}
+              accessibilityRole="button"
+              accessibilityLabel={`Hand off to ${bot.name}`}
+              onPress={() => {
+                if (activeTaskForHandoff) {
+                  workroom.handOffTask(activeTaskForHandoff.id, bot.id);
+                  focusChatBot(bot.id);
+                }
+                setHandoffOpen(false);
+              }}
+              style={({ pressed }) => [
+                {
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 12,
+                  minHeight: 58,
+                  borderRadius: 16,
+                  borderWidth: 1,
+                  borderColor: colors.line,
+                  paddingHorizontal: 13,
+                },
+                pressed && { opacity: 0.72 },
+              ]}
+            >
+              <Avatar label={bot.avatar} color={bot.color} icon={bot.icon} size={38} />
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text
+                  numberOfLines={1}
+                  style={{ color: colors.text, fontSize: 14, fontWeight: "700" }}
+                >
+                  {bot.name}
+                </Text>
+                <Text
+                  numberOfLines={1}
+                  style={{ color: colors.textFaint, fontSize: 12, marginTop: 1 }}
+                >
+                  {bot.role}
+                </Text>
+              </View>
+              <MaterialIcons
+                name="arrow-forward"
+                size={18}
+                color={colors.textFaint}
+              />
+            </Pressable>
+          ))}
+        </View>
+      </Sheet>
     </ScreenContainer>
   );
 }
@@ -1698,6 +1892,146 @@ function renderInlineMarkdown(
         </Text>
       );
     }),
+  );
+}
+
+function DeliverableCard({
+  message,
+  bot,
+  onSave,
+}: {
+  message: WorkMessage;
+  bot?: Bot;
+  onSave: () => void;
+}) {
+  const { colors } = useRookTheme();
+  const [saved, setSaved] = useState(false);
+  const title = useMemo(() => guessDeliverableTitle(message.body), [message.body]);
+  const words = useMemo(() => wordCount(message.body), [message.body]);
+
+  const handleSave = () => {
+    if (saved) return;
+    onSave();
+    setSaved(true);
+  };
+
+  return (
+    <View
+      style={{
+        flexDirection: "row",
+        gap: 10,
+        maxWidth: "100%",
+      }}
+    >
+      <View style={{ width: 28, alignItems: "center" }}>
+        <Avatar
+          label={bot?.avatar ?? "?"}
+          color={bot?.color}
+          icon={bot?.icon}
+          size={28}
+        />
+      </View>
+      <View
+        style={{
+          flex: 1,
+          minWidth: 0,
+          borderRadius: 18,
+          borderWidth: 1,
+          borderColor: colors.line,
+          backgroundColor: colors.surface,
+          overflow: "hidden",
+        }}
+      >
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "flex-start",
+            gap: 10,
+            padding: 14,
+            paddingBottom: 10,
+          }}
+        >
+          <View
+            style={{
+              width: 34,
+              height: 34,
+              borderRadius: 12,
+              alignItems: "center",
+              justifyContent: "center",
+              backgroundColor: tint(colors.accent, 0.12),
+            }}
+          >
+            <MaterialIcons name="description" size={17} color={colors.accent} />
+          </View>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text
+              numberOfLines={2}
+              style={{
+                color: colors.text,
+                fontSize: 14.5,
+                fontWeight: "700",
+                letterSpacing: -0.2,
+              }}
+            >
+              {title}
+            </Text>
+            <Text
+              style={{
+                color: colors.textFaint,
+                fontSize: 11.5,
+                marginTop: 2,
+              }}
+            >
+              {words} words · Result
+            </Text>
+          </View>
+        </View>
+
+        <View
+          style={{
+            paddingHorizontal: 14,
+            paddingBottom: 12,
+          }}
+        >
+          <ChatMarkdown text={message.body} color={colors.text} baseSize={13.5} />
+        </View>
+
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={saved ? "Saved to Library" : "Save to Library"}
+          onPress={handleSave}
+          disabled={saved}
+          style={({ pressed }) => [
+            {
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 7,
+              minHeight: 44,
+              borderTopWidth: 1,
+              borderTopColor: colors.line,
+              backgroundColor: colors.surfaceAlt,
+            },
+            pressed && !saved && { opacity: 0.72 },
+          ]}
+        >
+          <MaterialIcons
+            name={saved ? "check" : "save-alt"}
+            size={16}
+            color={saved ? colors.mint : colors.textSoft}
+          />
+          <Text
+            style={{
+              color: saved ? colors.mint : colors.textSoft,
+              fontSize: 13,
+              fontWeight: "700",
+            }}
+          >
+            {saved ? "Saved to Library" : "Save to Library"}
+          </Text>
+        </Pressable>
+      </View>
+    </View>
   );
 }
 

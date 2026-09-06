@@ -115,6 +115,9 @@ export async function createMicrosoftAuthorizationUrl(
     expiresAt: new Date(Date.now() + 10 * 60 * 1000),
   });
 
+  // `prompt: select_account` is required (not just default) so a user who
+  // already has an active Microsoft session in this browser can still pick a
+  // different account — this is what makes "add another account" work.
   const query = new URLSearchParams({
     client_id: config.clientId,
     response_type: "code",
@@ -192,6 +195,10 @@ async function rawGraph<T>(
   return response.json() as Promise<T>;
 }
 
+export function makeMicrosoftAccountId() {
+  return `msft-${randomUUID()}`;
+}
+
 export async function finishMicrosoftAuthorization(
   code: string,
   state: string,
@@ -220,7 +227,16 @@ export async function finishMicrosoftAuthorization(
     userPrincipalName?: string;
   }>(tokens.access_token, "/me?$select=id,displayName,mail,userPrincipalName");
 
+  // Re-connecting the same Microsoft account refreshes its existing
+  // connection instead of creating a duplicate; a genuinely different
+  // Microsoft account becomes an additional connection.
+  const existing = (await db.listMicrosoftConnections(oauthState.userId)).find(
+    (connection) => connection.microsoftUserId === profile.id,
+  );
+  const accountId = existing?.accountId ?? makeMicrosoftAccountId();
+
   await db.upsertMicrosoftConnection({
+    accountId,
     userId: oauthState.userId,
     microsoftUserId: profile.id,
     displayName: profile.displayName ?? null,
@@ -240,9 +256,17 @@ export async function finishMicrosoftAuthorization(
   };
 }
 
-async function accessTokenForUser(userId: string) {
-  const connection = await db.getMicrosoftConnection(userId);
+/** Resolves which connection a request should use: an explicit account, or the primary. */
+async function resolveConnection(userId: string, accountId?: string) {
+  const connection = accountId
+    ? await db.getMicrosoftConnectionByAccountId(userId, accountId)
+    : await db.getPrimaryMicrosoftConnection(userId);
   if (!connection) throw new Error("Microsoft Excel is not connected");
+  return connection;
+}
+
+async function accessTokenForAccount(userId: string, accountId?: string) {
+  const connection = await resolveConnection(userId, accountId);
   if (connection.status === "reauthorize")
     throw new Error("Microsoft Excel needs to be reconnected");
   if (connection.expiresAt.getTime() > Date.now() + 90_000) {
@@ -257,7 +281,7 @@ async function accessTokenForUser(userId: string) {
       scope: MICROSOFT_SCOPES,
     });
     const nextRefreshToken = tokens.refresh_token || currentRefreshToken;
-    await db.updateMicrosoftTokens(userId, {
+    await db.updateMicrosoftTokens(userId, connection.accountId, {
       encryptedAccessToken: encryptSecret(tokens.access_token),
       encryptedRefreshToken: encryptSecret(nextRefreshToken),
       expiresAt: new Date(
@@ -267,13 +291,18 @@ async function accessTokenForUser(userId: string) {
     });
     return tokens.access_token;
   } catch (error) {
-    await db.markMicrosoftReauthorizationRequired(userId);
+    await db.markMicrosoftReauthorizationRequired(userId, connection.accountId);
     throw error;
   }
 }
 
-async function graph<T>(userId: string, path: string, init?: RequestInit) {
-  return rawGraph<T>(await accessTokenForUser(userId), path, init);
+async function graph<T>(
+  userId: string,
+  path: string,
+  init?: RequestInit,
+  accountId?: string,
+) {
+  return rawGraph<T>(await accessTokenForAccount(userId, accountId), path, init);
 }
 
 function workbookPath(driveId: string, itemId: string) {
@@ -321,20 +350,38 @@ function worksheetSegment(name: string) {
 }
 
 export async function microsoftConnectionStatus(userId: string) {
-  const connection = await db.getMicrosoftConnection(userId);
+  const connections = await db.listMicrosoftConnections(userId);
+  const primary = connections[0];
   return {
     configured: isMicrosoftExcelConfigured(),
-    connected: Boolean(connection && connection.status === "connected"),
-    needsReauthorization: connection?.status === "reauthorize",
-    displayName: connection?.displayName ?? null,
-    email: connection?.email ?? null,
-    scopes: connection?.scopes.split(/\s+/).filter(Boolean) ?? [],
-    connectedAt: connection?.createdAt.toISOString() ?? null,
+    connected: Boolean(primary && primary.status === "connected"),
+    needsReauthorization: primary?.status === "reauthorize",
+    displayName: primary?.displayName ?? null,
+    email: primary?.email ?? null,
+    scopes: primary?.scopes.split(/\s+/).filter(Boolean) ?? [],
+    connectedAt: primary?.createdAt.toISOString() ?? null,
+    accounts: connections.map((connection) => ({
+      accountId: connection.accountId,
+      displayName: connection.displayName,
+      email: connection.email,
+      status: connection.status,
+      isPrimary: connection.isPrimary,
+      connectedAt: connection.createdAt.toISOString(),
+    })),
   };
+}
+
+export async function setPrimaryMicrosoftAccount(userId: string, accountId: string) {
+  await db.setPrimaryMicrosoftConnection(userId, accountId);
+}
+
+export async function disconnectMicrosoftAccount(userId: string, accountId: string) {
+  return db.deleteMicrosoftConnectionByAccountId(userId, accountId);
 }
 
 export async function listExcelWorkbooks(
   userId: string,
+  accountId?: string,
 ): Promise<ExcelWorkbook[]> {
   type DriveItem = {
     id: string;
@@ -367,10 +414,14 @@ export async function listExcelWorkbooks(
   }>(
     userId,
     "/me/drive/root/search(q='.xlsx')?$select=id,name,webUrl,size,lastModifiedDateTime,parentReference,file&$top=100",
+    undefined,
+    accountId,
   );
   const shared = await graph<{ value?: DriveItem[] }>(
     userId,
     "/me/drive/sharedWithMe?$select=id,name,webUrl,size,lastModifiedDateTime,parentReference,file,remoteItem&$top=100",
+    undefined,
+    accountId,
   ).catch(() => ({ value: [] }));
 
   const normalized = [
@@ -415,10 +466,13 @@ export async function listExcelWorksheets(
   userId: string,
   driveId: string,
   itemId: string,
+  accountId?: string,
 ): Promise<ExcelWorksheet[]> {
   const result = await graph<{ value?: ExcelWorksheet[] }>(
     userId,
     `${workbookPath(driveId, itemId)}/worksheets?$select=id,name,position,visibility`,
+    undefined,
+    accountId,
   );
   return (result.value ?? []).sort((a, b) => a.position - b.position);
 }
@@ -427,12 +481,15 @@ export async function listExcelTables(
   userId: string,
   driveId: string,
   itemId: string,
+  accountId?: string,
 ): Promise<ExcelTable[]> {
   const result = await graph<{
     value?: Array<{ id: string; name: string; worksheet?: { name?: string } }>;
   }>(
     userId,
     `${workbookPath(driveId, itemId)}/tables?$select=id,name,worksheet`,
+    undefined,
+    accountId,
   );
   return (result.value ?? []).map((table) => ({
     id: table.id,
@@ -448,6 +505,7 @@ export async function readExcelRange(
     itemId: string;
     worksheet: string;
     address: string;
+    accountId?: string;
   },
 ) {
   const address = safeRange(input.address);
@@ -461,6 +519,8 @@ export async function readExcelRange(
   }>(
     userId,
     `${workbookPath(input.driveId, input.itemId)}/worksheets/${worksheetSegment(input.worksheet)}/range(address='${address}')?$select=address,rowCount,columnCount,text,values,formulas`,
+    undefined,
+    input.accountId,
   );
 }
 
@@ -473,6 +533,7 @@ export async function updateExcelRange(
     address: string;
     values?: unknown[][];
     formulas?: unknown[][];
+    accountId?: string;
   },
 ) {
   const address = safeRange(input.address);
@@ -486,7 +547,6 @@ export async function updateExcelRange(
     address: string;
     text: string[][];
     values: unknown[][];
-    formulas: unknown[][];
   }>(
     userId,
     `${workbookPath(input.driveId, input.itemId)}/worksheets/${worksheetSegment(input.worksheet)}/range(address='${address}')`,
@@ -497,6 +557,7 @@ export async function updateExcelRange(
         ...(input.formulas ? { formulas: input.formulas } : {}),
       }),
     },
+    input.accountId,
   );
 }
 
@@ -507,16 +568,17 @@ export async function appendExcelTableRows(
     itemId: string;
     tableName: string;
     values: unknown[][];
+    accountId?: string;
   },
 ) {
-  if (!input.values.length) throw new Error("At least one row is required");
-  return graph<{ index: number; values: unknown[][] }>(
+  return graph(
     userId,
     `${workbookPath(input.driveId, input.itemId)}/tables/${encodeURIComponent(input.tableName.trim())}/rows/add`,
     {
       method: "POST",
       body: JSON.stringify({ index: null, values: input.values }),
     },
+    input.accountId,
   );
 }
 
@@ -526,6 +588,7 @@ export async function addExcelWorksheet(
     driveId: string;
     itemId: string;
     name: string;
+    accountId?: string;
   },
 ) {
   const name = input.name.trim();
@@ -537,12 +600,13 @@ export async function addExcelWorksheet(
       method: "POST",
       body: JSON.stringify({ name }),
     },
+    input.accountId,
   );
 }
 
 export async function createExcelWorkbook(
   userId: string,
-  input: { name: string; worksheet?: string },
+  input: { name: string; worksheet?: string; accountId?: string },
 ) {
   const filename = `${input.name.trim().replace(/\.xlsx$/i, "") || "Rook workbook"}.xlsx`;
   if (filename.length > 120 || /["*:<>?\/\\|]/.test(filename))
@@ -554,7 +618,7 @@ export async function createExcelWorkbook(
   sheet.getCell("A1").value = "Created with Rook";
   sheet.getCell("A1").font = { bold: true };
   const bytes = await workbook.xlsx.writeBuffer();
-  const accessToken = await accessTokenForUser(userId);
+  const accessToken = await accessTokenForAccount(userId, input.accountId);
   const response = await fetch(
     `${GRAPH_BASE}/me/drive/root:/${encodeURIComponent(filename)}:/content`,
     {

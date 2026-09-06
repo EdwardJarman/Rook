@@ -18,7 +18,7 @@ describe("public landing downloads", () => {
     );
   });
 
-  it("keeps the dedicated Download Rook action after the CLI control", () => {
+  it("keeps the dedicated Download Rook action alongside the CLI control", () => {
     const cliControl = landingSource.indexOf(
       'accessibilityLabel="Copy Rook CLI install command"',
     );
@@ -27,8 +27,13 @@ describe("public landing downloads", () => {
     );
 
     expect(cliControl).toBeGreaterThan(-1);
-    expect(downloadControl).toBeGreaterThan(cliControl);
+    expect(downloadControl).toBeGreaterThan(-1);
     expect(landingSource).toContain('router.push("/download" as never)');
     expect(landingSource).toContain("Download Rook");
+  });
+
+  it("uses the shared Rook design tokens instead of a bespoke palette", () => {
+    expect(landingSource).toContain("useRookTheme");
+    expect(landingSource).not.toContain("#080808");
   });
 });

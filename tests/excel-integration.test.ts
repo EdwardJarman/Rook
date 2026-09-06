@@ -66,4 +66,16 @@ describe("Excel agent tools", () => {
       "Update Forecast.xlsx · Q3!B2:C3 with 2 row(s).",
     );
   });
+
+  it("accepts an optional account_id for multi-account connectors", () => {
+    const args = parseExcelToolArguments("excel_list_workbooks", {
+      account_id: "msft-abc123",
+    });
+    expect(args).toMatchObject({ account_id: "msft-abc123" });
+  });
+
+  it("defaults to no explicit account when account_id is omitted", () => {
+    const args = parseExcelToolArguments("excel_list_workbooks", {});
+    expect(args.account_id).toBeUndefined();
+  });
 });

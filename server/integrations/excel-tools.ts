@@ -15,20 +15,23 @@ const workbookIdentity = {
   drive_id: z.string().min(1).max(255),
   item_id: z.string().min(1).max(255),
 };
+const accountIdentity = { account_id: z.string().min(1).max(80).optional() };
 const cell = z.union([z.string().max(10_000), z.number(), z.boolean(), z.null()]);
 const matrix = z.array(z.array(cell).min(1).max(50)).min(1).max(100);
 
 const schemas = {
-  excel_list_workbooks: z.object({}),
-  excel_list_worksheets: z.object(workbookIdentity),
-  excel_list_tables: z.object(workbookIdentity),
+  excel_list_workbooks: z.object({ ...accountIdentity }),
+  excel_list_worksheets: z.object({ ...workbookIdentity, ...accountIdentity }),
+  excel_list_tables: z.object({ ...workbookIdentity, ...accountIdentity }),
   excel_read_range: z.object({
     ...workbookIdentity,
+    ...accountIdentity,
     worksheet: z.string().min(1).max(31),
     address: z.string().min(2).max(40),
   }),
   excel_update_range: z.object({
     ...workbookIdentity,
+    ...accountIdentity,
     workbook_name: z.string().min(1).max(255),
     worksheet: z.string().min(1).max(31),
     address: z.string().min(2).max(40),
@@ -37,16 +40,19 @@ const schemas = {
   }).refine((value) => value.values || value.formulas, "Values or formulas are required"),
   excel_append_table_rows: z.object({
     ...workbookIdentity,
+    ...accountIdentity,
     workbook_name: z.string().min(1).max(255),
     table_name: z.string().min(1).max(255),
     values: matrix,
   }),
   excel_add_worksheet: z.object({
     ...workbookIdentity,
+    ...accountIdentity,
     workbook_name: z.string().min(1).max(255),
     name: z.string().min(1).max(31),
   }),
   excel_create_workbook: z.object({
+    ...accountIdentity,
     name: z.string().min(1).max(120),
     worksheet: z.string().min(1).max(31).optional(),
   }),
@@ -64,6 +70,12 @@ const workbookParameters = {
   drive_id: { type: "string", description: "The drive ID returned by excel_list_workbooks." },
   item_id: { type: "string", description: "The workbook item ID returned by excel_list_workbooks." },
 };
+const accountParameter = {
+  account_id: {
+    type: "string",
+    description: "Optional. The Microsoft account to use when the user has connected more than one. Defaults to their primary account.",
+  },
+};
 const cellSchema = { type: ["string", "number", "boolean", "null"] };
 const matrixSchema = {
   type: "array",
@@ -78,7 +90,7 @@ export const EXCEL_TOOLS: Tool[] = [
     function: {
       name: "excel_list_workbooks",
       description: "List the user's Excel .xlsx workbooks in Microsoft OneDrive, including stable drive and item IDs. Use this before workbook-specific tools.",
-      parameters: { type: "object", properties: {}, additionalProperties: false },
+      parameters: { type: "object", properties: { ...accountParameter }, additionalProperties: false },
     },
   },
   {
@@ -86,7 +98,7 @@ export const EXCEL_TOOLS: Tool[] = [
     function: {
       name: "excel_list_worksheets",
       description: "List the worksheets in one Excel workbook.",
-      parameters: { type: "object", properties: workbookParameters, required: ["drive_id", "item_id"], additionalProperties: false },
+      parameters: { type: "object", properties: { ...workbookParameters, ...accountParameter }, required: ["drive_id", "item_id"], additionalProperties: false },
     },
   },
   {
@@ -94,7 +106,7 @@ export const EXCEL_TOOLS: Tool[] = [
     function: {
       name: "excel_list_tables",
       description: "List the named Excel tables in one workbook.",
-      parameters: { type: "object", properties: workbookParameters, required: ["drive_id", "item_id"], additionalProperties: false },
+      parameters: { type: "object", properties: { ...workbookParameters, ...accountParameter }, required: ["drive_id", "item_id"], additionalProperties: false },
     },
   },
   {
@@ -106,6 +118,7 @@ export const EXCEL_TOOLS: Tool[] = [
         type: "object",
         properties: {
           ...workbookParameters,
+          ...accountParameter,
           worksheet: { type: "string", description: "Exact worksheet name." },
           address: { type: "string", description: "A1 range such as A1:F20." },
         },
@@ -123,6 +136,7 @@ export const EXCEL_TOOLS: Tool[] = [
         type: "object",
         properties: {
           ...workbookParameters,
+          ...accountParameter,
           workbook_name: { type: "string" },
           worksheet: { type: "string" },
           address: { type: "string" },
@@ -141,7 +155,7 @@ export const EXCEL_TOOLS: Tool[] = [
       description: "Prepare approval-gated rows to append to a named Excel table. This never executes without user approval.",
       parameters: {
         type: "object",
-        properties: { ...workbookParameters, workbook_name: { type: "string" }, table_name: { type: "string" }, values: matrixSchema },
+        properties: { ...workbookParameters, ...accountParameter, workbook_name: { type: "string" }, table_name: { type: "string" }, values: matrixSchema },
         required: ["drive_id", "item_id", "workbook_name", "table_name", "values"],
         additionalProperties: false,
       },
@@ -154,7 +168,7 @@ export const EXCEL_TOOLS: Tool[] = [
       description: "Prepare an approval-gated addition of a worksheet to an existing workbook.",
       parameters: {
         type: "object",
-        properties: { ...workbookParameters, workbook_name: { type: "string" }, name: { type: "string" } },
+        properties: { ...workbookParameters, ...accountParameter, workbook_name: { type: "string" }, name: { type: "string" } },
         required: ["drive_id", "item_id", "workbook_name", "name"],
         additionalProperties: false,
       },
@@ -167,7 +181,7 @@ export const EXCEL_TOOLS: Tool[] = [
       description: "Prepare creation of a new .xlsx workbook in the user's OneDrive. Requires approval.",
       parameters: {
         type: "object",
-        properties: { name: { type: "string" }, worksheet: { type: "string" } },
+        properties: { ...accountParameter, name: { type: "string" }, worksheet: { type: "string" } },
         required: ["name"],
         additionalProperties: false,
       },
@@ -182,19 +196,21 @@ export function parseExcelToolArguments(name: string, raw: string | Record<strin
 }
 
 export async function executeExcelReadTool(userId: string, name: ExcelToolName, args: Record<string, unknown>) {
+  const accountId = args.account_id as string | undefined;
   switch (name) {
     case "excel_list_workbooks":
-      return listExcelWorkbooks(userId);
+      return listExcelWorkbooks(userId, accountId);
     case "excel_list_worksheets":
-      return listExcelWorksheets(userId, args.drive_id as string, args.item_id as string);
+      return listExcelWorksheets(userId, args.drive_id as string, args.item_id as string, accountId);
     case "excel_list_tables":
-      return listExcelTables(userId, args.drive_id as string, args.item_id as string);
+      return listExcelTables(userId, args.drive_id as string, args.item_id as string, accountId);
     case "excel_read_range":
       return readExcelRange(userId, {
         driveId: args.drive_id as string,
         itemId: args.item_id as string,
         worksheet: args.worksheet as string,
         address: args.address as string,
+        accountId,
       });
     default:
       throw new Error(`${name} is not a read tool`);
@@ -227,6 +243,7 @@ export async function executeValidatedExcelWrite(userId: string, name: ExcelTool
     formulas: parsed.formulas,
     tableName: parsed.table_name,
     name: parsed.name,
+    accountId: parsed.account_id,
   } as Record<string, unknown>;
   return executeExcelWrite(userId, name as ExcelWriteToolName, normalized);
 }

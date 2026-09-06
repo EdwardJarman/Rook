@@ -16,11 +16,13 @@ import { runRookAgent } from "./integrations/excel-agent";
 import { executeValidatedExcelWrite, type ExcelToolName } from "./integrations/excel-tools";
 import {
   createMicrosoftAuthorizationUrl,
+  disconnectMicrosoftAccount,
   listExcelTables,
   listExcelWorkbooks,
   listExcelWorksheets,
   microsoftConnectionStatus,
   readExcelRange,
+  setPrimaryMicrosoftAccount,
 } from "./integrations/microsoft-excel";
 import { sendExpoPushAlert } from "./push-alerts";
 
@@ -96,13 +98,28 @@ export const appRouter = router({
       .input(z.object({ returnTo: z.string().url().max(500).optional() }))
       .mutation(({ ctx, input }) => createMicrosoftAuthorizationUrl(ctx.user.id, input.returnTo)),
     disconnect: protectedProcedure.mutation(({ ctx }) => db.deleteMicrosoftConnection(ctx.user.id)),
-    workbooks: protectedProcedure.query(({ ctx }) => listExcelWorkbooks(ctx.user.id)),
+    disconnectAccount: protectedProcedure
+      .input(z.object({ accountId: z.string().min(1).max(80) }))
+      .mutation(({ ctx, input }) => disconnectMicrosoftAccount(ctx.user.id, input.accountId)),
+    setPrimaryAccount: protectedProcedure
+      .input(z.object({ accountId: z.string().min(1).max(80) }))
+      .mutation(async ({ ctx, input }) => {
+        await setPrimaryMicrosoftAccount(ctx.user.id, input.accountId);
+        return { ok: true };
+      }),
+    workbooks: protectedProcedure
+      .input(z.object({ accountId: z.string().min(1).max(80).optional() }).optional())
+      .query(({ ctx, input }) => listExcelWorkbooks(ctx.user.id, input?.accountId)),
     workbookStructure: protectedProcedure
-      .input(z.object({ driveId: z.string().min(1).max(255), itemId: z.string().min(1).max(255) }))
+      .input(z.object({
+        driveId: z.string().min(1).max(255),
+        itemId: z.string().min(1).max(255),
+        accountId: z.string().min(1).max(80).optional(),
+      }))
       .query(async ({ ctx, input }) => {
         const [worksheets, tables] = await Promise.all([
-          listExcelWorksheets(ctx.user.id, input.driveId, input.itemId),
-          listExcelTables(ctx.user.id, input.driveId, input.itemId),
+          listExcelWorksheets(ctx.user.id, input.driveId, input.itemId, input.accountId),
+          listExcelTables(ctx.user.id, input.driveId, input.itemId, input.accountId),
         ]);
         return { worksheets, tables };
       }),
@@ -112,6 +129,7 @@ export const appRouter = router({
         itemId: z.string().min(1).max(255),
         worksheet: z.string().min(1).max(31),
         address: z.string().min(2).max(40),
+        accountId: z.string().min(1).max(80).optional(),
       }))
       .query(({ ctx, input }) => readExcelRange(ctx.user.id, input)),
     pendingActions: protectedProcedure.query(async ({ ctx }) =>
