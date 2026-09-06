@@ -61,6 +61,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     defaults:
       run:
+        # Windows runners default to pwsh, which cannot run the bash syntax
+        # used across these steps (`set -o pipefail` etc.) — pin bash.
+        shell: bash
         working-directory: rook-node
     timeout-minutes: 75
 
