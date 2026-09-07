@@ -102,6 +102,8 @@ export type Approval = {
   state: "Pending" | "Approved" | "Declined";
   createdAt: string;
   externalActionId?: string;
+  /** Which resolver owns this proposal (excel vs cloud computer). */
+  kind?: "excel" | "cloud";
   taskId?: string;
 };
 export type WorkFile = {

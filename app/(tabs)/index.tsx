@@ -324,6 +324,7 @@ export default function ChatScreen() {
             botId: activeBot.id,
             taskId: task.id,
             externalActionId: approval.actionId,
+            kind: approval.kind ?? "excel",
             title: approval.title,
             detail: approval.detail,
             risk: approval.risk,
