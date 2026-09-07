@@ -1,10 +1,10 @@
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import { useRouter } from "expo-router";
 import { useState } from "react";
-import { Platform, Pressable, Text, View } from "react-native";
+import { ActivityIndicator, Platform, Pressable, Text, View } from "react-native";
 
 import { Card, PrimaryButton, SectionHeader, StatusPill } from "@/components/rook-primitives";
-import { useRookTheme } from "@/lib/ui";
+import { tint, useRookTheme } from "@/lib/ui";
 import { trpc } from "@/lib/trpc";
 
 /** The server base URL the node should dial. Web uses the current origin; native falls back to production. */
@@ -58,6 +58,7 @@ export function ComputersCard() {
     retry: 1,
     refetchInterval: 10_000,
   });
+  const cloudStatus = trpc.nodes.cloud.status.useQuery(undefined, { retry: 1 });
   const createPairing = trpc.nodes.createPairing.useMutation();
   const removeNode = trpc.nodes.remove.useMutation();
   const decideCommand = trpc.nodes.decideCommand.useMutation();
@@ -130,6 +131,39 @@ export function ComputersCard() {
           </Pressable>
         </Card>
       ) : null}
+
+      <Card style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+        <View
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 13,
+            alignItems: "center",
+            justifyContent: "center",
+            backgroundColor: tint(colors.accent, 0.12),
+          }}
+        >
+          <MaterialIcons name="cloud" size={21} color={colors.accent} />
+        </View>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={{ color: colors.text, fontSize: 14, fontWeight: "700" }}>
+            Rook Cloud
+          </Text>
+          <Text numberOfLines={2} style={{ color: colors.textFaint, fontSize: 11.5, lineHeight: 15.5, marginTop: 2 }}>
+            {cloudStatus.data?.configured
+              ? "A shared sandbox your Bots can use to run commands and files when your computer is offline."
+              : "Give your Bots a cloud computer: add E2B_API_KEY to this deployment, then redeploy."}
+          </Text>
+        </View>
+        {cloudStatus.isLoading ? (
+          <ActivityIndicator size="small" color={colors.textFaint} />
+        ) : (
+          <StatusPill
+            label={cloudStatus.data?.configured ? "Available" : "Setup needed"}
+            tone={cloudStatus.data?.configured ? "mint" : "muted"}
+          />
+        )}
+      </Card>
 
       {pendingApprovals.length > 0 ? (
         <View style={{ gap: 8 }}>

@@ -4,6 +4,20 @@ import { invokeAi } from "../ai";
 import * as db from "../db";
 import { githubConnectionStatus, isGithubConfigured } from "./github";
 import {
+  isCloudComputerConfigured,
+} from "./cloud-computer";
+import {
+  CLOUD_SENSITIVE_TOOL_NAMES,
+  CLOUD_TOOLS,
+  CLOUD_TOOL_NAMES,
+  cloudCommandSummary,
+  cloudTraceTitle,
+  executeCloudReadTool,
+  parseCloudToolArguments,
+  prepareCloudCommandProposal,
+  type CloudToolName,
+} from "./cloud-tools";
+import {
   executeGithubReadTool,
   GITHUB_TOOLS,
   GITHUB_TOOL_NAMES,
@@ -78,6 +92,8 @@ export type ExcelAgentApproval = {
   title: string;
   detail: string;
   risk: "Medium";
+  /** Which approval resolver owns this proposal (excel vs cloud computer). */
+  kind?: "excel" | "cloud";
 };
 
 export function agentClockContext(
@@ -161,6 +177,7 @@ export async function runRookAgent(input: {
   const toolset = [
     ...(connection.connected ? EXCEL_TOOLS : []),
     ...(github.connected && github.selectedRepos.length ? GITHUB_TOOLS : []),
+    ...(isCloudComputerConfigured() ? CLOUD_TOOLS : []),
   ];
   const tools = toolset.length ? toolset : undefined;
   const excelSelected = input.connectors?.includes("microsoft-excel") === true;
@@ -185,6 +202,9 @@ export async function runRookAgent(input: {
       : github.configured
         ? "\n\nGitHub is available but not connected for this user. Tell them to open Account → GitHub and connect it if this request needs repository access."
         : "";
+  const cloudNote = isCloudComputerConfigured()
+    ? "\n\nThe Rook cloud computer is available: a Linux sandbox with a workspace where you can run shell commands and read/write files. computer_run_command and computer_write_file are proposals — they never execute until the user approves them in Rook Updates. computer_read_file and computer_list_files run immediately. Use the cloud computer whenever the user asks you to run code, build or transform something, or work with files; keep commands small and self-contained and capture output with the command itself."
+    : "";
 
   const publicSearchQuery = shouldSearchPublicWeb(input.message)
     ? input.message.replace(/\s+/g, " ").trim()
@@ -223,7 +243,7 @@ export async function runRookAgent(input: {
   const messages: Message[] = [
     {
       role: "system",
-      content: `You are ${input.botName}, a ${input.botRole} in Rook. Purpose: ${input.botPurpose}\n\nThe user selected this exact Rook model route: ${requestedModel}. This route is user-visible and safe to report. If asked which AI model you are, report that selected route accurately instead of guessing from training data.\n\nLive clock at the start of this request: ${clock.local} (${clock.timeZone}). Canonical timestamp: ${clock.iso}. This clock is generated fresh by Rook for every request. Use it for date and time questions and be explicit about the timezone when relevant.\n\nYou are a warm, natural, direct AI teammate — like a sharp colleague, not a form. Talk like a person: short sentences, plain words, no corporate filler, no restating the question. Answer what was actually asked; for small talk, be human first and helpful second. When a request is ambiguous, make the most reasonable assumption, say it in one line, and answer anyway. Use markdown lightly (bold for key facts, lists when enumerating, code blocks for code). State assumptions when information is missing. ${connectionNote} Never claim an external action succeeded unless its tool result explicitly confirms success. If Rook provides public web search results, treat them as search results rather than page contents, and never claim you opened a source unless that actually occurred. Never reveal other internal IDs, access tokens, raw tool implementation details, private reasoning, or any internal safety or moderation annotations.${githubNote}${publicSearchContext}`,
+      content: `You are ${input.botName}, a ${input.botRole} in Rook. Purpose: ${input.botPurpose}\n\nThe user selected this exact Rook model route: ${requestedModel}. This route is user-visible and safe to report. If asked which AI model you are, report that selected route accurately instead of guessing from training data.\n\nLive clock at the start of this request: ${clock.local} (${clock.timeZone}). Canonical timestamp: ${clock.iso}. This clock is generated fresh by Rook for every request. Use it for date and time questions and be explicit about the timezone when relevant.\n\nYou are a warm, natural, direct AI teammate — like a sharp colleague, not a form. Talk like a person: short sentences, plain words, no corporate filler, no restating the question. Answer what was actually asked; for small talk, be human first and helpful second. When a request is ambiguous, make the most reasonable assumption, say it in one line, and answer anyway. Use markdown lightly (bold for key facts, lists when enumerating, code blocks for code). State assumptions when information is missing. ${connectionNote} Never claim an external action succeeded unless its tool result explicitly confirms success. If Rook provides public web search results, treat them as search results rather than page contents, and never claim you opened a source unless that actually occurred. Never reveal other internal IDs, access tokens, raw tool implementation details, private reasoning, or any internal safety or moderation annotations.${githubNote}${cloudNote}${publicSearchContext}`,
     },
     ...input.recentContext.map((entry) => ({
       role:
@@ -298,7 +318,49 @@ export async function runRookAgent(input: {
             status: "completed",
             result: await executeGithubReadTool(input.userId, githubTool, args),
           };
-        } else {
+        } else if (CLOUD_TOOL_NAMES.has(name)) {
+          const cloudTool = name as CloudToolName;
+          const args = parseCloudToolArguments(
+            cloudTool,
+            call.function.arguments,
+          );
+          trace.push({ kind: "tool", title: cloudTraceTitle(cloudTool) });
+          if (CLOUD_SENSITIVE_TOOL_NAMES.has(cloudTool)) {
+            if (approvals.some((entry) => entry.kind === "cloud")) {
+              toolResult = {
+                status: "not_prepared",
+                message:
+                  "One cloud computer action is already waiting for approval in this turn. Wait for the user to approve it before proposing another.",
+              };
+            } else {
+              const proposal = await prepareCloudCommandProposal({
+                userId: input.userId,
+                botId: input.botId,
+                name: cloudTool as "computer_run_command" | "computer_write_file",
+                args,
+              });
+              approvals.push({
+                actionId: proposal.commandId,
+                title: "Approve cloud computer action",
+                detail: proposal.summary,
+                risk: "Medium",
+                kind: "cloud",
+              });
+              toolResult = {
+                status: "approval_required",
+                command_id: proposal.commandId,
+                summary: proposal.summary,
+              };
+            }
+          } else {
+            toolResult = {
+              status: "completed",
+              result: await executeCloudReadTool(
+                cloudTool as "computer_read_file" | "computer_list_files",
+                args,
+              ),
+            };
+          }        } else {
           const excelTool = name as ExcelToolName;
           const args = parseExcelToolArguments(
             excelTool,

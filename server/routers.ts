@@ -36,6 +36,12 @@ import {
   setPrimaryMicrosoftAccount,
 } from "./integrations/microsoft-excel";
 import { sendExpoPushAlert } from "./push-alerts";
+import {
+  buildCloudCommandEnvelope,
+  cloudMissingEnvVars,
+  executeCloudCommand,
+  isCloudComputerConfigured,
+} from "./integrations/cloud-computer";
 
 export const appRouter = router({
   system: systemRouter,
@@ -524,6 +530,83 @@ export const appRouter = router({
             ),
           })),
       ),
+    cloud: router({
+      status: protectedProcedure.query(({ ctx }) => ({
+        configured: isCloudComputerConfigured(),
+        missingEnv: cloudMissingEnvVars(),
+      })),
+      requestCommand: protectedProcedure
+        .input(
+          z.object({
+            botId: z.string().min(1).max(128),
+            capability: z.enum(["shell", "files-read", "files-write"]),
+            action: z.record(z.string(), z.unknown()),
+            summary: z.string().min(1).max(300),
+          }),
+        )
+        .mutation(async ({ ctx, input }) => {
+          const record = await db.enqueueCloudCommand({
+            commandId: generateCommandId(),
+            userId: ctx.user.id,
+            summary: input.summary,
+            capability: input.capability,
+            envelope: buildCloudCommandEnvelope({
+              userId: ctx.user.id,
+              botId: input.botId,
+              capability: input.capability,
+              action: input.action,
+              seq: 1,
+            }),
+            requiresApproval: isSensitiveCapability(input.capability),
+          });
+          if (!record) throw new Error("The Rook cloud computer is unavailable.");
+          const needsApproval = record.state === "awaiting_approval";
+          if (needsApproval)
+            await notifyNodeApprovalRequest(ctx.user.id, input.summary);
+          return {
+            commandId: record.commandId,
+            state: record.state,
+            requiresApproval: needsApproval,
+          };
+        }),
+      decideCommand: protectedProcedure
+        .input(
+          z.object({
+            commandId: z.string().min(4).max(80),
+            decision: z.enum(["approved", "declined"]),
+          }),
+        )
+        .mutation(({ ctx, input }) =>
+          db
+            .decideNodeCommand(ctx.user.id, input.commandId, input.decision)
+            .then((record) => ({
+              decided: Boolean(
+                record?.state === "pending" ||
+                (record?.state === "declined" &&
+                  input.decision === "declined"),
+              ),
+            })),
+        ),
+      poll: protectedProcedure
+        .input(z.object({ commandId: z.string().min(4).max(80) }))
+        .mutation(async ({ ctx, input }) => {
+          const record = await db.getNodeCommandById(input.commandId);
+          if (!record || record.userId !== ctx.user.id)
+            throw new Error("Command not found.");
+          if (record.state === "awaiting_approval")
+            return { state: "awaiting_approval", ok: false, result: null, message: "Waiting for approval" };
+          if (record.state === "pending") {
+            const executed = await executeCloudCommand(input.commandId);
+            return { state: "completed", ...executed };
+          }
+          return {
+            state: record.state,
+            ok: record.state === "completed",
+            result: record.result,
+            message: record.state === "completed" ? undefined : "Command is not ready",
+          };
+        }),
+    }),
   }),
 });
 

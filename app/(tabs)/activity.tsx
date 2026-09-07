@@ -21,6 +21,8 @@ export default function ActivityScreen() {
   const { colors } = useRookTheme();
   const { approvals, bots, activity, notifications, resolveApproval, markNotificationsRead, updateTaskStatus, addMessage, addActivity } = useWorkroom();
   const resolveExcelAction = trpc.excel.resolveAction.useMutation();
+  const cloudDecideCommand = trpc.nodes.cloud.decideCommand.useMutation();
+  const cloudPoll = trpc.nodes.cloud.poll.useMutation();
   const serverPendingActions = trpc.excel.pendingActions.useQuery(undefined, {
     retry: 1,
     refetchOnWindowFocus: true,
@@ -55,6 +57,28 @@ export default function ActivityScreen() {
     }
     setResolvingId(approval.id);
     try {
+      if (approval.kind === "cloud") {
+        const mappedDecision = decision === "approve" ? "approved" as const : "declined" as const;
+        await cloudDecideCommand.mutateAsync({ commandId: approval.externalActionId, decision: mappedDecision });
+        resolveApproval(approval.id, decision === "approve" ? "Approved" : "Declined");
+        if (decision === "decline") {
+          if (approval.taskId) updateTaskStatus(approval.taskId, "Cancelled", "The proposed cloud command was declined.");
+          addActivity({ title: "Cloud computer action declined", detail: "The proposed cloud command was declined.", tone: "coral" });
+          return;
+        }
+        const executed = await cloudPoll.mutateAsync({ commandId: approval.externalActionId });
+        const summary = summarizeCloudResult(executed);
+        if (executed.ok) {
+          if (approval.taskId) updateTaskStatus(approval.taskId, "Completed", "The approved cloud command finished.");
+          addMessage({ botId: approval.botId, author: "bot", body: `Cloud computer finished. ${summary}`, kind: "result", taskId: approval.taskId });
+          addActivity({ title: "Cloud computer action completed", detail: summary, tone: "mint" });
+        } else {
+          if (approval.taskId) updateTaskStatus(approval.taskId, "Completed", "The cloud command finished with an error.");
+          addMessage({ botId: approval.botId, author: "bot", body: `Cloud computer reported: ${executed.message ?? summary}`, kind: "result", taskId: approval.taskId });
+          addActivity({ title: "Cloud computer action failed", detail: executed.message ?? summary, tone: "coral" });
+        }
+        return;
+      }
       const result = await resolveExcelAction.mutateAsync({ actionId: approval.externalActionId, decision });
       resolveApproval(approval.id, decision === "approve" ? "Approved" : "Declined");
       await serverPendingActions.refetch();
@@ -266,4 +290,30 @@ export default function ActivityScreen() {
       </ScrollView>
     </ScreenContainer>
   );
+}
+
+/** Builds a one-line human summary from a cloud command execution result. */
+function summarizeCloudResult(executed: {
+  ok: boolean;
+  result?: unknown;
+  message?: string;
+}): string {
+  const result = executed.result as
+    | { exitCode?: number; stdout?: string; stderr?: string }
+    | { content?: string }
+    | { written?: string }
+    | { entries?: unknown[] }
+    | null
+    | undefined;
+  if (result && typeof result === "object") {
+    if ("exitCode" in result)
+      return `exit ${result.exitCode ?? "?"}${
+        result.stdout?.trim() ? ` — ${result.stdout.trim().split("\n")[0].slice(0, 160)}` : ""
+      }`;
+    if ("content" in result) return (result.content ?? "").slice(0, 200);
+    if ("written" in result) return `wrote ${result.written}`;
+    if ("entries" in result)
+      return `listed ${(result.entries ?? []).length} entries`;
+  }
+  return executed.message ?? "the command finished";
 }
