@@ -10,6 +10,12 @@
  * instant-cli and failed with "Expected App ID to be a UUID". Node resolves
  * the default itself here, so behavior is identical on every shell.
  *
+ * Schema and perms are pushed as two separate `instant-cli` invocations
+ * (rather than one `push all`) because the perms-diff step has been
+ * observed to stack-overflow on some Windows terminals even with color
+ * disabled. A perms crash is reported but does not fail the script, so a
+ * successful schema push is never hidden behind it.
+ *
  * Usage:
  *   INSTANT_APP_ADMIN_TOKEN=... pnpm db:push
  */
@@ -36,17 +42,33 @@ const binRel =
     : (instantCliPkgJson.bin?.["instant-cli"] ?? Object.values(instantCliPkgJson.bin ?? {})[0]);
 const instantCliBin = instantCliPkgPath.replace(/package\.json$/, binRel.replace(/^\.\//, ""));
 
-const result = spawnSync(
-  process.execPath,
-  [instantCliBin, "push", "all", "--app", appId, "--token", token, "--yes"],
-  {
+function runInstantCli(args) {
+  return spawnSync(process.execPath, [instantCliBin, ...args], {
     stdio: "inherit",
     shell: false,
     // instant-cli's perms diff (via `colors`/`json-diff`) recurses on ANSI
-    // escape codes and stack-overflows on some Windows terminals. Disabling
-    // color avoids the recursive path entirely; the diff is still printed,
-    // just uncolored.
+    // escape codes and can still stack-overflow on some Windows terminals
+    // even with color disabled, so schema and perms are pushed as separate
+    // steps: a crash while diffing perms must not hide a successful schema
+    // push, and must not block on a step that hasn't changed.
     env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" },
-  },
-);
-process.exit(result.status ?? 1);
+  });
+}
+
+const schemaResult = runInstantCli(["push", "schema", "--app", appId, "--token", token, "--yes"]);
+if (schemaResult.status !== 0) {
+  process.exit(schemaResult.status ?? 1);
+}
+
+const permsResult = runInstantCli(["push", "perms", "--app", appId, "--token", token, "--yes"]);
+if (permsResult.status !== 0) {
+  console.error(
+    "\nSchema push succeeded, but pushing perms crashed (known instant-cli/colors bug on some " +
+      "Windows terminals). This does not affect the schema push above. Run\n" +
+      "  pnpm exec instant-cli push perms --app " +
+      appId +
+      ' --token "$INSTANT_APP_ADMIN_TOKEN" --yes\n' +
+      "from a different terminal (e.g. Git Bash) if you need to apply a perms change.",
+  );
+  process.exit(0);
+}
