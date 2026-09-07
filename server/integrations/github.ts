@@ -1,5 +1,7 @@
 import { randomBytes } from "node:crypto";
 
+import { TRPCError } from "@trpc/server";
+
 import * as db from "../db";
 import { decryptSecret, encryptSecret } from "./crypto";
 
@@ -62,9 +64,12 @@ function requireGithubConfig() {
   const config = githubConfig();
   const missing = githubMissingEnvVars();
   if (missing.length > 0) {
-    throw new Error(
-      `GitHub is not configured for this Rook deployment (missing ${missing.join(", ")}). Environment variables added in Vercel only apply to a NEW deployment — redeploy after saving them.`,
-    );
+    // TRPCError (not plain Error) so tRPC does not mask the message in
+    // production — the card surfaces this text to the user.
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: `GitHub is not configured for this Rook deployment (missing ${missing.join(", ")}). Environment variables added in Vercel only apply to a NEW deployment — redeploy after saving them.`,
+    });
   }
   return {
     ...config,

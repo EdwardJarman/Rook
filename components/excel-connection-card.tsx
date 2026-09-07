@@ -4,7 +4,6 @@ import * as WebBrowser from "expo-web-browser";
 import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   Platform,
   Pressable,
   ScrollView,
@@ -15,6 +14,7 @@ import {
 } from "react-native";
 
 import { Card, StatusPill } from "@/components/rook-primitives";
+import { rookAlert, rookConfirm } from "@/lib/rook-alert";
 import { trpc } from "@/lib/trpc";
 import { tint, useRookTheme } from "@/lib/ui";
 
@@ -78,7 +78,7 @@ export function ExcelConnectionCard() {
       await WebBrowser.openAuthSessionAsync(url, returnTo);
       await Promise.all([utils.excel.status.invalidate(), utils.excel.workbooks.invalidate()]);
     } catch (error) {
-      Alert.alert(
+      rookAlert(
         "Microsoft Excel unavailable",
         error instanceof Error ? error.message : "Rook could not start the Microsoft connection.",
       );
@@ -86,44 +86,32 @@ export function ExcelConnectionCard() {
   };
 
   const disconnectMicrosoft = () => {
-    Alert.alert(
+    rookConfirm(
       "Disconnect Microsoft Excel?",
       "Rook will delete its stored Microsoft tokens immediately. Your workbooks will not be changed.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Disconnect",
-          style: "destructive",
-          onPress: () => {
-            void disconnect.mutateAsync().then(async () => {
-              await Promise.all([utils.excel.status.invalidate(), utils.excel.workbooks.invalidate()]);
-            }).catch(() => Alert.alert("Disconnect failed", "Rook could not remove this connection. Please try again."));
-          },
-        },
-      ],
+      () => {
+        void disconnect.mutateAsync().then(async () => {
+          await Promise.all([utils.excel.status.invalidate(), utils.excel.workbooks.invalidate()]);
+        }).catch(() => rookAlert("Disconnect failed", "Rook could not remove this connection. Please try again."));
+      },
+      { confirmLabel: "Disconnect", destructive: true },
     );
   };
 
   const disconnectOneAccount = (accountId: string, label: string) => {
-    Alert.alert(
+    rookConfirm(
       `Remove ${label}?`,
       "Rook will delete its stored tokens for this account. Your workbook stays exactly as it is.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Remove",
-          style: "destructive",
-          onPress: () => {
-            void disconnectAccount
-              .mutateAsync({ accountId })
-              .then(async () => {
-                if (activeAccountId === accountId) setActiveAccountId(undefined);
-                await Promise.all([utils.excel.status.invalidate(), utils.excel.workbooks.invalidate()]);
-              })
-              .catch(() => Alert.alert("Removal failed", "Rook could not remove this account. Please try again."));
-          },
-        },
-      ],
+      () => {
+        void disconnectAccount
+          .mutateAsync({ accountId })
+          .then(async () => {
+            if (activeAccountId === accountId) setActiveAccountId(undefined);
+            await Promise.all([utils.excel.status.invalidate(), utils.excel.workbooks.invalidate()]);
+          })
+          .catch(() => rookAlert("Removal failed", "Rook could not remove this account. Please try again."));
+      },
+      { confirmLabel: "Remove", destructive: true },
     );
   };
 
@@ -131,7 +119,7 @@ export function ExcelConnectionCard() {
     void setPrimaryAccount
       .mutateAsync({ accountId })
       .then(() => utils.excel.status.invalidate())
-      .catch(() => Alert.alert("Could not switch accounts", "Please try again."));
+      .catch(() => rookAlert("Could not switch accounts", "Please try again."));
   };
 
   const openWorkbook = async () => {
@@ -139,7 +127,7 @@ export function ExcelConnectionCard() {
     try {
       await Linking.openURL(selected.webUrl);
     } catch {
-      Alert.alert("Workbook unavailable", "Microsoft did not provide a link that this device can open.");
+      rookAlert("Workbook unavailable", "Microsoft did not provide a link that this device can open.");
     }
   };
 
