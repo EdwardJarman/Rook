@@ -58,14 +58,19 @@ export function GithubConnectionCard() {
   // result in the query string is the only surviving signal.
   useEffect(() => {
     if (Platform.OS !== "web" || typeof window === "undefined") return;
-    const result = new URLSearchParams(window.location.search).get("github");
+    const params = new URLSearchParams(window.location.search);
+    const result = params.get("github");
     if (!result) return;
     if (result === "connected") setBrowserOpen(true);
-    if (result === "error")
+    if (result === "error") {
+      const reason = params.get("reason");
       rookAlert(
         "GitHub connection failed",
-        "Rook reached GitHub but could not save the connection. Please try Connect GitHub again — if it keeps failing, the deployment may be missing environment variables.",
+        reason
+          ? `Rook reached GitHub but could not save the connection. The server said: ${reason}`
+          : "Rook reached GitHub but could not save the connection. Please try Connect GitHub again — if it keeps failing, the deployment may be missing environment variables.",
       );
+    }
     if (result === "cancelled")
       rookAlert(
         "GitHub not connected",
