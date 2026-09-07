@@ -32,7 +32,8 @@ export function setTokenGetter(getter: (() => Promise<string | null>) | null) {
   tokenGetter = getter;
 }
 
-async function currentToken(): Promise<string | null> {
+/** Shared auth token source for imperative tRPC calls from desktop routes. */
+export async function currentToken(): Promise<string | null> {
   if (tokenGetter) {
     try {
       return await tokenGetter();
@@ -41,7 +42,9 @@ async function currentToken(): Promise<string | null> {
     }
   }
   try {
-    const w = window as unknown as { Clerk?: { session?: { getToken: () => Promise<string | null> } } };
+    const w = window as unknown as {
+      Clerk?: { session?: { getToken: () => Promise<string | null> } };
+    };
     return (await w.Clerk?.session?.getToken?.()) ?? null;
   } catch {
     return null;
@@ -68,8 +71,7 @@ async function deliver(detail: SendDetail) {
   const bot = workroom.get().bots.find((b) => b.id === botId);
   if (!bot) {
     workroom.updateMessage(replyId, {
-      body:
-        "I can't find that Bot on this computer. Open the Bots tab to create or re-add it.",
+      body: "I can't find that Bot on this computer. Open the Bots tab to create or re-add it.",
       pending: false,
     });
     return;
@@ -83,8 +85,11 @@ async function deliver(detail: SendDetail) {
     // Cast: the desktop app types the router as `unknown` so the
     // server-side route surface remains version-agnostic. We assert the
     // expected shape at runtime.
-    const router = (client as unknown as { workroom?: { reply: { mutate: (input: unknown) => Promise<unknown> } } })
-      .workroom;
+    const router = (
+      client as unknown as {
+        workroom?: { reply: { mutate: (input: unknown) => Promise<unknown> } };
+      }
+    ).workroom;
     if (!router?.reply) throw new Error("workroom.reply route not available");
     const result = (await router.reply.mutate({
       botId,
@@ -120,7 +125,10 @@ function friendlyFallback(
   authenticated: boolean,
 ): string {
   const trimmed = text.trim();
-  const at = attachments.length > 0 ? ` and the ${attachments.length} file${attachments.length === 1 ? "" : "s"} you attached` : "";
+  const at =
+    attachments.length > 0
+      ? ` and the ${attachments.length} file${attachments.length === 1 ? "" : "s"} you attached`
+      : "";
   if (authenticated) {
     return [
       `I couldn't reach the Rook service just now, ${name ? `this is ${name}` : ""}.`.trim(),

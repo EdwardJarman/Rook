@@ -70,13 +70,50 @@ export type InsertMicrosoftConnection = Omit<
   isPrimary?: boolean;
 };
 
+export type GithubConnection = {
+  id: string;
+  userId: string;
+  githubUserId: string;
+  login: string;
+  displayName: string | null;
+  avatarUrl: string | null;
+  encryptedAccessToken: string;
+  encryptedRefreshToken: string | null;
+  expiresAt: Date;
+  scopes: string;
+  status: "connected" | "reauthorize";
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export type InsertGithubConnection = Omit<
+  GithubConnection,
+  "id" | "createdAt" | "updatedAt"
+> & {
+  displayName?: string | null;
+  avatarUrl?: string | null;
+  encryptedRefreshToken?: string | null;
+  status?: "connected" | "reauthorize";
+};
+
+export type GithubSelectedRepo = {
+  id: string;
+  userId: string;
+  fullName: string;
+  repoId: number;
+  privateRepo: boolean;
+  defaultBranch: string | null;
+  description: string | null;
+  addedAt: Date;
+};
+
+export type InsertGithubSelectedRepo = Omit<
+  GithubSelectedRepo,
+  "id" | "addedAt" | "userId"
+> & { addedAt?: Date };
+
 export type ExcelActionState =
-  | "pending"
-  | "executing"
-  | "executed"
-  | "failed"
-  | "declined"
-  | "expired";
+  "pending" | "executing" | "executed" | "failed" | "declined" | "expired";
 
 export type ExcelPendingAction = {
   id: string;
@@ -128,7 +165,13 @@ export type NodeCommandRecord = {
   commandId: string;
   userId: string;
   nodeId: string;
-  state: "awaiting_approval" | "pending" | "delivered" | "completed" | "declined" | "expired";
+  state:
+    | "awaiting_approval"
+    | "pending"
+    | "delivered"
+    | "completed"
+    | "declined"
+    | "expired";
   summary: string;
   capability: string;
   envelope: Record<string, unknown>;

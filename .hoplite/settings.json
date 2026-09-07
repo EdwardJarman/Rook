@@ -11,7 +11,7 @@
 		},
 		"run": {
 			"enabled": true,
-			"command": null
+			"command": "EXPO_PORT=3000 NODE_OPTIONS=--unhandled-rejections=warn pnpm dev:metro"
 		},
 		"archive": {
 			"enabled": true,

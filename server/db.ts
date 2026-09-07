@@ -18,7 +18,11 @@ import {
 import schema from "../instant.schema";
 import type {
   ExcelPendingAction,
+  GithubConnection,
+  GithubSelectedRepo,
   InsertExcelPendingAction,
+  InsertGithubConnection,
+  InsertGithubSelectedRepo,
   InsertMicrosoftConnection,
   InsertPushDevice,
   InsertUser,
@@ -88,7 +92,11 @@ const asDate = (value: Date | string | number): Date =>
   value instanceof Date ? value : new Date(value);
 /** asDate for loosely-typed InstantDB rows. */
 const asDateValue = (value: unknown): Date =>
-  value instanceof Date ? value : typeof value === "string" || typeof value === "number" ? new Date(value) : new Date(0);
+  value instanceof Date
+    ? value
+    : typeof value === "string" || typeof value === "number"
+      ? new Date(value)
+      : new Date(0);
 
 /* ---- Explicit row contracts ----
  * InstantDB's inferred query row types can collapse to bare `{ id }` under
@@ -107,7 +115,11 @@ type NotificationPreferencesRow = {
   updatedAt: Date;
 };
 type WorkroomSnapshotRow = WorkroomSnapshotRecord;
-type WorkroomItemRow = { id: string; createdAt: Date; updatedAt: Date } & Record<string, unknown>;
+type WorkroomItemRow = {
+  id: string;
+  createdAt: Date;
+  updatedAt: Date;
+} & Record<string, unknown>;
 type MicrosoftOAuthStateRow = {
   id: string;
   state: string;
@@ -118,7 +130,22 @@ type MicrosoftOAuthStateRow = {
   createdAt: Date;
 };
 type MicrosoftConnectionRow = MicrosoftConnection & WithId;
-type ExcelActionClaimRow = { id: string; actionId: string; userId: string; createdAt: Date };
+type GithubOAuthStateRow = {
+  id: string;
+  state: string;
+  userId: string;
+  returnTo: string;
+  expiresAt: Date;
+  createdAt: Date;
+};
+type GithubConnectionRow = GithubConnection & WithId;
+type GithubSelectedRepoRow = GithubSelectedRepo & WithId;
+type ExcelActionClaimRow = {
+  id: string;
+  actionId: string;
+  userId: string;
+  createdAt: Date;
+};
 type ExcelPendingActionRow = ExcelPendingAction & {
   actionId: string;
   botClientId: string;
@@ -215,7 +242,9 @@ export async function upsertUser(user: InsertUser): Promise<void> {
   }
 }
 
-export async function getUserByOpenId(openId: string): Promise<User | undefined> {
+export async function getUserByOpenId(
+  openId: string,
+): Promise<User | undefined> {
   const database = await getDb();
   if (!database) return undefined;
   const { users } = (await database.query({
@@ -256,7 +285,9 @@ export async function getPushDevice(installationId: string) {
   return pushDevices[0] ? withTimestamps(pushDevices[0]) : undefined;
 }
 
-export async function getPushDevicesForUser(userId: string): Promise<PushDevice[]> {
+export async function getPushDevicesForUser(
+  userId: string,
+): Promise<PushDevice[]> {
   const database = await getDb();
   if (!database) return [];
   const { pushDevices } = (await database.query({
@@ -507,7 +538,9 @@ export async function consumeMicrosoftOAuthState(state: string) {
   return normalized;
 }
 
-function asMicrosoftConnection(entity: MicrosoftConnectionRow): MicrosoftConnection {
+function asMicrosoftConnection(
+  entity: MicrosoftConnectionRow,
+): MicrosoftConnection {
   return {
     ...entity,
     displayName: nullable(entity.displayName),
@@ -536,12 +569,10 @@ export async function listMicrosoftConnections(
   const { microsoftConnections } = (await database.query({
     microsoftConnections: { $: { where: { userId } } },
   })) as { microsoftConnections: MicrosoftConnectionRow[] };
-  return microsoftConnections
-    .map(asMicrosoftConnection)
-    .sort((left, right) => {
-      if (left.isPrimary !== right.isPrimary) return left.isPrimary ? -1 : 1;
-      return left.createdAt.getTime() - right.createdAt.getTime();
-    });
+  return microsoftConnections.map(asMicrosoftConnection).sort((left, right) => {
+    if (left.isPrimary !== right.isPrimary) return left.isPrimary ? -1 : 1;
+    return left.createdAt.getTime() - right.createdAt.getTime();
+  });
 }
 
 /** The primary connection, or the earliest-connected one if none is marked primary. */
@@ -584,25 +615,31 @@ export async function upsertMicrosoftConnection(
   const existingConnections = await listMicrosoftConnections(input.userId);
   const now = new Date();
   await database.transact(
-    database.tx.microsoftConnections.lookup("accountId", input.accountId).update({
-      userId: input.userId,
-      microsoftUserId: input.microsoftUserId,
-      encryptedAccessToken: input.encryptedAccessToken,
-      encryptedRefreshToken: input.encryptedRefreshToken,
-      expiresAt: input.expiresAt,
-      scopes: input.scopes,
-      status: input.status ?? "connected",
-      // The very first connection for a user is primary by default; later
-      // ones are additional accounts unless the caller explicitly asks.
-      isPrimary:
-        input.isPrimary ?? existing?.isPrimary ?? existingConnections.length === 0,
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
-      ...(input.displayName !== undefined
-        ? { displayName: input.displayName ?? undefined }
-        : {}),
-      ...(input.email !== undefined ? { email: input.email ?? undefined } : {}),
-    }),
+    database.tx.microsoftConnections
+      .lookup("accountId", input.accountId)
+      .update({
+        userId: input.userId,
+        microsoftUserId: input.microsoftUserId,
+        encryptedAccessToken: input.encryptedAccessToken,
+        encryptedRefreshToken: input.encryptedRefreshToken,
+        expiresAt: input.expiresAt,
+        scopes: input.scopes,
+        status: input.status ?? "connected",
+        // The very first connection for a user is primary by default; later
+        // ones are additional accounts unless the caller explicitly asks.
+        isPrimary:
+          input.isPrimary ??
+          existing?.isPrimary ??
+          existingConnections.length === 0,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+        ...(input.displayName !== undefined
+          ? { displayName: input.displayName ?? undefined }
+          : {}),
+        ...(input.email !== undefined
+          ? { email: input.email ?? undefined }
+          : {}),
+      }),
   );
 }
 
@@ -618,7 +655,10 @@ export async function setPrimaryMicrosoftConnection(
     database,
     connections.map((connection) =>
       database.tx.microsoftConnections[connection.id].update(
-        { isPrimary: connection.accountId === accountId, updatedAt: new Date() },
+        {
+          isPrimary: connection.accountId === accountId,
+          updatedAt: new Date(),
+        },
         { upsert: false },
       ),
     ),
@@ -675,13 +715,209 @@ export async function deleteMicrosoftConnectionByAccountId(
   const connection = await getMicrosoftConnectionByAccountId(userId, accountId);
   if (!connection) return false;
   const wasPrimary = connection.isPrimary;
-  await database.transact(database.tx.microsoftConnections[connection.id].delete());
+  await database.transact(
+    database.tx.microsoftConnections[connection.id].delete(),
+  );
   // Promote the next-oldest remaining connection to primary so tool calls
   // that don't specify an account keep working.
   if (wasPrimary) {
     const remaining = await listMicrosoftConnections(userId);
-    if (remaining.length) await setPrimaryMicrosoftConnection(userId, remaining[0].accountId);
+    if (remaining.length)
+      await setPrimaryMicrosoftConnection(userId, remaining[0].accountId);
   }
+  return true;
+}
+
+export function selectedRepoRecordKey(userId: string, fullName: string) {
+  return `${userId}:${fullName.toLowerCase()}`;
+}
+
+export async function createGithubOAuthState(input: {
+  state: string;
+  userId: string;
+  returnTo: string;
+  expiresAt: Date;
+}) {
+  const database = await requireDb();
+  await database.transact(
+    database.tx.githubOAuthStates.lookup("state", input.state).update({
+      userId: input.userId,
+      returnTo: input.returnTo,
+      expiresAt: input.expiresAt,
+      createdAt: new Date(),
+    }),
+  );
+}
+
+export async function consumeGithubOAuthState(state: string) {
+  const database = await requireDb();
+  const { githubOAuthStates } = (await database.query({
+    githubOAuthStates: { $: { where: { state }, limit: 1 } },
+  })) as { githubOAuthStates: GithubOAuthStateRow[] };
+  const oauthState = githubOAuthStates[0];
+  if (!oauthState) return undefined;
+  await database.transact(
+    database.tx.githubOAuthStates[oauthState.id].delete(),
+  );
+  const normalized = {
+    ...oauthState,
+    expiresAt: asDate(oauthState.expiresAt),
+    createdAt: asDate(oauthState.createdAt),
+  };
+  if (normalized.expiresAt.getTime() <= Date.now()) return undefined;
+  return normalized;
+}
+
+function asGithubConnection(entity: GithubConnectionRow): GithubConnection {
+  return {
+    ...entity,
+    displayName: nullable(entity.displayName),
+    avatarUrl: nullable(entity.avatarUrl),
+    encryptedRefreshToken: nullable(entity.encryptedRefreshToken),
+    status: entity.status === "reauthorize" ? "reauthorize" : "connected",
+    expiresAt: asDate(entity.expiresAt),
+    createdAt: asDate(entity.createdAt),
+    updatedAt: asDate(entity.updatedAt),
+  };
+}
+
+/** One GitHub connection per Rook account; re-connecting refreshes it. */
+export async function getGithubConnection(
+  userId: string,
+): Promise<GithubConnection | undefined> {
+  const database = await getDb();
+  if (!database) return undefined;
+  const { githubConnections } = (await database.query({
+    githubConnections: { $: { where: { userId }, limit: 1 } },
+  })) as { githubConnections: GithubConnectionRow[] };
+  const connection = githubConnections[0];
+  if (!connection) return undefined;
+  return asGithubConnection(connection);
+}
+
+export async function upsertGithubConnection(input: InsertGithubConnection) {
+  const database = await requireDb();
+  const now = new Date();
+  await database.transact(
+    database.tx.githubConnections.lookup("userId", input.userId).update({
+      userId: input.userId,
+      githubUserId: input.githubUserId,
+      login: input.login,
+      displayName: input.displayName ?? undefined,
+      avatarUrl: input.avatarUrl ?? undefined,
+      encryptedAccessToken: input.encryptedAccessToken,
+      encryptedRefreshToken: input.encryptedRefreshToken ?? undefined,
+      expiresAt: input.expiresAt,
+      scopes: input.scopes,
+      status: input.status ?? "connected",
+      createdAt: now,
+      updatedAt: now,
+    }),
+  );
+}
+
+export async function updateGithubTokens(
+  userId: string,
+  input: {
+    encryptedAccessToken: string;
+    encryptedRefreshToken: string;
+    expiresAt: Date;
+    scopes: string;
+  },
+) {
+  const database = await requireDb();
+  await database.transact(
+    database.tx.githubConnections
+      .lookup("userId", userId)
+      .update(
+        { ...input, status: "connected", updatedAt: new Date() },
+        { upsert: false },
+      ),
+  );
+}
+
+export async function markGithubReauthorizationRequired(userId: string) {
+  const database = await getDb();
+  if (!database) return;
+  await database.transact(
+    database.tx.githubConnections
+      .lookup("userId", userId)
+      .update(
+        { status: "reauthorize", updatedAt: new Date() },
+        { upsert: false },
+      ),
+  );
+}
+
+function asGithubSelectedRepo(
+  entity: GithubSelectedRepoRow,
+): GithubSelectedRepo {
+  return {
+    ...entity,
+    defaultBranch: nullable(entity.defaultBranch),
+    description: nullable(entity.description),
+    addedAt: asDate(entity.addedAt),
+  };
+}
+
+export async function listGithubSelectedRepos(
+  userId: string,
+): Promise<GithubSelectedRepo[]> {
+  const database = await getDb();
+  if (!database) return [];
+  const { githubSelectedRepos } = (await database.query({
+    githubSelectedRepos: { $: { where: { userId } } },
+  })) as { githubSelectedRepos: GithubSelectedRepoRow[] };
+  return githubSelectedRepos
+    .map(asGithubSelectedRepo)
+    .sort((left, right) => left.fullName.localeCompare(right.fullName));
+}
+
+export async function addGithubSelectedRepo(
+  userId: string,
+  input: InsertGithubSelectedRepo,
+) {
+  const database = await requireDb();
+  await database.transact(
+    database.tx.githubSelectedRepos
+      .lookup("recordKey", selectedRepoRecordKey(userId, input.fullName))
+      .update({
+        userId,
+        fullName: input.fullName,
+        repoId: input.repoId,
+        privateRepo: input.privateRepo,
+        defaultBranch: input.defaultBranch ?? undefined,
+        description: input.description ?? undefined,
+        addedAt: new Date(),
+      }),
+  );
+}
+
+export async function removeGithubSelectedRepo(
+  userId: string,
+  fullName: string,
+) {
+  const database = await getDb();
+  if (!database) return;
+  const recordKey = selectedRepoRecordKey(userId, fullName);
+  const { githubSelectedRepos } = (await database.query({
+    githubSelectedRepos: { $: { where: { recordKey }, limit: 1 } },
+  })) as { githubSelectedRepos: GithubSelectedRepoRow[] };
+  const repo = githubSelectedRepos[0];
+  if (!repo) return;
+  await database.transact(database.tx.githubSelectedRepos[repo.id].delete());
+}
+
+export async function deleteGithubConnection(userId: string) {
+  const database = await getDb();
+  if (!database) return false;
+  const result = (await database.query({
+    githubConnections: { $: { where: { userId } } },
+    githubOAuthStates: { $: { where: { userId } } },
+    githubSelectedRepos: { $: { where: { userId } } },
+  })) as Record<string, WithId[]>;
+  const transactions = deletionTransactions(database, result);
+  if (transactions.length) await database.transact(transactions);
   return true;
 }
 
@@ -690,6 +926,9 @@ function deletionTransactions(
   input: {
     microsoftConnections?: Array<{ id: string }>;
     microsoftOAuthStates?: Array<{ id: string }>;
+    githubConnections?: Array<{ id: string }>;
+    githubOAuthStates?: Array<{ id: string }>;
+    githubSelectedRepos?: Array<{ id: string }>;
     excelPendingActions?: Array<{ id: string }>;
     excelActionClaims?: Array<{ id: string }>;
     workroomSnapshots?: Array<{ id: string }>;
@@ -706,6 +945,15 @@ function deletionTransactions(
     ),
     ...(input.microsoftOAuthStates ?? []).map((item) =>
       database.tx.microsoftOAuthStates[item.id].delete(),
+    ),
+    ...(input.githubConnections ?? []).map((item) =>
+      database.tx.githubConnections[item.id].delete(),
+    ),
+    ...(input.githubOAuthStates ?? []).map((item) =>
+      database.tx.githubOAuthStates[item.id].delete(),
+    ),
+    ...(input.githubSelectedRepos ?? []).map((item) =>
+      database.tx.githubSelectedRepos[item.id].delete(),
     ),
     ...(input.excelPendingActions ?? []).map((item) =>
       database.tx.excelPendingActions[item.id].delete(),
@@ -790,7 +1038,13 @@ function asExcelPendingAction(entity: {
   createdAt: Date;
   updatedAt: Date;
 }): ExcelPendingAction {
-  const state = ["executing", "executed", "failed", "declined", "expired"].includes(entity.state)
+  const state = [
+    "executing",
+    "executed",
+    "failed",
+    "declined",
+    "expired",
+  ].includes(entity.state)
     ? (entity.state as ExcelPendingAction["state"])
     : "pending";
   return {
@@ -904,11 +1158,20 @@ export async function resolveExcelPendingAction(
 }
 
 export async function exportAccountWorkroomData(userId: string) {
-  const [snapshot, records, preferences, microsoftConnections] = await Promise.all([
+  const [
+    snapshot,
+    records,
+    preferences,
+    microsoftConnections,
+    githubConnection,
+    githubRepos,
+  ] = await Promise.all([
     getWorkroomSnapshot(userId),
     listNormalizedWorkroomRecords(userId),
     getNotificationPreferences(userId),
     listMicrosoftConnections(userId),
+    getGithubConnection(userId),
+    listGithubSelectedRepos(userId),
   ]);
   return {
     exportedAt: new Date().toISOString(),
@@ -930,6 +1193,19 @@ export async function exportAccountWorkroomData(userId: string) {
         isPrimary: connection.isPrimary,
         connectedAt: connection.createdAt,
       })),
+      github: githubConnection
+        ? {
+            login: githubConnection.login,
+            status: githubConnection.status,
+            scopes: githubConnection.scopes,
+            connectedAt: githubConnection.createdAt,
+            selectedRepos: githubRepos.map((repo) => ({
+              fullName: repo.fullName,
+              privateRepo: repo.privateRepo,
+              addedAt: repo.addedAt,
+            })),
+          }
+        : null,
     },
   };
 }
@@ -946,6 +1222,9 @@ export async function deleteAccountWorkroomData(userId: string) {
     pushDevices: { $: { where: { userId } } },
     microsoftConnections: { $: { where: { userId } } },
     microsoftOAuthStates: { $: { where: { userId } } },
+    githubConnections: { $: { where: { userId } } },
+    githubOAuthStates: { $: { where: { userId } } },
+    githubSelectedRepos: { $: { where: { userId } } },
     excelPendingActions: { $: { where: { userId } } },
     excelActionClaims: { $: { where: { userId } } },
   })) as Record<string, WithId[]>;
@@ -956,19 +1235,23 @@ export async function deleteAccountWorkroomData(userId: string) {
 
 /* ---- Rook Node relay ---- */
 
-const asRookNode = (entity: Record<string, unknown> & { id: string }): RookNodeRecord => ({
+const asRookNode = (
+  entity: Record<string, unknown> & { id: string },
+): RookNodeRecord => ({
   id: entity.id,
   nodeId: textValue(entity, "nodeId"),
   userId: textValue(entity, "userId"),
   name: textValue(entity, "name", "Computer"),
-  status: (textValue(entity, "status", "offline") as RookNodeRecord["status"]),
+  status: textValue(entity, "status", "offline") as RookNodeRecord["status"],
   version: textValue(entity, "version"),
   lastSeenAt: asDateValue(entity.lastSeenAt),
   createdAt: asDateValue(entity.createdAt),
   updatedAt: asDateValue(entity.updatedAt),
 });
 
-export async function createPairingToken(userId: string): Promise<{ token: string; expiresAt: Date } | undefined> {
+export async function createPairingToken(
+  userId: string,
+): Promise<{ token: string; expiresAt: Date } | undefined> {
   const database = await getDb();
   if (!database) return undefined;
   const token = generatePairingToken();
@@ -985,7 +1268,11 @@ export async function createPairingToken(userId: string): Promise<{ token: strin
   } catch (error) {
     // Unknown-entity failures mean the deployed InstantDB app has not had the
     // computers schema pushed yet; surface an actionable message, not a bare 500.
-    if (/invalid|unknown|entity|attribute|not found/i.test(String((error as Error)?.message ?? error))) {
+    if (
+      /invalid|unknown|entity|attribute|not found/i.test(
+        String((error as Error)?.message ?? error),
+      )
+    ) {
       throw new Error(
         "The computers backend is not initialized yet. Run `pnpm db:push` once from the repo (needs INSTANT_APP_ADMIN_TOKEN), then retry.",
       );
@@ -996,7 +1283,9 @@ export async function createPairingToken(userId: string): Promise<{ token: strin
 }
 
 /** Marks a pairing token used and returns its owner's user id. Single use. */
-export async function consumePairingToken(token: string): Promise<string | undefined> {
+export async function consumePairingToken(
+  token: string,
+): Promise<string | undefined> {
   const database = await getDb();
   if (!database) return undefined;
   const { pairingTokens } = (await database.query({
@@ -1009,7 +1298,10 @@ export async function consumePairingToken(token: string): Promise<string | undef
   return record.userId;
 }
 
-export async function markPairingTokenUsed(token: string, nodeId: string): Promise<void> {
+export async function markPairingTokenUsed(
+  token: string,
+  nodeId: string,
+): Promise<void> {
   const database = await getDb();
   if (!database) return;
   await database.transact(
@@ -1019,7 +1311,10 @@ export async function markPairingTokenUsed(token: string, nodeId: string): Promi
   );
 }
 
-export async function createDesktopPairingRequest(input: { name: string; version: string }): Promise<DesktopPairingRequest | undefined> {
+export async function createDesktopPairingRequest(input: {
+  name: string;
+  version: string;
+}): Promise<DesktopPairingRequest | undefined> {
   const database = await getDb();
   if (!database) return undefined;
   const now = new Date();
@@ -1037,10 +1332,18 @@ export async function createDesktopPairingRequest(input: { name: string; version
       updatedAt: now,
     }),
   );
-  return { requestId, name: input.name, version: input.version, state: "pending", expiresAt };
+  return {
+    requestId,
+    name: input.name,
+    version: input.version,
+    state: "pending",
+    expiresAt,
+  };
 }
 
-async function findDesktopPairingRequest(requestId: string): Promise<DesktopPairingRequestRow | undefined> {
+async function findDesktopPairingRequest(
+  requestId: string,
+): Promise<DesktopPairingRequestRow | undefined> {
   const database = await getDb();
   if (!database) return undefined;
   const { desktopPairingRequests } = (await database.query({
@@ -1050,17 +1353,27 @@ async function findDesktopPairingRequest(requestId: string): Promise<DesktopPair
 }
 
 function desktopRequestActive(record: DesktopPairingRequestRow): boolean {
-  return asDate(record.expiresAt).getTime() > Date.now() && !["consumed", "locked", "expired"].includes(record.state);
+  return (
+    asDate(record.expiresAt).getTime() > Date.now() &&
+    !["consumed", "locked", "expired"].includes(record.state)
+  );
 }
 
 /** Called by the authenticated Rook web session; raw codes are never persisted. */
-export async function issueDesktopPairingCode(userId: string, requestId: string): Promise<{ code: string; expiresAt: Date; name: string } | undefined> {
+export async function issueDesktopPairingCode(
+  userId: string,
+  requestId: string,
+): Promise<{ code: string; expiresAt: Date; name: string } | undefined> {
   const database = await getDb();
   const record = await findDesktopPairingRequest(requestId);
   if (!database || !record) return undefined;
   if (!desktopRequestActive(record)) {
     if (record.state !== "expired") {
-      await database.transact(database.tx.desktopPairingRequests.lookup("requestId", requestId).update({ state: "expired", updatedAt: new Date() }));
+      await database.transact(
+        database.tx.desktopPairingRequests
+          .lookup("requestId", requestId)
+          .update({ state: "expired", updatedAt: new Date() }),
+      );
     }
     return undefined;
   }
@@ -1085,19 +1398,38 @@ export async function issueDesktopPairingCode(userId: string, requestId: string)
  * winning caller may create the durable Node; concurrent and replayed callers
  * receive no owner identity and therefore cannot issue another credential.
  */
-export async function consumeDesktopPairingCode(input: { requestId: string; code: string; nodeId: string; secretHash: string }): Promise<{ userId: string; name: string; version: string } | undefined> {
+export async function consumeDesktopPairingCode(input: {
+  requestId: string;
+  code: string;
+  nodeId: string;
+  secretHash: string;
+}): Promise<{ userId: string; name: string; version: string } | undefined> {
   const database = await getDb();
   const record = await findDesktopPairingRequest(input.requestId);
-  if (!database || !record || !desktopRequestActive(record) || record.state !== "code-issued" || !record.userId || !record.codeHash) return undefined;
+  if (
+    !database ||
+    !record ||
+    !desktopRequestActive(record) ||
+    record.state !== "code-issued" ||
+    !record.userId ||
+    !record.codeHash
+  )
+    return undefined;
   const digest = desktopPairingCodeDigest(input.code);
   if (!digest || !secretsMatch(digest, record.codeHash)) {
-    const attempts = Math.min((Number(record.attempts) || 0) + 1, DESKTOP_PAIRING_MAX_ATTEMPTS);
+    const attempts = Math.min(
+      (Number(record.attempts) || 0) + 1,
+      DESKTOP_PAIRING_MAX_ATTEMPTS,
+    );
     await database.transact(
-      database.tx.desktopPairingRequests.lookup("requestId", input.requestId).update({
-        attempts,
-        state: attempts >= DESKTOP_PAIRING_MAX_ATTEMPTS ? "locked" : "code-issued",
-        updatedAt: new Date(),
-      }),
+      database.tx.desktopPairingRequests
+        .lookup("requestId", input.requestId)
+        .update({
+          attempts,
+          state:
+            attempts >= DESKTOP_PAIRING_MAX_ATTEMPTS ? "locked" : "code-issued",
+          updatedAt: new Date(),
+        }),
     );
     return undefined;
   }
@@ -1110,11 +1442,13 @@ export async function consumeDesktopPairingCode(input: { requestId: string; code
         userId: record.userId,
         createdAt: now,
       }),
-      database.tx.desktopPairingRequests.lookup("requestId", input.requestId).update({
-        state: "consumed",
-        usedByNodeId: input.nodeId,
-        updatedAt: now,
-      }),
+      database.tx.desktopPairingRequests
+        .lookup("requestId", input.requestId)
+        .update({
+          state: "consumed",
+          usedByNodeId: input.nodeId,
+          updatedAt: now,
+        }),
       database.tx.rookNodes[id()].update({
         nodeId: input.nodeId,
         userId: record.userId,
@@ -1156,60 +1490,89 @@ export async function createRookNode(input: {
   return created;
 }
 
-export async function getRookNode(nodeId: string): Promise<RookNodeRecord | undefined> {
+export async function getRookNode(
+  nodeId: string,
+): Promise<RookNodeRecord | undefined> {
   const database = await getDb();
   if (!database) return undefined;
   const { rookNodes } = await database.query({
     rookNodes: { $: { where: { nodeId }, limit: 1 } },
   });
-  const raw = rookNodes[0] as unknown as (Record<string, unknown> & { id: string }) | undefined;
+  const raw = rookNodes[0] as unknown as
+    (Record<string, unknown> & { id: string }) | undefined;
   return raw ? asRookNode(raw) : undefined;
 }
 
 /** Auth lookup for the sync route. The secret hash never leaves the server process. */
-export async function getRookNodeAuth(nodeId: string): Promise<{ secretHash: string; status: string } | undefined> {
+export async function getRookNodeAuth(
+  nodeId: string,
+): Promise<{ secretHash: string; status: string } | undefined> {
   const database = await getDb();
   if (!database) return undefined;
   const { rookNodes } = await database.query({
     rookNodes: { $: { where: { nodeId }, limit: 1 } },
   });
-  const raw = rookNodes[0] as unknown as (Record<string, unknown> & { id: string }) | undefined;
+  const raw = rookNodes[0] as unknown as
+    (Record<string, unknown> & { id: string }) | undefined;
   if (!raw) return undefined;
-  return { secretHash: textValue(raw, "secretHash"), status: textValue(raw, "status", "offline") };
+  return {
+    secretHash: textValue(raw, "secretHash"),
+    status: textValue(raw, "status", "offline"),
+  };
 }
 
-export async function listRookNodesForUser(userId: string): Promise<RookNodeRecord[]> {
+export async function listRookNodesForUser(
+  userId: string,
+): Promise<RookNodeRecord[]> {
   const database = await getDb();
   if (!database) return [];
   const { rookNodes } = await database.query({
     rookNodes: { $: { where: { userId } } },
   });
-  return (rookNodes as unknown as Array<Record<string, unknown> & { id: string }>)
+  return (
+    rookNodes as unknown as Array<Record<string, unknown> & { id: string }>
+  )
     .map(asRookNode)
-    .sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
+    .sort(
+      (left, right) => left.createdAt.getTime() - right.createdAt.getTime(),
+    );
 }
 
-export async function revokeRookNode(userId: string, nodeId: string): Promise<boolean> {
+export async function revokeRookNode(
+  userId: string,
+  nodeId: string,
+): Promise<boolean> {
   const existing = await getRookNode(nodeId);
   if (!existing || existing.userId !== userId) return false;
   const database = await requireDb();
   await database.transact(
-    database.tx.rookNodes.lookup("nodeId", nodeId).update({ status: "revoked", updatedAt: new Date() }),
+    database.tx.rookNodes
+      .lookup("nodeId", nodeId)
+      .update({ status: "revoked", updatedAt: new Date() }),
   );
   return true;
 }
 
-export async function renameRookNode(userId: string, nodeId: string, name: string): Promise<boolean> {
+export async function renameRookNode(
+  userId: string,
+  nodeId: string,
+  name: string,
+): Promise<boolean> {
   const existing = await getRookNode(nodeId);
   if (!existing || existing.userId !== userId) return false;
   const database = await requireDb();
   await database.transact(
-    database.tx.rookNodes.lookup("nodeId", nodeId).update({ name, updatedAt: new Date() }),
+    database.tx.rookNodes
+      .lookup("nodeId", nodeId)
+      .update({ name, updatedAt: new Date() }),
   );
   return true;
 }
 
-export async function touchRookNode(nodeId: string, version: string): Promise<void> {
+export async function touchRookNode(
+  nodeId: string,
+  version: string,
+): Promise<void> {
   const database = await getDb();
   if (!database) return;
   await database.transact(
@@ -1226,7 +1589,9 @@ export async function markRookNodeOffline(nodeId: string): Promise<void> {
   const database = await getDb();
   if (!database) return;
   await database.transact(
-    database.tx.rookNodes.lookup("nodeId", nodeId).update({ status: "offline", updatedAt: new Date() }),
+    database.tx.rookNodes
+      .lookup("nodeId", nodeId)
+      .update({ status: "offline", updatedAt: new Date() }),
   );
 }
 
@@ -1240,7 +1605,8 @@ export async function enqueueNodeCommand(input: {
   requiresApproval: boolean;
 }): Promise<NodeCommandRecord | undefined> {
   const node = await getRookNode(input.nodeId);
-  if (!node || node.userId !== input.userId || node.status === "revoked") return undefined;
+  if (!node || node.userId !== input.userId || node.status === "revoked")
+    return undefined;
   const database = await requireDb();
   const now = new Date();
   await database.transact(
@@ -1286,13 +1652,18 @@ export async function decideNodeCommand(
   const { nodeCommands } = await database.query({
     nodeCommands: { $: { where: { commandId }, limit: 1 } },
   });
-  const raw = nodeCommands[0] as unknown as (Record<string, unknown> & { id: string }) | undefined;
+  const raw = nodeCommands[0] as unknown as
+    (Record<string, unknown> & { id: string }) | undefined;
   if (!raw || textValue(raw, "userId") !== userId) return undefined;
-  if (textValue(raw, "state") !== "awaiting_approval") return existingNodeCommand(raw);
+  if (textValue(raw, "state") !== "awaiting_approval")
+    return existingNodeCommand(raw);
 
   if (decision === "declined") {
     await database.transact(
-      database.tx.nodeCommands[raw.id].update({ state: "declined", updatedAt: new Date() }),
+      database.tx.nodeCommands[raw.id].update({
+        state: "declined",
+        updatedAt: new Date(),
+      }),
     );
     return existingNodeCommand({ ...raw, state: "declined" });
   }
@@ -1316,7 +1687,9 @@ export async function decideNodeCommand(
   return existingNodeCommand({ ...raw, state: "pending", approval: grant });
 }
 
-function existingNodeCommand(raw: Record<string, unknown> & { id: string }): NodeCommandRecord {
+function existingNodeCommand(
+  raw: Record<string, unknown> & { id: string },
+): NodeCommandRecord {
   return {
     id: raw.id,
     commandId: textValue(raw, "commandId"),
@@ -1338,18 +1711,25 @@ const isRecordValue = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** Atomically claims pending commands for delivery and returns them. */
-export async function takePendingNodeCommands(nodeId: string): Promise<Array<Record<string, unknown>>> {
+export async function takePendingNodeCommands(
+  nodeId: string,
+): Promise<Array<Record<string, unknown>>> {
   const database = await getDb();
   if (!database) return [];
   const { nodeCommands } = await database.query({
     nodeCommands: { $: { where: { nodeId, state: "pending" } } },
   });
-  const deliverable = (nodeCommands as unknown as Array<Record<string, unknown> & { id: string }>)
+  const deliverable = (
+    nodeCommands as unknown as Array<Record<string, unknown> & { id: string }>
+  )
     .filter((row) => asDateValue(row.expiresAt).getTime() > Date.now())
     .slice(0, 16);
   for (const row of deliverable) {
     await database.transact(
-      database.tx.nodeCommands[row.id].update({ state: "delivered", updatedAt: new Date() }),
+      database.tx.nodeCommands[row.id].update({
+        state: "delivered",
+        updatedAt: new Date(),
+      }),
     );
   }
   return deliverable.map((row) => ({
@@ -1359,25 +1739,38 @@ export async function takePendingNodeCommands(nodeId: string): Promise<Array<Rec
   }));
 }
 
-export async function completeNodeCommand(commandId: string, report: { ok: boolean; result?: unknown; code?: string; message?: string }): Promise<void> {
+export async function completeNodeCommand(
+  commandId: string,
+  report: { ok: boolean; result?: unknown; code?: string; message?: string },
+): Promise<void> {
   const database = await getDb();
   if (!database) return;
   await database.transact(
     database.tx.nodeCommands.lookup("commandId", commandId).update({
       state: "completed",
-      result: { ok: report.ok, result: report.result ?? null, code: report.code ?? null, message: report.message ?? null },
+      result: {
+        ok: report.ok,
+        result: report.result ?? null,
+        code: report.code ?? null,
+        message: report.message ?? null,
+      },
       updatedAt: new Date(),
     }),
   );
 }
 
-export async function listRecentNodeCommands(userId: string, limit = 30): Promise<NodeCommandRecord[]> {
+export async function listRecentNodeCommands(
+  userId: string,
+  limit = 30,
+): Promise<NodeCommandRecord[]> {
   const database = await getDb();
   if (!database) return [];
   const { nodeCommands } = await database.query({
     nodeCommands: { $: { where: { userId } } },
   });
-  return (nodeCommands as unknown as Array<Record<string, unknown> & { id: string }>)
+  return (
+    nodeCommands as unknown as Array<Record<string, unknown> & { id: string }>
+  )
     .map(existingNodeCommand)
     .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())
     .slice(0, Math.max(1, Math.min(limit, 100)));

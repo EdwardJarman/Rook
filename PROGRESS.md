@@ -1,6 +1,22 @@
 # Rook Desktop — Live Progress
 
-Last updated: 2026-09-07 — **Mobile app theme unified with the desktop "Quiet" palette**
+Last updated: 2026-09-07 — **GitHub connector shipped across web, mobile, and desktop**
+
+## GitHub connector (2026-09-07)
+Full GitHub OAuth (app flow — no user access tokens) plus a repo-selection UI
+on all three surfaces. Scopes `repo read:user offline_access`; the server
+exchanges the code, stores AES-256-GCM-encrypted tokens in InstantDB
+(`githubConnections`), and rotates refresh tokens automatically. Users pick
+up to 25 repositories in Account → GitHub (verified via the GitHub API,
+stored in `githubSelectedRepos`); chat then gets three read-only tools
+(`github_repo_overview`, `github_list_files`, `github_read_file`) restricted
+to that working set, with repo context injected into the system prompt.
+Surfaces: Expo web + mobile (`components/github-connection-card.tsx`, the
+Connectors sheet, composer attach chip), desktop window
+(`rook-node/src/app/components/github-card.tsx` on Account), server
+(`server/integrations/github.ts`, `github-tools.ts`, `github` tRPC router,
+`/api/oauth/github/callback`). Setup: `docs/github.md`
+(GITHUB_CLIENT_ID/SECRET + `pnpm db:push`).
 
 ## Mobile "Quiet" alignment (2026-09-07)
 The Expo app now uses the exact same palette as the desktop Tauri window:
