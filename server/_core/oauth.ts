@@ -86,7 +86,17 @@ export function registerOAuthRoutes(app: Express) {
       res.redirect(302, target.toString());
     } catch (error) {
       console.error("[GitHub OAuth] Callback failed", error);
-      res.redirect(302, `${fallback}?github=error`);
+      // Surface the provider's own reason through the redirect so the card can
+      // show it — otherwise a failing token exchange (e.g. a wrong client
+      // secret) looks identical to a cancelled authorization.
+      const reason =
+        error instanceof Error
+          ? error.message.replace(/[\r\n]+/g, " ").slice(0, 300)
+          : "Unknown error";
+      res.redirect(
+        302,
+        `${fallback}?github=error&reason=${encodeURIComponent(reason)}`,
+      );
     }
   });
 
