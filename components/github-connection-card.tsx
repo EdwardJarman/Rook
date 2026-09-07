@@ -423,8 +423,9 @@ export function GithubConnectionCard() {
           </Pressable>
           {!status.data?.configured ? (
             <Text style={[styles.browserNote, { color: colors.textFaint }]}>
-              Setup needed on this deployment: add GITHUB_CLIENT_ID and
-              GITHUB_CLIENT_SECRET.
+              {status.data?.missingEnv?.length
+                ? `Setup needed on this deployment: missing ${status.data.missingEnv.join(", ")}. Redeploy after adding them — Vercel only applies new env vars to new deployments.`
+                : "Setup needed on this deployment: add GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET."}
             </Text>
           ) : null}
         </>

@@ -44,23 +44,32 @@ function githubConfig() {
 }
 
 export function isGithubConfigured() {
+  return githubMissingEnvVars().length === 0;
+}
+
+/** Names the exact env vars this deployment is missing, so "Setup needed" is diagnosable from the UI alone. */
+export function githubMissingEnvVars(): string[] {
   const config = githubConfig();
-  return Boolean(
-    config.clientId &&
-    config.clientSecret &&
-    process.env.INTEGRATION_ENCRYPTION_KEY,
-  );
+  const missing: string[] = [];
+  if (!config.clientId) missing.push("GITHUB_CLIENT_ID");
+  if (!config.clientSecret) missing.push("GITHUB_CLIENT_SECRET");
+  if (!process.env.INTEGRATION_ENCRYPTION_KEY)
+    missing.push("INTEGRATION_ENCRYPTION_KEY");
+  return missing;
 }
 
 function requireGithubConfig() {
   const config = githubConfig();
-  if (!config.clientId || !config.clientSecret) {
-    throw new Error("GitHub is not configured for this Rook deployment");
+  const missing = githubMissingEnvVars();
+  if (missing.length > 0) {
+    throw new Error(
+      `GitHub is not configured for this Rook deployment (missing ${missing.join(", ")}). Environment variables added in Vercel only apply to a NEW deployment — redeploy after saving them.`,
+    );
   }
   return {
     ...config,
-    clientId: config.clientId,
-    clientSecret: config.clientSecret,
+    clientId: config.clientId!,
+    clientSecret: config.clientSecret!,
   };
 }
 
@@ -286,10 +295,11 @@ export async function getGithubAccessToken(userId: string): Promise<string> {
 }
 
 export async function githubConnectionStatus(userId: string) {
-  const configured = isGithubConfigured();
-  if (!configured) {
+  const missingEnv = githubMissingEnvVars();
+  if (missingEnv.length > 0) {
     return {
       configured: false,
+      missingEnv,
       connected: false,
       needsReauthorization: false,
       login: null as string | null,
@@ -305,6 +315,7 @@ export async function githubConnectionStatus(userId: string) {
   const connected = Boolean(connection && connection.status === "connected");
   return {
     configured: true,
+    missingEnv: [] as string[],
     connected,
     needsReauthorization: connection?.status === "reauthorize",
     login: connection?.login ?? null,
