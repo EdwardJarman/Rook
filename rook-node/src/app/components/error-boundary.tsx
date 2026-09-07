@@ -31,8 +31,8 @@ export class ErrorBoundary extends Component<
             height: "100vh",
             display: "grid",
             placeItems: "center",
-            background: "#0A0C10",
-            color: "#F1F3F6",
+            background: "#000000",
+            color: "#EDEBE6",
             padding: 24,
             fontFamily:
               '-apple-system, BlinkMacSystemFont, "Segoe UI", "SF Pro Text", Roboto, Helvetica, Arial, sans-serif',
@@ -47,7 +47,7 @@ export class ErrorBoundary extends Component<
               style={{
                 marginTop: 10,
                 fontSize: 13,
-                color: "#A6AFBC",
+                color: "#9B978E",
                 lineHeight: 1.55,
               }}
             >
@@ -58,11 +58,11 @@ export class ErrorBoundary extends Component<
               style={{
                 marginTop: 16,
                 padding: 14,
-                background: "#141820",
-                border: "1px solid #262C38",
+                background: "#151515",
+                border: "1px solid #2B2B2B",
                 borderRadius: 12,
                 fontSize: 12,
-                color: "#FF8080",
+                color: "#E5735F",
                 textAlign: "left",
                 whiteSpace: "pre-wrap",
                 wordBreak: "break-word",
@@ -82,9 +82,9 @@ export class ErrorBoundary extends Component<
               style={{
                 marginTop: 18,
                 padding: "10px 18px",
-                background: "#1A1D23",
-                color: "#FFFFFF",
-                border: "1px solid #333B49",
+                background: "#0C0C0C",
+                color: "#EDEBE6",
+                border: "1px solid #2B2B2B",
                 borderRadius: 10,
                 fontSize: 13,
                 fontWeight: 600,

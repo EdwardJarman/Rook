@@ -9,16 +9,16 @@ body,
 #root {
   margin: 0;
   padding: 0;
-  background-color: #f7f7f4;
-  color: #191c22;
+  background-color: #faf9f4;
+  color: #1e1c18;
   min-height: 100%;
 }
 
 :root[data-theme="dark"],
 :root[data-theme="dark"] body,
 :root[data-theme="dark"] #root {
-  background-color: #0a0a0b;
-  color: #f2f2f3;
+  background-color: #000000;
+  color: #edebe6;
 }
 
 /* Keep native web form controls from injecting their own colors. */

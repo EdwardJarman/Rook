@@ -22,7 +22,7 @@ const FALLBACK_GLYPHS: Record<string, string> = {
 };
 
 export function Avatar({
-  color = "#0E7C59",
+  color = "#177149",
   size = 40,
   icon,
   className,

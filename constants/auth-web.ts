@@ -6,11 +6,11 @@ import { Colors } from "@/lib/_core/theme";
 // later enhancement since Clerk doesn't support runtime appearance swaps
 // without a re-render of the whole widget.
 const INK = Colors.light.text;
-const ACCENT = "#0E7C59";
+const ACCENT = "#177149";
 const SURFACE = "#FFFFFF";
-const SURFACE_ALT = "#F1F1EC";
-const LINE = "#E9E8E2";
-const MUTED = "#8A9099";
+const SURFACE_ALT = "#F2F0E9";
+const LINE = "#EBE8DF";
+const MUTED = "#A19C90";
 
 /**
  * Clerk styling for Rook's browser authentication views. The authentication
@@ -24,9 +24,9 @@ export const authWebAppearance = {
     colorPrimaryForeground: "#FFFFFF",
     colorBackground: SURFACE,
     colorForeground: INK,
-    colorDanger: "#C03B3B",
+    colorDanger: "#B3402F",
     colorSuccess: ACCENT,
-    colorWarning: "#9A6700",
+    colorWarning: "#8F6400",
     colorMuted: SURFACE_ALT,
     colorMutedForeground: MUTED,
     colorInput: SURFACE_ALT,
@@ -118,7 +118,7 @@ export const authWebAppearance = {
     },
     formFieldInputFocused: {
       border: `1px solid ${ACCENT}`,
-      boxShadow: "0 0 0 3px rgba(14, 124, 89, 0.14)",
+      boxShadow: "0 0 0 3px rgba(23, 113, 73, 0.14)",
     },
     formButtonReset: { color: MUTED },
   },

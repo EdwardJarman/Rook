@@ -264,7 +264,7 @@ class WorkroomStore {
       name: "Rook",
       role: "Generalist assistant",
       purpose: "Help with anything — files, research, writing, and computer tasks.",
-      color: "#0E7C59",
+      color: "#177149",
       icon: "sparkles",
       status: "Ready",
       model: "auto",

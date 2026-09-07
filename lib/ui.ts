@@ -36,57 +36,59 @@ export type RookTokens = {
 
 export type ToneName = "mint" | "amber" | "coral" | "muted";
 
+/* Mirrors the desktop "Quiet" palette (rook-node/src/app/lib/tokens.ts):
+   warm paper cream in light, true midnight black in dark. */
 const LIGHT: RookTokens = {
-  canvas: "#F7F7F4",
+  canvas: "#FAF9F4",
   surface: "#FFFFFF",
-  surfaceAlt: "#F1F1EC",
+  surfaceAlt: "#F2F0E9",
   elevated: "#FFFFFF",
-  line: "#E9E8E2",
-  lineStrong: "#D9D8D1",
-  text: "#191C22",
-  textSoft: "#565E6B",
-  textFaint: "#8A9099",
-  ink: "#1A1D23",
-  onInk: "#FFFFFF",
-  accent: "#0E7C59",
-  accentSoft: "rgba(14, 124, 89, 0.09)",
-  mint: "#0E7C59",
-  mintSoft: "rgba(14, 124, 89, 0.09)",
-  amber: "#9A6700",
-  amberSoft: "rgba(154, 103, 0, 0.09)",
-  coral: "#C03B3B",
-  coralSoft: "rgba(192, 59, 59, 0.08)",
-  scrim: "rgba(16, 18, 24, 0.42)",
-  grabber: "#D8D7D0",
-  placeholder: "#A2A8B0",
-  shadow: "#2A3038",
+  line: "#EBE8DF",
+  lineStrong: "#DDD9CE",
+  text: "#1E1C18",
+  textSoft: "#6E6A60",
+  textFaint: "#A19C90",
+  ink: "#23211C",
+  onInk: "#FAF9F4",
+  accent: "#177149",
+  accentSoft: "rgba(23, 113, 73, 0.08)",
+  mint: "#177149",
+  mintSoft: "rgba(23, 113, 73, 0.08)",
+  amber: "#8F6400",
+  amberSoft: "rgba(143, 100, 0, 0.08)",
+  coral: "#B3402F",
+  coralSoft: "rgba(179, 64, 47, 0.07)",
+  scrim: "rgba(30, 28, 24, 0.40)",
+  grabber: "#DBD7CC",
+  placeholder: "#A8A396",
+  shadow: "#26241F",
 };
 
-/* A plain, neutral midnight-black dark mode rather than a blue-tinted one:
-   every gray here is desaturated so nothing reads as "AI navy". */
+/* True midnight black like T3 Code: canvas and surfaces are near-black, only
+   a step apart, with a single green accent appearing sparingly. */
 const DARK: RookTokens = {
-  canvas: "#0A0A0B",
-  surface: "#17171A",
-  surfaceAlt: "#1D1D20",
-  elevated: "#1F1F22",
-  line: "#2A2A2E",
-  lineStrong: "#3A3A3F",
-  text: "#F2F2F3",
-  textSoft: "#A8A8AC",
-  textFaint: "#83838A",
-  ink: "#ECECEE",
-  onInk: "#101012",
-  accent: "#6FE8BC",
-  accentSoft: "rgba(111, 232, 188, 0.13)",
-  mint: "#6FE8BC",
-  mintSoft: "rgba(111, 232, 188, 0.13)",
-  amber: "#F0BE4F",
-  amberSoft: "rgba(240, 190, 79, 0.12)",
-  coral: "#FF8080",
-  coralSoft: "rgba(255, 128, 128, 0.11)",
-  scrim: "rgba(0, 0, 0, 0.62)",
-  grabber: "#3D3D42",
-  placeholder: "#6B6B70",
+  canvas: "#000000",
+  surface: "#0C0C0C",
+  surfaceAlt: "#151515",
+  elevated: "#121212",
+  line: "#1D1D1D",
+  lineStrong: "#2B2B2B",
+  text: "#EDEBE6",
+  textSoft: "#9B978E",
+  textFaint: "#6D6A62",
+  ink: "#EDEBE6",
+  onInk: "#0A0A0A",
+  accent: "#4CC38A",
+  accentSoft: "rgba(76, 195, 138, 0.10)",
+  mint: "#4CC38A",
+  mintSoft: "rgba(76, 195, 138, 0.10)",
+  amber: "#E5B567",
+  amberSoft: "rgba(229, 181, 103, 0.10)",
+  coral: "#E5735F",
+  coralSoft: "rgba(229, 115, 95, 0.10)",
+  scrim: "rgba(0, 0, 0, 0.66)",
+  grabber: "#2B2B2B",
+  placeholder: "#5E5B55",
   shadow: "#000000",
 };
 
@@ -110,7 +112,7 @@ export function shade(hex: string, amount: number): string {
   return `#${[normalize(r), normalize(g), normalize(b)].map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
 }
 
-/** A translucent variant of a hex color, e.g. tint("#0E7C59", 0.12). */
+/** A translucent variant of a hex color, e.g. tint("#177149", 0.12). */
 export function tint(hex: string, alpha: number): string {
   const value = hex.replace("#", "");
   const full = value.length === 3 ? value.split("").map((char) => char + char).join("") : value;

@@ -183,7 +183,7 @@ type WorkroomContextValue = {
 
 const STORAGE_KEY_PREFIX = "rook-local-fallback-v1";
 const BOT_COLORS = [
-  "#0E7C59",
+  "#177149",
   "#2563EB",
   "#7563F5",
   "#DF8D19",

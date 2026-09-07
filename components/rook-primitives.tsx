@@ -44,7 +44,7 @@ export function toneColors(tokens: RookTokens, tone: ToneName) {
  * with a colored glyph instead of loud saturated fills.
  */
 export function Avatar({
-  color = "#0E7C59",
+  color = "#177149",
   size = 40,
   icon,
 }: {

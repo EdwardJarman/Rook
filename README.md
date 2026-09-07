@@ -41,6 +41,46 @@ power.
   is a short-lived grant bound to the page revision; the node still enforces
   expiry and one-time nonces locally at execution time.
 
+### AI backend
+
+Bots reply through a real model router, not a canned echo. The server
+(`server/ai/`) fans out to four providers — **OpenRouter**, **ChatGPT**,
+**OrcaRouter**, and **TokenRouter** — selected per Bot via `trpc.ai.models`
+and the composer model picker. Replies are request/response today (streaming
+is on the roadmap).
+
+* **Curated auto model.** The "Auto · Best available" route prefers
+  tool-capable free models (gpt-oss, deepseek, qwen3, llama-3.3-70b,
+  gemini-2.x, mistral-small-nemo) and never picks arbitrary models that leak
+  classifier output or rate-limit slowly.
+* **Clean replies.** The system prompt asks for a warm, natural, direct voice;
+  classifier-style safety scaffolding lines are stripped server-side before a
+  reply is returned.
+* **Voice input.** `trpc.voice.transcribe` routes recordings through a free
+  OpenRouter audio model; the composer records with `expo-audio`.
+* **Fallbacks.** A provider outage falls back to a working free model instead
+  of failing the chat. `trpc.ai.status` reports each provider's health from
+  the Account screen.
+
+### Mobile app (iOS / Android / web)
+
+The Expo app is a single workroom: onboarding, a Bot roster, one shared chat
+canvas with ink user bubbles and plain-text Bot replies, an armed-state
+composer (voice, images, model picker, connectors), approvals, Library,
+Activity, and Account. Auth is Clerk (native + hosted web). Data persists to
+InstantDB per account with a local fallback.
+
+Theming uses the same **"Quiet" palette as the desktop app**: light mode is a
+warm cream canvas (`#FAF9F4`), dark mode is true midnight black (`#000000`),
+with a single green accent. Tokens live in `lib/ui.ts` (runtime),
+`theme.config.cjs` (NativeWind), and `rook-node/src/app/lib/tokens.ts`
+(desktop), and a user-controlled light/dark toggle persists per device.
+
+Android is built from CI via `.github/workflows/build-rook-android-apk.yml`
+(manual dispatch): it prebuilds the Expo project, generates a signing key,
+builds a release APK, zipaligns + signs it, and uploads `Rook.apk` with a
+SHA-256 as a workflow artifact. iOS builds via EAS (`eas.json`).
+
 ### Connecting a computer (pairing)
 
 The one-button flow, end to end:
@@ -96,7 +136,7 @@ rook-node/
   tests/              Vitest suites incl. real-Chromium smoke + pairing flow
 scripts/              Build/dev utilities (QR, Vercel build, InstantDB smoke)
 docs/                 Ops docs (rook-node ops, Clerk, ChatGPT/OpenRouter/Excel integrations)
-.github/workflows/    ci.yml · release-rook-node.yml · push-schema.yml
+.github/workflows/    ci.yml · build-rook-android-apk.yml · release-rook-node.yml · push-schema.yml
 ```
 ---
 
@@ -123,6 +163,15 @@ pnpm dev -- --headless --no-uplink     # loopback gateway only, prints the /conn
 
 The sidecar gateway listens on `127.0.0.1:37831` by default. Useful endpoints:
 `/connect` (pairing page), `/healthz` (`{"ok":true,"paired":…}`).
+
+### Mobile app (Expo)
+
+```bash
+pnpm android            # run on a connected Android device/emulator
+pnpm ios                # run on a connected iOS simulator
+pnpm export:web         # static web export (what Vercel deploys)
+# Signed Android release APK is built from CI (see the "Mobile app" section above).
+```
 
 ### Desktop shell (Tauri)
 
@@ -233,5 +282,7 @@ Signing + notarization and the auto-updater are the next distribution steps
 * `docs/rook-node.md` — node operations, pairing internals, distribution checklist
 * `docs/clerk-setup.md` — authentication setup
 * `docs/chatgpt-subscription.md`, `docs/openrouter-ai.md`, `docs/orcarouter-ai.md` — AI backends
+* `docs/desktop-parity-roadmap.md` — Claude/Codex-parity roadmap for the desktop app
 * `docs/microsoft-excel.md` — Excel integration
-* `design.md` — the Rook app's design system and screen inventory
+* `design.md` — the Rook app's design system, "Quiet" palette, and screen inventory
+* `PROGRESS.md` — live change log and shipped-state notes

@@ -205,9 +205,9 @@ export function GlassBackdrop({ style }: { style?: ViewStyle | ViewStyle[] }) {
       <Svg style={StyleSheet.absoluteFill}>
         <Defs>
           <LinearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="100%">
-            <Stop offset="0" stopColor={dark ? "#141A24" : "#EFF1F5"} />
-            <Stop offset="0.55" stopColor={dark ? "#0C1017" : "#F7F7F4"} />
-            <Stop offset="1" stopColor={dark ? "#101720" : "#ECEFEA"} />
+            <Stop offset="0" stopColor={dark ? "#151515" : "#F2F0E9"} />
+            <Stop offset="0.55" stopColor={dark ? "#000000" : "#FAF9F4"} />
+            <Stop offset="1" stopColor={dark ? "#0C0C0C" : "#EDEAE1"} />
           </LinearGradient>
         </Defs>
         <Rect x="0" y="0" width="100%" height="100%" fill={`url(#${gradientId})`} />
