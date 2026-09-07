@@ -39,6 +39,14 @@ const instantCliBin = instantCliPkgPath.replace(/package\.json$/, binRel.replace
 const result = spawnSync(
   process.execPath,
   [instantCliBin, "push", "all", "--app", appId, "--token", token, "--yes"],
-  { stdio: "inherit", shell: false },
+  {
+    stdio: "inherit",
+    shell: false,
+    // instant-cli's perms diff (via `colors`/`json-diff`) recurses on ANSI
+    // escape codes and stack-overflows on some Windows terminals. Disabling
+    // color avoids the recursive path entirely; the diff is still printed,
+    // just uncolored.
+    env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" },
+  },
 );
 process.exit(result.status ?? 1);
