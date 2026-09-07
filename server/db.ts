@@ -799,8 +799,10 @@ export async function upsertGithubConnection(input: InsertGithubConnection) {
   const database = await requireDb();
   const now = new Date();
   await database.transact(
+    // The lookup key (userId) must not be re-set inside the payload: InstantDB
+    // rejects a lookup-update that writes the lookup attribute when the entity
+    // does not exist yet, which is exactly the first-connect case.
     database.tx.githubConnections.lookup("userId", input.userId).update({
-      userId: input.userId,
       githubUserId: input.githubUserId,
       login: input.login,
       displayName: input.displayName ?? undefined,
