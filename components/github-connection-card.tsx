@@ -1,7 +1,7 @@
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import * as Linking from "expo-linking";
 import * as WebBrowser from "expo-web-browser";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Platform,
@@ -28,6 +28,7 @@ export function GithubConnectionCard() {
   const selectRepo = trpc.github.selectRepo.useMutation();
   const unselectRepo = trpc.github.unselectRepo.useMutation();
   const [browserOpen, setBrowserOpen] = useState(false);
+  const [pendingConnect, setPendingConnect] = useState(false);
   const [search, setSearch] = useState("");
 
   const repos = trpc.github.repos.useQuery(undefined, {
@@ -42,6 +43,9 @@ export function GithubConnectionCard() {
     return Linking.createURL("/account");
   }, []);
 
+  const connected = status.data?.connected === true;
+  const needsReauthorization = status.data?.needsReauthorization === true;
+
   const refresh = async () => {
     await Promise.all([
       utils.github.status.invalidate(),
@@ -49,8 +53,54 @@ export function GithubConnectionCard() {
     ]);
   };
 
+  // Returning from the OAuth redirect must land the user straight in the repo
+  // picker. Web reloads the page, so component state is lost — the callback
+  // result in the query string is the only surviving signal.
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") return;
+    const result = new URLSearchParams(window.location.search).get("github");
+    if (!result) return;
+    if (result === "connected") setBrowserOpen(true);
+    if (result === "error")
+      rookAlert(
+        "GitHub connection failed",
+        "Rook reached GitHub but could not save the connection. Please try Connect GitHub again — if it keeps failing, the deployment may be missing environment variables.",
+      );
+    if (result === "cancelled")
+      rookAlert(
+        "GitHub not connected",
+        "The GitHub authorization was cancelled, so Rook has no connection saved.",
+      );
+    if (result === "invalid")
+      rookAlert(
+        "GitHub link expired",
+        "The GitHub connection request expired before it finished. Please press Connect GitHub and try again.",
+      );
+    window.history.replaceState(null, "", window.location.pathname);
+  }, []);
+
+  // Native browsers/webviews keep the app mounted, so a fresh connect is
+  // observable here: open the picker the moment the connection lands.
+  useEffect(() => {
+    if (!pendingConnect) return;
+    if (status.isLoading) return;
+    if (connected) {
+      setBrowserOpen(true);
+      setPendingConnect(false);
+    } else if (needsReauthorization || !status.data?.configured) {
+      setPendingConnect(false);
+    }
+  }, [
+    pendingConnect,
+    connected,
+    needsReauthorization,
+    status.isLoading,
+    status.data?.configured,
+  ]);
+
   const connectGithub = async () => {
     try {
+      setPendingConnect(true);
       const url = await authorize.mutateAsync({ returnTo });
       if (Platform.OS === "web") {
         window.location.assign(url);
@@ -59,6 +109,7 @@ export function GithubConnectionCard() {
       await WebBrowser.openAuthSessionAsync(url, returnTo);
       await refresh();
     } catch (error) {
+      setPendingConnect(false);
       rookAlert(
         "GitHub unavailable",
         error instanceof Error
@@ -109,8 +160,6 @@ export function GithubConnectionCard() {
       );
   };
 
-  const connected = status.data?.connected === true;
-  const needsReauthorization = status.data?.needsReauthorization === true;
   const selected = status.data?.selectedRepos ?? [];
   const term = search.trim().toLowerCase();
   const candidateRepos = (repos.data ?? []).filter(
