@@ -962,7 +962,7 @@ function OnboardingField({
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}
-        placeholderTextColor="#8A9099"
+        placeholderTextColor="#A19C90"
         multiline={multiline}
         textAlignVertical={multiline ? "top" : "center"}
         style={[styles.field, multiline && styles.fieldMultiline, style]}

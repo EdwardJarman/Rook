@@ -154,7 +154,7 @@ function ProfileAndStorage({ syncStatus }: { syncStatus: string }) {
 
       <Card>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 13 }}>
-          <Avatar label={user?.name ?? user?.email ?? "U"} color="#0E7C59" icon="person" size={50} />
+          <Avatar label={user?.name ?? user?.email ?? "U"} color="#177149" icon="person" size={50} />
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text numberOfLines={1} style={{ color: colors.text, fontSize: 15.5, fontWeight: "700", letterSpacing: -0.2 }}>
               {user?.name || "Rook account"}

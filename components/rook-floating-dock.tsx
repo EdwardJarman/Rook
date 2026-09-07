@@ -51,16 +51,16 @@ export function RookFloatingDock({ state, descriptors, navigation }: BottomTabBa
 
   const glass = useMemo(
     () => ({
-      surface: dark ? "rgba(13, 17, 24, 0.78)" : "rgba(255, 255, 255, 0.78)",
-      edge: dark ? "rgba(255, 255, 255, 0.10)" : "rgba(23, 26, 32, 0.08)",
-      active: dark ? "#222938" : "#FFFFFF",
-      activeEdge: dark ? "rgba(255, 255, 255, 0.14)" : "rgba(23, 26, 32, 0.10)",
-      activeText: dark ? "#F2F5F8" : "#191C22",
-      activeIcon: dark ? "#6FE8BC" : "#0E7C59",
-      idleText: dark ? "#96A0AF" : "#6B7280",
-      idleIcon: dark ? "#8B95A4" : "#7A8290",
-      hover: dark ? "rgba(255, 255, 255, 0.06)" : "rgba(23, 26, 32, 0.05)",
-      shadow: dark ? "#01030A" : "#3A4150",
+      surface: dark ? "rgba(12, 12, 12, 0.78)" : "rgba(255, 255, 255, 0.78)",
+      edge: dark ? "rgba(255, 255, 255, 0.10)" : "rgba(30, 28, 24, 0.08)",
+      active: dark ? "#151515" : "#FFFFFF",
+      activeEdge: dark ? "rgba(255, 255, 255, 0.14)" : "rgba(30, 28, 24, 0.10)",
+      activeText: dark ? "#EDEBE6" : "#1E1C18",
+      activeIcon: dark ? "#4CC38A" : "#177149",
+      idleText: dark ? "#9B978E" : "#6E6A60",
+      idleIcon: dark ? "#6D6A62" : "#A19C90",
+      hover: dark ? "rgba(255, 255, 255, 0.06)" : "rgba(30, 28, 24, 0.05)",
+      shadow: dark ? "#000000" : "#26241F",
     }),
     [dark],
   );

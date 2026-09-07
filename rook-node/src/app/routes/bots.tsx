@@ -8,7 +8,7 @@ import { workroom, useWorkroom, type Bot } from "@/lib/workroom";
 import { cn } from "@/lib/cn";
 
 const COLORS = [
-  "#0E7C59",
+  "#177149",
   "#3E63DD",
   "#7C3AED",
   "#D97706",

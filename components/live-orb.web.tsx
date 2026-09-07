@@ -490,7 +490,7 @@ export function LiveOrb({
       : mixHex(resolved.body, "#FFFFFF", 0.42)
   const shade =
     resolved.mode === 1
-      ? mixHex(resolved.palette[0] ?? WEBGL_COLORS[0]!, "#0A0A0B", 0.45)
+      ? mixHex(resolved.palette[0] ?? WEBGL_COLORS[0]!, "#000000", 0.45)
       : mixHex(resolved.body, "#09090B", 0.22)
 
   return (

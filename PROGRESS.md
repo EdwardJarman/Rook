@@ -1,6 +1,18 @@
 # Rook Desktop — Live Progress
 
-Last updated: 2026-09-06 (night) — **AI replies fixed end to end (server-side, live now)**
+Last updated: 2026-09-07 — **Mobile app theme unified with the desktop "Quiet" palette**
+
+## Mobile "Quiet" alignment (2026-09-07)
+The Expo app now uses the exact same palette as the desktop Tauri window:
+light mode is warm cream (**Canvas #FAF9F4**, **Ink #23211C**, **Accent
+#177149**), dark mode is true midnight black (**Canvas #000000**, **Text
+#EDEBE6**, **Accent #4CC38A**). Updated `lib/ui.ts` (runtime tokens),
+`theme.config.cjs` (NativeWind), `global.css` (web pre-mount), the floating
+dock glass palette, Clerk web theming, onboarding placeholder, bot default
+color, and the desktop's leftover old-accent hardcodes (avatar, error
+boundary, bot roster). Verified in the browser: light renders
+`rgb(250,249,244)`, dark renders `rgb(0,0,0)`; `pnpm check` and the full
+108-test suite pass.
 
 ## AI quality fix (user-reported "slow, weird, unnatural, sucky")
 Chain verified layer by layer; two blockers were found and fixed:
