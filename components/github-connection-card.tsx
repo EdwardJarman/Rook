@@ -4,7 +4,6 @@ import * as WebBrowser from "expo-web-browser";
 import { useMemo, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   Platform,
   Pressable,
   ScrollView,
@@ -15,6 +14,7 @@ import {
 } from "react-native";
 
 import { Card, StatusPill } from "@/components/rook-primitives";
+import { rookAlert, rookConfirm } from "@/lib/rook-alert";
 import { trpc } from "@/lib/trpc";
 import { tint, useRookTheme } from "@/lib/ui";
 
@@ -59,7 +59,7 @@ export function GithubConnectionCard() {
       await WebBrowser.openAuthSessionAsync(url, returnTo);
       await refresh();
     } catch (error) {
-      Alert.alert(
+      rookAlert(
         "GitHub unavailable",
         error instanceof Error
           ? error.message
@@ -69,28 +69,22 @@ export function GithubConnectionCard() {
   };
 
   const disconnectGithub = () => {
-    Alert.alert(
+    rookConfirm(
       "Disconnect GitHub?",
       "Rook will delete its stored GitHub tokens and your selected repositories immediately. Nothing in GitHub is changed.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Disconnect",
-          style: "destructive",
-          onPress: () => {
-            setBrowserOpen(false);
-            void disconnect
-              .mutateAsync()
-              .then(refresh)
-              .catch(() =>
-                Alert.alert(
-                  "Disconnect failed",
-                  "Rook could not remove this connection. Please try again.",
-                ),
-              );
-          },
-        },
-      ],
+      () => {
+        setBrowserOpen(false);
+        void disconnect
+          .mutateAsync()
+          .then(refresh)
+          .catch(() =>
+            rookAlert(
+              "Disconnect failed",
+              "Rook could not remove this connection. Please try again.",
+            ),
+          );
+      },
+      { confirmLabel: "Disconnect", destructive: true },
     );
   };
 
@@ -99,7 +93,7 @@ export function GithubConnectionCard() {
       .mutateAsync({ fullName })
       .then(refresh)
       .catch((error) =>
-        Alert.alert(
+        rookAlert(
           "Could not add repository",
           error instanceof Error ? error.message : "Please try again.",
         ),
@@ -111,7 +105,7 @@ export function GithubConnectionCard() {
       .mutateAsync({ fullName })
       .then(refresh)
       .catch(() =>
-        Alert.alert("Could not remove repository", "Please try again."),
+        rookAlert("Could not remove repository", "Please try again."),
       );
   };
 
@@ -423,8 +417,9 @@ export function GithubConnectionCard() {
           </Pressable>
           {!status.data?.configured ? (
             <Text style={[styles.browserNote, { color: colors.textFaint }]}>
-              Setup needed on this deployment: add GITHUB_CLIENT_ID and
-              GITHUB_CLIENT_SECRET.
+              {status.data?.missingEnv?.length
+                ? `Setup needed on this deployment: missing ${status.data.missingEnv.join(", ")}. Redeploy after adding them — Vercel only applies new env vars to new deployments.`
+                : "Setup needed on this deployment: add GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET."}
             </Text>
           ) : null}
         </>

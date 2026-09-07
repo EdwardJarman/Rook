@@ -16,6 +16,7 @@ import { getTrpcClient } from "@/lib/trpc";
 
 type GithubStatus = {
   configured: boolean;
+  missingEnv: string[];
   connected: boolean;
   needsReauthorization: boolean;
   login: string | null;
@@ -459,6 +460,19 @@ export function GithubCard() {
               ? "Reconnect GitHub"
               : "Connect GitHub"}
           </Button>
+          {status && !status.configured ? (
+            <p
+              style={{
+                margin: "8px 0 0",
+                fontSize: 11.5,
+                color: tokens.textFaint,
+              }}
+            >
+              {status.missingEnv.length
+                ? `Setup needed on this deployment: missing ${status.missingEnv.join(", ")}. Redeploy after adding them — Vercel only applies new env vars to new deployments.`
+                : "Setup needed on this deployment: add GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET."}
+            </p>
+          ) : null}
           {connected === false && status ? (
             <p
               style={{
