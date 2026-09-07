@@ -1,6 +1,7 @@
 import { COOKIE_NAME, ONE_YEAR_MS } from "../../shared/const.js";
 import type { Express, Request, Response } from "express";
 import { getUserByOpenId, upsertUser } from "../db";
+import { finishGithubAuthorization } from "../integrations/github";
 import { finishMicrosoftAuthorization } from "../integrations/microsoft-excel";
 import { getSessionCookieOptions } from "./cookies";
 import { sdk } from "./sdk";
@@ -63,31 +64,60 @@ function buildUserResponse(
 }
 
 export function registerOAuthRoutes(app: Express) {
-  app.get("/api/oauth/microsoft/callback", async (req: Request, res: Response) => {
+  app.get("/api/oauth/github/callback", async (req: Request, res: Response) => {
     const code = getQueryParam(req, "code");
     const state = getQueryParam(req, "state");
     const providerError = getQueryParam(req, "error");
     const fallback = `${(process.env.APP_ORIGIN || "https://www.rook.lighting").replace(/\/$/, "")}/account`;
 
     if (providerError) {
-      res.redirect(302, `${fallback}?excel=cancelled`);
+      res.redirect(302, `${fallback}?github=cancelled`);
       return;
     }
     if (!code || !state) {
-      res.redirect(302, `${fallback}?excel=invalid`);
+      res.redirect(302, `${fallback}?github=invalid`);
       return;
     }
 
     try {
-      const result = await finishMicrosoftAuthorization(code, state);
+      const result = await finishGithubAuthorization(code, state);
       const target = new URL(result.returnTo);
-      target.searchParams.set("excel", "connected");
+      target.searchParams.set("github", "connected");
       res.redirect(302, target.toString());
     } catch (error) {
-      console.error("[Microsoft OAuth] Callback failed", error);
-      res.redirect(302, `${fallback}?excel=error`);
+      console.error("[GitHub OAuth] Callback failed", error);
+      res.redirect(302, `${fallback}?github=error`);
     }
   });
+
+  app.get(
+    "/api/oauth/microsoft/callback",
+    async (req: Request, res: Response) => {
+      const code = getQueryParam(req, "code");
+      const state = getQueryParam(req, "state");
+      const providerError = getQueryParam(req, "error");
+      const fallback = `${(process.env.APP_ORIGIN || "https://www.rook.lighting").replace(/\/$/, "")}/account`;
+
+      if (providerError) {
+        res.redirect(302, `${fallback}?excel=cancelled`);
+        return;
+      }
+      if (!code || !state) {
+        res.redirect(302, `${fallback}?excel=invalid`);
+        return;
+      }
+
+      try {
+        const result = await finishMicrosoftAuthorization(code, state);
+        const target = new URL(result.returnTo);
+        target.searchParams.set("excel", "connected");
+        res.redirect(302, target.toString());
+      } catch (error) {
+        console.error("[Microsoft OAuth] Callback failed", error);
+        res.redirect(302, `${fallback}?excel=error`);
+      }
+    },
+  );
 
   app.get("/api/oauth/callback", async (req: Request, res: Response) => {
     const code = getQueryParam(req, "code");
@@ -108,7 +138,10 @@ export function registerOAuthRoutes(app: Express) {
       });
 
       const cookieOptions = getSessionCookieOptions(req);
-      res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
+      res.cookie(COOKIE_NAME, sessionToken, {
+        ...cookieOptions,
+        maxAge: ONE_YEAR_MS,
+      });
 
       // Redirect to the frontend URL (Expo web on port 8081)
       // Cookie is set with parent domain so it works across both 3000 and 8081 subdomains
@@ -143,7 +176,10 @@ export function registerOAuthRoutes(app: Express) {
       });
 
       const cookieOptions = getSessionCookieOptions(req);
-      res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
+      res.cookie(COOKIE_NAME, sessionToken, {
+        ...cookieOptions,
+        maxAge: ONE_YEAR_MS,
+      });
 
       res.json({
         app_session_id: sessionToken,

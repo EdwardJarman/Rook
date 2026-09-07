@@ -62,6 +62,18 @@ is on the roadmap).
   of failing the chat. `trpc.ai.status` reports each provider's health from
   the Account screen.
 
+### GitHub connector
+
+Users connect GitHub once with a standard OAuth app flow (no personal access
+tokens to paste) and then pick up to 25 repositories in Account → GitHub — on
+web, Android/iOS, and the desktop window alike. Tokens are encrypted at rest
+and refreshed automatically; repository access is strictly read-only and
+limited to the selected working set. In chat, three agent tools
+(`github_repo_overview`, `github_list_files`, `github_read_file`) let Bots
+read the selected repositories' real files instead of guessing, and the
+composer's Connectors sheet attaches GitHub to a message for emphasis.
+Setup and internals: `docs/github.md`.
+
 ### Mobile app (iOS / Android / web)
 
 The Expo app is a single workroom: onboarding, a Bot roster, one shared chat
@@ -284,5 +296,6 @@ Signing + notarization and the auto-updater are the next distribution steps
 * `docs/chatgpt-subscription.md`, `docs/openrouter-ai.md`, `docs/orcarouter-ai.md` — AI backends
 * `docs/desktop-parity-roadmap.md` — Claude/Codex-parity roadmap for the desktop app
 * `docs/microsoft-excel.md` — Excel integration
+* `docs/github.md` — GitHub connector (OAuth, repo selection, read-only chat tools)
 * `design.md` — the Rook app's design system, "Quiet" palette, and screen inventory
 * `PROGRESS.md` — live change log and shipped-state notes

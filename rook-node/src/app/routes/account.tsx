@@ -11,6 +11,7 @@ import {
   Pill,
   Spinner,
 } from "@/components/primitives";
+import { GithubCard } from "@/components/github-card";
 import { useTheme } from "@/lib/theme";
 
 export function AccountPage() {
@@ -27,7 +28,14 @@ export function AccountPage() {
 
   if (mode === "offline" || !user) {
     return (
-      <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 14 }}>
+      <div
+        style={{
+          padding: 18,
+          display: "flex",
+          flexDirection: "column",
+          gap: 14,
+        }}
+      >
         <header>
           <h1
             style={{
@@ -40,18 +48,34 @@ export function AccountPage() {
           >
             Account
           </h1>
-          <p style={{ margin: "6px 0 0", color: tokens.textSoft, fontSize: 13 }}>
+          <p
+            style={{ margin: "6px 0 0", color: tokens.textSoft, fontSize: 13 }}
+          >
             Manage your sign-in, data, and connected devices.
           </p>
         </header>
         <Card>
-          <h2 style={{ margin: 0, fontSize: 14.5, fontWeight: 700 }}>Running locally</h2>
-          <p style={{ margin: "4px 0 12px", fontSize: 12.5, color: tokens.textSoft, lineHeight: 1.5 }}>
+          <h2 style={{ margin: 0, fontSize: 14.5, fontWeight: 700 }}>
+            Running locally
+          </h2>
+          <p
+            style={{
+              margin: "4px 0 12px",
+              fontSize: 12.5,
+              color: tokens.textSoft,
+              lineHeight: 1.5,
+            }}
+          >
             This build of Rook isn't signed in — chats and files stay on this
             computer. Connect your Rook account from the Computer page to sync
             Bots, skills, and history across devices.
           </p>
-          <Button variant="secondary" onClick={() => { window.location.hash = "#/computer"; }}>
+          <Button
+            variant="secondary"
+            onClick={() => {
+              window.location.hash = "#/computer";
+            }}
+          >
             Go to Computer
           </Button>
         </Card>
@@ -60,7 +84,9 @@ export function AccountPage() {
   }
 
   return (
-    <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 14 }}>
+    <div
+      style={{ padding: 18, display: "flex", flexDirection: "column", gap: 14 }}
+    >
       <header>
         <h1
           style={{
@@ -93,7 +119,7 @@ export function AccountPage() {
               fontWeight: 800,
             }}
           >
-            {(user?.initials ?? "R")}
+            {user?.initials ?? "R"}
           </div>
           <div style={{ minWidth: 0, flex: 1 }}>
             <div
@@ -106,11 +132,31 @@ export function AccountPage() {
             >
               {user?.fullName ?? "Rook user"}
             </div>
-            <div style={{ fontSize: 13, color: tokens.textSoft, display: "flex", alignItems: "center", gap: 6 }}>
+            <div
+              style={{
+                fontSize: 13,
+                color: tokens.textSoft,
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
               <Mail size={13} /> {user?.email ?? "—"}
             </div>
-            <div style={{ fontSize: 12, color: tokens.textFaint, marginTop: 4, display: "flex", alignItems: "center", gap: 6 }}>
-              <Calendar size={12} /> Joined {user?.joinedAt ? new Date(user.joinedAt).toLocaleDateString() : "—"}
+            <div
+              style={{
+                fontSize: 12,
+                color: tokens.textFaint,
+                marginTop: 4,
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
+              <Calendar size={12} /> Joined{" "}
+              {user?.joinedAt
+                ? new Date(user.joinedAt).toLocaleDateString()
+                : "—"}
             </div>
           </div>
           <Pill label="Active" tone="mint" />
@@ -118,10 +164,34 @@ export function AccountPage() {
       </Card>
 
       <Card>
+        <h2 style={{ margin: 0, fontSize: 14.5, fontWeight: 700 }}>
+          Connected apps
+        </h2>
+        <p
+          style={{
+            margin: "4px 0 12px",
+            fontSize: 12.5,
+            color: tokens.textSoft,
+            lineHeight: 1.5,
+          }}
+        >
+          Give your Bots useful access without giving up control.
+        </p>
+        <GithubCard />
+      </Card>
+
+      <Card>
         <h2 style={{ margin: 0, fontSize: 14.5, fontWeight: 700 }}>Data</h2>
-        <p style={{ margin: "4px 0 12px", fontSize: 12.5, color: tokens.textSoft, lineHeight: 1.5 }}>
-          Export everything Rook has stored for you, or permanently delete
-          your account and data.
+        <p
+          style={{
+            margin: "4px 0 12px",
+            fontSize: 12.5,
+            color: tokens.textSoft,
+            lineHeight: 1.5,
+          }}
+        >
+          Export everything Rook has stored for you, or permanently delete your
+          account and data.
         </p>
         <div style={{ display: "flex", gap: 8 }}>
           <Button variant="secondary">
@@ -135,7 +205,14 @@ export function AccountPage() {
 
       <Card>
         <h2 style={{ margin: 0, fontSize: 14.5, fontWeight: 700 }}>Session</h2>
-        <p style={{ margin: "4px 0 12px", fontSize: 12.5, color: tokens.textSoft, lineHeight: 1.5 }}>
+        <p
+          style={{
+            margin: "4px 0 12px",
+            fontSize: 12.5,
+            color: tokens.textSoft,
+            lineHeight: 1.5,
+          }}
+        >
           Sign out of this computer. Your data stays in the cloud; Rook will
           close the workroom until you sign in again.
         </p>

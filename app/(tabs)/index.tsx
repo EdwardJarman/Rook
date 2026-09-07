@@ -117,6 +117,7 @@ export default function ChatScreen() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [connectorsOpen, setConnectorsOpen] = useState(false);
   const [excelAttached, setExcelAttached] = useState(false);
+  const [githubAttached, setGithubAttached] = useState(false);
   const [pendingImages, setPendingImages] = useState<PastedImage[]>([]);
   const [imageDropActive, setImageDropActive] = useState(false);
   const replyMutation = trpc.workroom.reply.useMutation();
@@ -234,7 +235,8 @@ export default function ChatScreen() {
     const requiresReview = risk.tier !== "Low";
     const task = workroom.addTask({
       botId: activeBot.id,
-      title: messageBody.length > 52 ? `${messageBody.slice(0, 52)}…` : messageBody,
+      title:
+        messageBody.length > 52 ? `${messageBody.slice(0, 52)}…` : messageBody,
       status: requiresReview ? "Approval required" : "Planning",
       summary: requiresReview
         ? "Waiting for your decision before any sensitive step."
@@ -301,12 +303,16 @@ export default function ChatScreen() {
         model: resolvedModel.id,
         message: messageBody,
         userTimeZone: deviceTimeZone(),
-        connectors: excelAttached ? ["microsoft-excel"] : [],
+        connectors: [
+          ...(excelAttached ? (["microsoft-excel"] as const) : []),
+          ...(githubAttached ? (["github"] as const) : []),
+        ],
         recentContext: visibleMessages
           .slice(-6)
           .map((message) => ({ author: message.author, body: message.body })),
       });
       setExcelAttached(false);
+      setGithubAttached(false);
       if (response.approvals.length) {
         workroom.updateTaskStatus(
           task.id,
@@ -503,7 +509,8 @@ export default function ChatScreen() {
     setDrawerOpen(false);
   };
 
-  const hasComposerContent = Boolean(composer.trim()) || pendingImages.length > 0;
+  const hasComposerContent =
+    Boolean(composer.trim()) || pendingImages.length > 0;
   const canSend =
     hasComposerContent &&
     Boolean(activeBot) &&
@@ -1070,9 +1077,7 @@ export default function ChatScreen() {
                             message={message}
                             bot={source}
                             onSave={() => {
-                              const title = guessDeliverableTitle(
-                                message.body,
-                              );
+                              const title = guessDeliverableTitle(message.body);
                               workroom.addFile({
                                 name: `${title}.md`,
                                 size: fileSizeLabel(message.body.length),
@@ -1288,7 +1293,11 @@ export default function ChatScreen() {
                             justifyContent: "center",
                           }}
                         >
-                          <MaterialIcons name="close" size={12} color={colors.onInk} />
+                          <MaterialIcons
+                            name="close"
+                            size={12}
+                            color={colors.onInk}
+                          />
                         </Pressable>
                       </View>
                     ))}
@@ -1439,11 +1448,11 @@ export default function ChatScreen() {
                     <ComposerControl
                       icon="add"
                       label={
-                        excelAttached
-                          ? "Microsoft Excel attached. Open connectors"
+                        excelAttached || githubAttached
+                          ? `${excelAttached ? "Microsoft Excel" : "GitHub"} attached. Open connectors`
                           : "Open connectors"
                       }
-                      active={excelAttached}
+                      active={excelAttached || githubAttached}
                       onPress={() => setConnectorsOpen(true)}
                     />
                     <ComposerModelPicker
@@ -1713,6 +1722,7 @@ export default function ChatScreen() {
         visible={connectorsOpen}
         onClose={() => setConnectorsOpen(false)}
         onSelectExcel={() => setExcelAttached(true)}
+        onSelectGithub={() => setGithubAttached(true)}
       />
 
       {/* Create a Bot — shared three-step sheet. */}
@@ -1745,8 +1755,8 @@ export default function ChatScreen() {
             marginBottom: 16,
           }}
         >
-          The receiving Bot gets a note in the room and this task moves to
-          their queue.
+          The receiving Bot gets a note in the room and this task moves to their
+          queue.
         </Text>
         <View style={{ gap: 8 }}>
           {handoffCandidates.map((bot) => (
@@ -1775,17 +1785,30 @@ export default function ChatScreen() {
                 pressed && { opacity: 0.72 },
               ]}
             >
-              <Avatar label={bot.avatar} color={bot.color} icon={bot.icon} size={38} />
+              <Avatar
+                label={bot.avatar}
+                color={bot.color}
+                icon={bot.icon}
+                size={38}
+              />
               <View style={{ flex: 1, minWidth: 0 }}>
                 <Text
                   numberOfLines={1}
-                  style={{ color: colors.text, fontSize: 14, fontWeight: "700" }}
+                  style={{
+                    color: colors.text,
+                    fontSize: 14,
+                    fontWeight: "700",
+                  }}
                 >
                   {bot.name}
                 </Text>
                 <Text
                   numberOfLines={1}
-                  style={{ color: colors.textFaint, fontSize: 12, marginTop: 1 }}
+                  style={{
+                    color: colors.textFaint,
+                    fontSize: 12,
+                    marginTop: 1,
+                  }}
                 >
                   {bot.role}
                 </Text>
@@ -2009,7 +2032,10 @@ function DeliverableCard({
 }) {
   const { colors } = useRookTheme();
   const [saved, setSaved] = useState(false);
-  const title = useMemo(() => guessDeliverableTitle(message.body), [message.body]);
+  const title = useMemo(
+    () => guessDeliverableTitle(message.body),
+    [message.body],
+  );
   const words = useMemo(() => wordCount(message.body), [message.body]);
 
   const handleSave = () => {
@@ -2096,7 +2122,11 @@ function DeliverableCard({
             paddingBottom: 12,
           }}
         >
-          <ChatMarkdown text={message.body} color={colors.text} baseSize={13.5} />
+          <ChatMarkdown
+            text={message.body}
+            color={colors.text}
+            baseSize={13.5}
+          />
         </View>
 
         <Pressable
