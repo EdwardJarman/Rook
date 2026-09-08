@@ -126,8 +126,16 @@ export async function createCloudSandboxClient(
 ): Promise<CloudSandboxClient> {
   const key = apiKey ?? process.env.E2B_API_KEY?.trim();
   if (!key) throw new Error("E2B_API_KEY is not set on this deployment");
-  // Lazy require so the module loads (and tests run) without the SDK present.
-  const { Sandbox: E2BSandbox } = await import("e2b");
+  // e2b's package.json has no "exports" field, so a bare import("e2b")
+  // resolves to its CJS build (main), which require()s chalk 5 — ESM-only —
+  // and crashes under plain Node (ERR_REQUIRE_ESM on Vercel; tsx masked it in
+  // dev). Load the ESM build directly: Node treats .mjs as ESM regardless of
+  // the package's type field. A variable specifier also keeps esbuild from
+  // rewriting the import during bundling.
+  const e2bEntry = "e2b/dist/index.mjs";
+  const { Sandbox: E2BSandbox } = (await import(
+    e2bEntry
+  )) as unknown as typeof import("e2b");
   const sandbox = (await E2BSandbox.create({
     timeoutMs: CLOUD_COMMAND_MAX_TIMEOUT_MS + 30_000,
   })) as Sandbox;
