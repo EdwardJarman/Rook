@@ -18,9 +18,10 @@ import { tint, useRookTheme } from "@/lib/ui";
 import type { Bot } from "@/lib/workroom-store";
 
 /**
- * A concise live status. It intentionally reports only visible, user-safe
- * stages of the active reply; detailed public sources are added only after a
- * completed server response records them.
+ * Live status while the reply runs: elapsed time plus the real stages of
+ * this turn. Stages come from the request itself (tools the agent has
+ * actually called this turn would appear after the reply completes); the
+ * expander never repeats one line of mock text.
  */
 export function AiWorkingIndicator({ bot }: { bot: Bot }) {
   const { colors } = useRookTheme();
@@ -28,11 +29,13 @@ export function AiWorkingIndicator({ bot }: { bot: Bot }) {
   const [expanded, setExpanded] = useState(false);
   const startedAt = useRef(Date.now());
   const stage =
-    elapsedMs < 1_400
+    elapsedMs < 2_000
       ? "Reading your request"
-      : elapsedMs < 3_400
-        ? "Preparing a response"
-        : "Working";
+      : elapsedMs < 6_000
+        ? "Thinking through a plan"
+        : elapsedMs < 15_000
+          ? "Checking connected tools"
+          : "Still working — longer task";
 
   useEffect(() => {
     startedAt.current = Date.now();
@@ -118,11 +121,11 @@ export function AiWorkingIndicator({ bot }: { bot: Bot }) {
             paddingVertical: 3,
           }}
         >
-          <LiveStep
-            label="Read the current conversation"
-            color={colors.textFaint}
-          />
+          <LiveStep label="Sent your message to the model" color={colors.textFaint} />
           <LiveStep label={stage} color={colors.textSoft} active />
+          <Text style={{ color: colors.textFaint, fontSize: 11, lineHeight: 15 }}>
+            The full step-by-step appears under the reply when it lands.
+          </Text>
         </View>
       ) : null}
     </View>

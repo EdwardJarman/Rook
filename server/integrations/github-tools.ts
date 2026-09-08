@@ -135,14 +135,22 @@ export async function executeGithubReadTool(
   }
 }
 
-export function githubToolTraceTitle(name: GithubToolName): string {
+export function githubToolTraceTitle(
+  name: GithubToolName,
+  args?: { repo?: string; path?: string },
+): string {
+  const repo = typeof args?.repo === "string" ? args.repo : "";
+  const path = typeof args?.path === "string" ? args.path : "";
+  const where = [repo, path].filter(Boolean).join(" · ");
+  const suffix = where ? ` — ${where.length > 90 ? `${where.slice(0, 90)}…` : where}` : "";
   switch (name) {
     case "github_repo_overview":
-      return "Reviewed a GitHub repository";
+      return repo ? `Reviewed ${repo}` : "Reviewed a GitHub repository";
     case "github_list_files":
-      return "Listed GitHub repository files";
+      return where ? `Listed GitHub files${suffix}` : "Listed GitHub repository files";
     case "github_read_file":
-      return "Read a GitHub repository file";
+      if (!repo && !path) return "Read a GitHub repository file";
+      return `Read ${path || "a GitHub file"}${repo ? ` in ${repo}` : ""}`;
     default:
       return "Used a GitHub tool";
   }
