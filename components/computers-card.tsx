@@ -58,7 +58,7 @@ export function ComputersCard() {
     retry: 1,
     refetchInterval: 10_000,
   });
-  const cloudStatus = trpc.nodes.cloud.status.useQuery(undefined, { retry: 1 });
+  const cloudStatus = trpc.nodes.computer.status.useQuery(undefined, { retry: 1 });
   const createPairing = trpc.nodes.createPairing.useMutation();
   const removeNode = trpc.nodes.remove.useMutation();
   const decideCommand = trpc.nodes.decideCommand.useMutation();
@@ -150,17 +150,17 @@ export function ComputersCard() {
             Rook Cloud
           </Text>
           <Text numberOfLines={2} style={{ color: colors.textFaint, fontSize: 11.5, lineHeight: 15.5, marginTop: 2 }}>
-            {cloudStatus.data?.configured
-              ? "A shared sandbox your Bots can use to run commands and files when your computer is offline."
-              : "Give your Bots a cloud computer: add E2B_API_KEY to this deployment, then redeploy."}
+            {cloudStatus.data && (cloudStatus.data.cloudConfigured || cloudStatus.data.localNodesOnline > 0)
+              ? "Bots use your online computer first, and fall back to the free cloud sandbox when it's offline."
+              : "Give Bots a computer everywhere: connect Rook Node or add E2B_API_KEY to this deployment, then redeploy."}
           </Text>
         </View>
         {cloudStatus.isLoading ? (
           <ActivityIndicator size="small" color={colors.textFaint} />
         ) : (
           <StatusPill
-            label={cloudStatus.data?.configured ? "Available" : "Setup needed"}
-            tone={cloudStatus.data?.configured ? "mint" : "muted"}
+            label={cloudStatus.data?.cloudConfigured ? "Available" : "Setup needed"}
+            tone={cloudStatus.data?.cloudConfigured ? "mint" : "muted"}
           />
         )}
       </Card>

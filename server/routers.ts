@@ -4,6 +4,7 @@ import { normalizeWorkroomSnapshot } from "../shared/workroom-snapshot";
 import {
   buildCommandEnvelope,
   generateCommandId,
+  isCloudNodeId,
   isSensitiveCapability,
 } from "../shared/node-relay";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
@@ -530,11 +531,17 @@ export const appRouter = router({
             ),
           })),
       ),
-    cloud: router({
-      status: protectedProcedure.query(({ ctx }) => ({
-        configured: isCloudComputerConfigured(),
-        missingEnv: cloudMissingEnvVars(),
-      })),
+    computer: router({
+      // Full computer status for the hybrid: local paired devices first, then
+      // the free cloud sandbox as overflow.
+      status: protectedProcedure.query(async ({ ctx }) => {
+        const nodes = await db.listRookNodesForUser(ctx.user.id);
+        return {
+          cloudConfigured: isCloudComputerConfigured(),
+          cloudMissingEnv: cloudMissingEnvVars(),
+          localNodesOnline: nodes.filter((node) => node.status === "online").length,
+        };
+      }),
       requestCommand: protectedProcedure
         .input(
           z.object({
@@ -587,6 +594,9 @@ export const appRouter = router({
               ),
             })),
         ),
+      // Generic completion poll for any computer command. Cloud commands are
+      // executed here; local ones were already delivered to the device, so this
+      // just reports the recorded state.
       poll: protectedProcedure
         .input(z.object({ commandId: z.string().min(4).max(80) }))
         .mutation(async ({ ctx, input }) => {
@@ -595,7 +605,7 @@ export const appRouter = router({
             throw new Error("Command not found.");
           if (record.state === "awaiting_approval")
             return { state: "awaiting_approval", ok: false, result: null, message: "Waiting for approval" };
-          if (record.state === "pending") {
+          if (record.state === "pending" && isCloudNodeId(record.nodeId)) {
             const executed = await executeCloudCommand(input.commandId);
             return { state: "completed", ...executed };
           }
@@ -603,7 +613,7 @@ export const appRouter = router({
             state: record.state,
             ok: record.state === "completed",
             result: record.result,
-            message: record.state === "completed" ? undefined : "Command is not ready",
+            message: record.state === "completed" ? undefined : "Waiting for the computer to finish",
           };
         }),
     }),

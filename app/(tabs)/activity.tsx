@@ -21,8 +21,8 @@ export default function ActivityScreen() {
   const { colors } = useRookTheme();
   const { approvals, bots, activity, notifications, resolveApproval, markNotificationsRead, updateTaskStatus, addMessage, addActivity } = useWorkroom();
   const resolveExcelAction = trpc.excel.resolveAction.useMutation();
-  const cloudDecideCommand = trpc.nodes.cloud.decideCommand.useMutation();
-  const cloudPoll = trpc.nodes.cloud.poll.useMutation();
+  const computerDecideCommand = trpc.nodes.computer.decideCommand.useMutation();
+  const computerPoll = trpc.nodes.computer.poll.useMutation();
   const serverPendingActions = trpc.excel.pendingActions.useQuery(undefined, {
     retry: 1,
     refetchOnWindowFocus: true,
@@ -57,25 +57,32 @@ export default function ActivityScreen() {
     }
     setResolvingId(approval.id);
     try {
-      if (approval.kind === "cloud") {
+      if (approval.kind === "cloud" || approval.kind === "local") {
         const mappedDecision = decision === "approve" ? "approved" as const : "declined" as const;
-        await cloudDecideCommand.mutateAsync({ commandId: approval.externalActionId, decision: mappedDecision });
+        await computerDecideCommand.mutateAsync({ commandId: approval.externalActionId, decision: mappedDecision });
         resolveApproval(approval.id, decision === "approve" ? "Approved" : "Declined");
         if (decision === "decline") {
-          if (approval.taskId) updateTaskStatus(approval.taskId, "Cancelled", "The proposed cloud command was declined.");
-          addActivity({ title: "Cloud computer action declined", detail: "The proposed cloud command was declined.", tone: "coral" });
+          if (approval.taskId) updateTaskStatus(approval.taskId, "Cancelled", "The proposed computer command was declined.");
+          addActivity({ title: "Computer action declined", detail: "The proposed computer command was declined.", tone: "coral" });
           return;
         }
-        const executed = await cloudPoll.mutateAsync({ commandId: approval.externalActionId });
-        const summary = summarizeCloudResult(executed);
-        if (executed.ok) {
-          if (approval.taskId) updateTaskStatus(approval.taskId, "Completed", "The approved cloud command finished.");
-          addMessage({ botId: approval.botId, author: "bot", body: `Cloud computer finished. ${summary}`, kind: "result", taskId: approval.taskId });
-          addActivity({ title: "Cloud computer action completed", detail: summary, tone: "mint" });
+        // Cloud commands execute server-side; local ones are delivered to the
+        // device and complete within a few seconds. Poll until terminal.
+        let executed: { ok: boolean; result?: unknown; message?: string; state?: string } | undefined;
+        for (let attempt = 0; attempt < 6; attempt += 1) {
+          executed = await computerPoll.mutateAsync({ commandId: approval.externalActionId });
+          if (!executed || executed.state === "completed" || executed.state === "declined" || executed.state === "expired") break;
+          await new Promise((resolve) => setTimeout(resolve, 1_200));
+        }
+        const summary = summarizeCloudResult(executed ?? { ok: false, message: "The command did not finish." });
+        if (executed?.ok) {
+          if (approval.taskId) updateTaskStatus(approval.taskId, "Completed", "The approved computer command finished.");
+          addMessage({ botId: approval.botId, author: "bot", body: `Computer finished. ${summary}`, kind: "result", taskId: approval.taskId });
+          addActivity({ title: "Computer action completed", detail: summary, tone: "mint" });
         } else {
-          if (approval.taskId) updateTaskStatus(approval.taskId, "Completed", "The cloud command finished with an error.");
-          addMessage({ botId: approval.botId, author: "bot", body: `Cloud computer reported: ${executed.message ?? summary}`, kind: "result", taskId: approval.taskId });
-          addActivity({ title: "Cloud computer action failed", detail: executed.message ?? summary, tone: "coral" });
+          if (approval.taskId) updateTaskStatus(approval.taskId, "Completed", "The computer command finished with an error.");
+          addMessage({ botId: approval.botId, author: "bot", body: `Computer reported: ${executed?.message ?? summary}`, kind: "result", taskId: approval.taskId });
+          addActivity({ title: "Computer action failed", detail: executed?.message ?? summary, tone: "coral" });
         }
         return;
       }
@@ -292,28 +299,32 @@ export default function ActivityScreen() {
   );
 }
 
-/** Builds a one-line human summary from a cloud command execution result. */
+/** Builds a one-line human summary from a computer command execution result. */
 function summarizeCloudResult(executed: {
   ok: boolean;
   result?: unknown;
   message?: string;
 }): string {
-  const result = executed.result as
-    | { exitCode?: number; stdout?: string; stderr?: string }
-    | { content?: string }
-    | { written?: string }
-    | { entries?: unknown[] }
+  const outer = executed.result as
+    | { ok?: boolean; result?: unknown; message?: string | null }
     | null
     | undefined;
+  // Stored results nest the action result under `result`; accept either shape.
+  const result = outer && typeof outer === "object" && "result" in outer && outer.result !== null
+    ? (outer.result as Record<string, unknown>)
+    : (outer as Record<string, unknown> | null | undefined);
   if (result && typeof result === "object") {
-    if ("exitCode" in result)
-      return `exit ${result.exitCode ?? "?"}${
-        result.stdout?.trim() ? ` — ${result.stdout.trim().split("\n")[0].slice(0, 160)}` : ""
+    if ("exitCode" in result || result.type === "runResult")
+      return `exit ${String(result.exitCode ?? "?")}${
+        typeof result.stdout === "string" && result.stdout.trim()
+          ? ` — ${result.stdout.trim().split("\n")[0].slice(0, 160)}`
+          : ""
       }`;
-    if ("content" in result) return (result.content ?? "").slice(0, 200);
-    if ("written" in result) return `wrote ${result.written}`;
+    if ("content" in result) return String(result.content ?? "").slice(0, 200);
+    if (result.type === "fileWritten" || "written" in result)
+      return `wrote ${String(result.path ?? result.written ?? "")}`;
     if ("entries" in result)
-      return `listed ${(result.entries ?? []).length} entries`;
+      return `listed ${Array.isArray(result.entries) ? result.entries.length : 0} entries`;
   }
   return executed.message ?? "the command finished";
 }
