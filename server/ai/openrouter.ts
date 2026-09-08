@@ -314,6 +314,11 @@ export async function invokeOpenRouter(
   if (params.thinking) payload.thinking = params.thinking;
 
   let response: Response | undefined;
+  let result: (InvokeResult & {
+    choices?: Array<{
+      message?: { tool_calls?: ToolCall[] };
+    }>;
+  }) | undefined;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     response = await fetch(`${OPENROUTER_API_BASE}/chat/completions`, {
       method: "POST",
@@ -321,8 +326,24 @@ export async function invokeOpenRouter(
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
-    if (response.ok || ![429, 500, 502, 503, 504].includes(response.status) || attempt === 1)
-      break;
+    if (response.ok) {
+      // Some upstream gateways have briefly returned an HTML/plain-text error
+      // with a successful status. Treat that as transient rather than leaking
+      // a JSON parser error into the chat.
+      const raw = await response.text();
+      try {
+        result = JSON.parse(raw) as InvokeResult & {
+          choices?: Array<{ message?: { tool_calls?: ToolCall[] } }>;
+        };
+        break;
+      } catch {
+        if (attempt === 1) {
+          throw new Error("The AI provider returned an unreadable response. Please try again.");
+        }
+        continue;
+      }
+    }
+    if (![429, 500, 502, 503, 504].includes(response.status) || attempt === 1) break;
     const retryAfter = Math.min(
       Math.max(Number(response.headers.get("retry-after") || "0"), 0) * 1000,
       2_000,
@@ -338,12 +359,7 @@ export async function invokeOpenRouter(
     throw new Error(errorMessage(response?.status ?? 503, body));
   }
 
-  const result = (await response.json()) as InvokeResult & {
-    choices?: Array<{
-      message?: { tool_calls?: ToolCall[] };
-    }>;
-  };
-  if (!result.choices?.length)
+  if (!result?.choices?.length)
     throw new Error("The selected free model did not return a response.");
   return result as InvokeResult;
 }

@@ -3,9 +3,7 @@ import type { Request } from "express";
 import { invokeAi } from "../ai";
 import * as db from "../db";
 import { githubConnectionStatus, isGithubConfigured } from "./github";
-import {
-  isCloudComputerConfigured,
-} from "./cloud-computer";
+import { cloudComputerStatusForAgent } from "./cloud-computer";
 import {
   CLOUD_SENSITIVE_TOOL_NAMES,
   CLOUD_TOOLS,
@@ -251,6 +249,20 @@ export type ExcelAgentApproval = {
   kind?: "excel" | "local" | "cloud";
 };
 
+/**
+ * Sensitive actions are only complete after their approval resolver reports
+ * success. Provider prose is untrusted at this policy boundary.
+ */
+export function finalAgentText(
+  providerText: string,
+  approvals: readonly ExcelAgentApproval[],
+): string {
+  if (approvals.length) {
+    return "I've prepared this action and it is waiting for your approval here in the chat.";
+  }
+  return providerText || "I could not produce a usable answer. Please try again.";
+}
+
 export function agentClockContext(
   now = new Date(),
   requestedTimeZone?: string,
@@ -329,10 +341,11 @@ export async function runRookAgent(input: {
         )
         .join(", ")
     : "";
+  const computer = await cloudComputerStatusForAgent(input.userId);
   const toolset = [
     ...(connection.connected ? EXCEL_TOOLS : []),
     ...(github.connected && github.selectedRepos.length ? GITHUB_TOOLS : []),
-    ...(isCloudComputerConfigured() ? CLOUD_TOOLS : []),
+    ...(computer.toolsAvailable ? CLOUD_TOOLS : []),
   ];
   const tools = toolset.length ? toolset : undefined;
   const excelSelected = input.connectors?.includes("microsoft-excel") === true;
@@ -357,9 +370,7 @@ export async function runRookAgent(input: {
       : github.configured
         ? "\n\nGitHub is available but not connected for this user. Tell them to open Account → GitHub and connect it if this request needs repository access."
         : "";
-  const cloudNote = isCloudComputerConfigured()
-    ? "\n\nThe computer is available. Rook routes computer work to the user's own device (Rook Node) whenever it is online, and falls back to the free Rook Cloud sandbox (a Linux environment with a workspace) when it is not. computer_run_command and computer_write_file are proposals — they never execute until the user approves them right in the chat. computer_read_file and computer_list_files run immediately. Use the computer whenever the user asks you to run code, build or transform something, or work with files; keep commands small and self-contained and capture output with the command itself."
-    : "";
+  const cloudNote = computer.agentNote;
 
   const publicSearchQuery = shouldSearchPublicWeb(input.message)
     ? input.message.replace(/\s+/g, " ").trim()
@@ -375,18 +386,21 @@ export async function runRookAgent(input: {
         )
         .join("\n")}`
     : "";
+  const traceClock = Date.now();
   const trace: AgentTraceStep[] = [
     ...(publicSearchQuery
       ? [
           {
             kind: "search" as const,
             title: `Searched the web for “${publicSearchQuery.length > 80 ? `${publicSearchQuery.slice(0, 80)}…` : publicSearchQuery}”`,
+            atMs: 0,
           },
           ...publicSearchResults.map((result) => ({
             kind: "source" as const,
             title: result.title,
             detail: "Public search result",
             url: result.url,
+            atMs: Date.now() - traceClock,
           })),
         ]
       : []),
@@ -434,11 +448,7 @@ export async function runRookAgent(input: {
           ? stripScaffolding(answer.content.trim())
           : "";
       return {
-        text:
-          text ||
-          (approvals.length
-            ? "I've prepared it for your approval — confirm it right here in this chat."
-            : "I could not produce a usable answer. Please try again."),
+        text: finalAgentText(text, approvals),
         model: resolvedModel,
         approvals,
         usedTools,
@@ -468,6 +478,7 @@ export async function runRookAgent(input: {
           trace.push({
             kind: "tool",
             title: githubToolTraceTitle(githubTool, args),
+            atMs: Date.now() - traceClock,
           });
           {
             const toolOutcome: unknown = await executeGithubReadTool(
@@ -480,6 +491,7 @@ export async function runRookAgent(input: {
               kind: "tool",
               title: described.title,
               detail: described.detail,
+              atMs: Date.now() - traceClock,
             });
             toolResult = { status: "completed", result: toolOutcome };
           }
@@ -489,7 +501,11 @@ export async function runRookAgent(input: {
             cloudTool,
             call.function.arguments,
           );
-          trace.push({ kind: "tool", title: cloudTraceTitle(cloudTool, args) });
+          trace.push({
+            kind: "tool",
+            title: cloudTraceTitle(cloudTool, args),
+            atMs: Date.now() - traceClock,
+          });
           if (CLOUD_SENSITIVE_TOOL_NAMES.has(cloudTool)) {
             if (approvals.some((entry) => entry.kind !== undefined)) {
               toolResult = {
@@ -530,15 +546,21 @@ export async function runRookAgent(input: {
               kind: "tool",
               title: described.title,
               detail: described.detail,
+              atMs: Date.now() - traceClock,
             });
             toolResult = { status: "completed", result: toolOutcome };
-          }        } else {
+          }
+        } else if (EXCEL_TOOLS.some((tool) => tool.function.name === name)) {
           const excelTool = name as ExcelToolName;
           const args = parseExcelToolArguments(
             excelTool,
             call.function.arguments,
           );
-          trace.push({ kind: "tool", title: excelTraceTitle(excelTool, args) });
+          trace.push({
+            kind: "tool",
+            title: excelTraceTitle(excelTool, args),
+            atMs: Date.now() - traceClock,
+          });
           if (EXCEL_WRITE_TOOL_NAMES.has(excelTool)) {
             if (approvals.length) {
               toolResult = {
@@ -583,9 +605,19 @@ export async function runRookAgent(input: {
               kind: "tool",
               title: described.title,
               detail: described.detail,
+              atMs: Date.now() - traceClock,
             });
             toolResult = { status: "completed", result: toolOutcome };
           }
+        } else {
+          const failure = `The requested tool “${name}” is not available for this task.`;
+          trace.push({
+            kind: "tool",
+            title: "Skipped an unavailable tool",
+            detail: failure,
+            atMs: Date.now() - traceClock,
+          });
+          toolResult = { status: "error", message: failure };
         }
       } catch (error) {
         const failure =
@@ -594,6 +626,7 @@ export async function runRookAgent(input: {
           kind: "tool",
           title: `Could not finish: ${toolNameForTrace(name)}`,
           detail: failure,
+          atMs: Date.now() - traceClock,
         });
         toolResult = { status: "error", message: failure };
       }

@@ -27,6 +27,10 @@ const agent = readFileSync(
   resolve(process.cwd(), "server/integrations/excel-agent.ts"),
   "utf8",
 );
+const computer = readFileSync(
+  resolve(process.cwd(), "server/integrations/cloud-computer.ts"),
+  "utf8",
+);
 
 describe("chat experience refinements", () => {
   it("falls back to a valid Bot orb instead of rendering arbitrary legacy icon art", () => {
@@ -42,13 +46,37 @@ describe("chat experience refinements", () => {
     expect(agent).toContain("never claim you opened a source");
     expect(chatScreen).toContain("<AgentActivityTrace");
     expect(chatScreen).not.toContain("Save to Library");
-    expect(chatScreen).toContain("<BotFilesSheet");
+    expect(chatScreen).toContain("<BotFilesDock");
+    expect(chatScreen).toContain("open={filesOpen}");
     expect(chatScreen).toContain("nodes.computer.browse");
     expect(chatScreen).toContain("nodes.computer.readFile");
-    expect(workingIndicator).toContain("Thinking through a plan");
+    expect(workingIndicator).toContain("phaseHeadline");
+    expect(workingIndicator).toContain("startedAtMs");
+    expect(workingIndicator).toContain("<DrivePixels color={colors.text} />");
+    expect(workingIndicator).not.toContain("<Sparkle");
+    expect(workingIndicator).not.toContain("Thinking through a plan");
+    expect(workingIndicator).not.toContain("Checking connected tools");
+    expect(chatScreen).toContain("startedAtMs={replyStartedAtMs}");
+    expect(chatScreen).toContain("Resize files panel");
+    expect(chatScreen).toContain("onWidthChange");
     expect(agent).toContain("Public search result");
     expect(activityTrace).toContain("Linking.openURL");
     expect(activityTrace).toContain("isBoilerplate");
+  });
+
+  it("gives every bot the same shared-computer knowledge", () => {
+    expect(agent).toContain("cloudComputerStatusForAgent(input.userId)");
+    expect(agent).toContain("computer.toolsAvailable ? CLOUD_TOOLS : []");
+    expect(computer).toContain("cloudComputerStatusForAgent");
+    expect(computer).toContain("You have a shared computer");
+    expect(computer).toContain("computer_write_file");
+    expect(computer).toContain("no computer is reachable for this user");
+  });
+
+  it("stamps real elapsed times on trace steps", () => {
+    expect(agent).toContain("atMs: Date.now() - traceClock");
+    expect(agent).toContain("const traceClock = Date.now()");
+    expect(activityTrace).toContain("formatWorkingElapsed(step.atMs)");
   });
 
   it("uses a compact rounded model dialog without dropping the provider model list", () => {

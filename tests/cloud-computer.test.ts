@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  cloudComputerStatusForAgent,
   cloudMissingEnvVars,
   cloudNodeId,
   isCloudComputerConfigured,
@@ -126,5 +127,27 @@ describe("cloud tools", () => {
         content: "hi",
       }),
     ).toBe("Write file notes.md in the cloud workspace");
+  });
+});
+
+describe("agent computer status", () => {
+  it("describes the shared computer even when nothing can execute", async () => {
+    delete process.env.E2B_API_KEY;
+    const status = await cloudComputerStatusForAgent("signed-out-test-user");
+    expect(status.toolsAvailable).toBe(false);
+    expect(status.agentNote).toContain("shared computer");
+    expect(status.agentNote).toContain("no computer is reachable");
+  });
+
+  it("offers tools and a test.txt example when the cloud sandbox is ready", async () => {
+    process.env.E2B_API_KEY = "test-key";
+    try {
+      const status = await cloudComputerStatusForAgent("signed-out-test-user");
+      expect(status.toolsAvailable).toBe(true);
+      expect(status.agentNote).toContain("shared computer");
+      expect(status.agentNote).toContain("test.txt");
+    } finally {
+      process.env.E2B_API_KEY = previousKey;
+    }
   });
 });

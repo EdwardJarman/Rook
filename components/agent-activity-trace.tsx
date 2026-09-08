@@ -1,9 +1,10 @@
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
-import { Linking, Pressable, Text, View } from "react-native";
 import { useState } from "react";
+import { Linking, Pressable, Text, View } from "react-native";
 
 import { Avatar } from "@/components/rook-primitives";
 import type { AgentTraceStep } from "@/shared/agent-trace";
+import { formatWorkingElapsed } from "@/lib/ai-working";
 import { tint, useRookTheme } from "@/lib/ui";
 import type { Bot } from "@/lib/workroom-store";
 
@@ -17,10 +18,12 @@ const iconForStep = (kind: AgentTraceStep["kind"]) => {
 };
 
 /**
- * Real activity only: every row is something the agent actually did this
- * turn (a web search, a source, a tool call with its concrete target).
- * Boilerplate rows like "read the room context" are dropped at render so
- * the expander never shows the same mock text twice.
+ * Settled agent activity under a reply. Same ThinkingState look as the live
+ * indicator (sparkle header, chevron, vertical trace rail) but driven only by
+ * real completed steps: searches, sources, concrete tool calls, and failures.
+ * Boilerplate rows ("read the room context", "preparing a response", …) are
+ * dropped at render so the expander never repeats mock text, and each step's
+ * server timestamp renders as a quiet elapsed time.
  */
 export function AgentActivityTrace({
   bot,
@@ -54,10 +57,15 @@ export function AgentActivityTrace({
           alignSelf: "flex-start",
           gap: 7,
           paddingVertical: 3,
-          paddingRight: 5,
+          paddingHorizontal: 6,
+          marginHorizontal: -6,
+          borderRadius: 8,
           opacity: pressed ? 0.68 : 1,
         })}
       >
+        <Text style={{ color: colors.textFaint, fontSize: 15, lineHeight: 18 }}>
+          ✦
+        </Text>
         <Avatar
           label={bot.avatar}
           color={bot.color}
@@ -126,6 +134,18 @@ export function AgentActivityTrace({
                     </Text>
                   ) : null}
                 </View>
+                {typeof step.atMs === "number" ? (
+                  <Text
+                    style={{
+                      color: colors.textFaint,
+                      fontSize: 10.5,
+                      fontVariant: ["tabular-nums"],
+                      marginLeft: 6,
+                    }}
+                  >
+                    {formatWorkingElapsed(step.atMs)}
+                  </Text>
+                ) : null}
                 {step.url ? (
                   <MaterialIcons
                     name="open-in-new"
@@ -172,6 +192,9 @@ const BOILERPLATE_TITLES = new Set([
   "Reading your request",
   "Response activity",
   "Checked connected Excel data",
+  "Sent your message to the model",
+  "Thinking through a plan",
+  "Checking connected tools",
 ]);
 
 function isBoilerplate(step: AgentTraceStep) {
