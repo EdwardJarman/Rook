@@ -112,6 +112,7 @@ export default function ChatScreen() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [connectorsOpen, setConnectorsOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
+  const [filesWidth, setFilesWidth] = useState(400);
   const [excelAttached, setExcelAttached] = useState(false);
   const [githubAttached, setGithubAttached] = useState(false);
   const [pendingImages, setPendingImages] = useState<PastedImage[]>([]);
@@ -193,6 +194,7 @@ export default function ChatScreen() {
   const [resolvingApprovalId, setResolvingApprovalId] = useState<string | null>(
     null,
   );
+  const [replyStartedAtMs, setReplyStartedAtMs] = useState(() => Date.now());
 
   /**
    * Approvals resolve here, in the chat — no tab switching. The proposal card
@@ -339,7 +341,7 @@ export default function ChatScreen() {
   useEffect(() => {
     if (visibleMessages.length > 0)
       threadRef.current?.scrollToEnd({ animated: true });
-  }, [visibleMessages.length]);
+  }, [visibleMessages.length, replyMutation.isPending]);
 
   const handleSend = async () => {
     const clean = composer.trim();
@@ -421,7 +423,9 @@ export default function ChatScreen() {
         "Working",
         "Finishing the requested work.",
       );
-      const response = await replyMutation.mutateAsync({
+      const response = await (async () => {
+        setReplyStartedAtMs(Date.now());
+        return replyMutation.mutateAsync({
         botId: activeBot.id,
         taskId: task.id,
         botName: activeBot.name,
@@ -437,7 +441,8 @@ export default function ChatScreen() {
         recentContext: visibleMessages
           .slice(-6)
           .map((message) => ({ author: message.author, body: message.body })),
-      });
+        });
+      })();
       setExcelAttached(false);
       setGithubAttached(false);
       if (response.approvals.length) {
@@ -726,7 +731,7 @@ export default function ChatScreen() {
               <IconButton
                 icon="folder-open"
                 label={`Open ${activeBot.name}'s files`}
-                onPress={() => setFilesOpen(true)}
+                onPress={() => setFilesOpen((open) => !open)}
               />
             ) : null}
             <IconButton
@@ -1288,7 +1293,10 @@ export default function ChatScreen() {
                       );
                     })}
                     {replyMutation.isPending && activeBot ? (
-                      <AiWorkingIndicator bot={activeBot} />
+                      <AiWorkingIndicator
+                        bot={activeBot}
+                        startedAtMs={replyStartedAtMs}
+                      />
                     ) : null}
                   </View>
                 ) : (
@@ -1852,8 +1860,10 @@ export default function ChatScreen() {
         onCreated={(bot) => addBotToChat(bot.id)}
       />
 
-      <BotFilesSheet
-        visible={filesOpen}
+      <BotFilesDock
+        open={filesOpen}
+        width={filesWidth}
+        onWidthChange={setFilesWidth}
         onClose={() => setFilesOpen(false)}
         bot={activeBot}
       />
@@ -2178,28 +2188,41 @@ function BotMessage({ message, bot }: { message: WorkMessage; bot?: Bot }) {
   );
 }
 
-/** Right-side panel: the focused Bot's own files, browsable and openable. */
-function BotFilesSheet({
-  visible,
+/**
+ * Right-side floating dock: the focused Bot's own files, browsable and
+ * openable. Right-aligned overlay (never full-screen); drag the left edge
+ * to resize on desktop web.
+ */
+function BotFilesDock({
+  open,
+  width,
+  onWidthChange,
   onClose,
   bot,
 }: {
-  visible: boolean;
+  open: boolean;
+  width: number;
+  onWidthChange: (width: number) => void;
   onClose: () => void;
   bot: Bot | null;
 }) {
   const { colors } = useRookTheme();
+  const { width: windowWidth } = useWindowDimensions();
+  const resizable = Platform.OS === "web" && windowWidth >= 960;
+  const dockWidth = Math.round(
+    Math.min(Math.max(width, 300), Math.max(320, windowWidth * 0.55)),
+  );
   const workroom = useWorkroom();
   const [currentPath, setCurrentPath] = useState("");
   const [history, setHistory] = useState<string[]>([]);
   const [openedPath, setOpenedPath] = useState<string | null>(null);
   const browseFiles = trpc.nodes.computer.browse.useQuery(
     { botId: bot?.id ?? "", path: currentPath },
-    { enabled: visible && Boolean(bot), retry: 1 },
+    { enabled: open && Boolean(bot), retry: 1 },
   );
   const openedFile = trpc.nodes.computer.readFile.useQuery(
     { botId: bot?.id ?? "", path: openedPath ?? "" },
-    { enabled: visible && Boolean(bot) && Boolean(openedPath), retry: 1 },
+    { enabled: open && Boolean(bot) && Boolean(openedPath), retry: 1 },
   );
 
   const botFiles = bot
@@ -2210,12 +2233,12 @@ function BotFilesSheet({
     : [];
 
   useEffect(() => {
-    if (visible) {
+    if (open) {
       setCurrentPath("");
       setHistory([]);
       setOpenedPath(null);
     }
-  }, [visible, bot?.id]);
+  }, [open, bot?.id]);
 
   const openPath = (path: string) => {
     setHistory((current) => [...current, currentPath]);
@@ -2238,9 +2261,82 @@ function BotFilesSheet({
     ? ((browseFiles.data as { entries: Array<{ name: string; path: string; type: string; size?: number }> }).entries)
     : [];
 
+  if (!open) return null;
+
   return (
-    <Sheet visible={visible} onClose={onClose}>
-      <SheetEyebrow>{bot ? `${bot.name}'s files` : "Files"}</SheetEyebrow>
+    <View
+      accessibilityLabel={bot ? `${bot.name}'s files` : "Workspace files"}
+      style={{
+        position: "absolute",
+        top: 12,
+        bottom: 12,
+        right: 12,
+        width: resizable ? dockWidth : undefined,
+        left: resizable ? undefined : 12,
+        zIndex: 60,
+        flexDirection: "row",
+        justifyContent: "flex-end",
+        pointerEvents: "box-none",
+      }}
+    >
+      {resizable ? (
+        <View
+          onStartShouldSetResponder={() => true}
+          onMoveShouldSetResponder={() => true}
+          onResponderMove={(event) => {
+            const next = Math.round(windowWidth - event.nativeEvent.pageX - 12);
+            onWidthChange(next);
+          }}
+          style={{ width: 14, alignItems: "center" }}
+          accessibilityRole="adjustable"
+          accessibilityLabel="Resize files panel"
+        >
+          <View
+            style={{
+              width: 4,
+              alignSelf: "stretch",
+              marginVertical: 24,
+              borderRadius: 3,
+              backgroundColor: colors.lineStrong,
+            }}
+          />
+        </View>
+      ) : null}
+      <View
+        style={{
+          flex: resizable ? undefined : 1,
+          width: resizable ? dockWidth - 14 : undefined,
+          backgroundColor: colors.surface,
+          borderWidth: 1,
+          borderColor: colors.line,
+          borderRadius: 20,
+          paddingHorizontal: 18,
+          paddingVertical: 16,
+          shadowColor: colors.shadow,
+          shadowOpacity: 0.18,
+          shadowRadius: 24,
+          shadowOffset: { width: 0, height: 10 },
+          elevation: 16,
+        }}
+      >
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+        }}
+      >
+        <SheetEyebrow>{bot ? `${bot.name}'s files` : "Files"}</SheetEyebrow>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Close files panel"
+          onPress={onClose}
+          style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1, padding: 4 })}
+        >
+          <MaterialIcons name="close" size={18} color={colors.textSoft} />
+        </Pressable>
+      </View>
       <Text
         style={{
           color: colors.text,
@@ -2454,7 +2550,8 @@ function BotFilesSheet({
           ) : null}
         </ScrollView>
       ) : null}
-    </Sheet>
+      </View>
+    </View>
   );
 }
 
