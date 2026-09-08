@@ -2,10 +2,12 @@ import { z } from "zod";
 
 import type { Tool } from "../_core/llm";
 import * as db from "../db";
+import { buildCommandEnvelope } from "../../shared/node-relay";
 import {
   buildCloudCommandEnvelope,
   createCloudSandboxClient,
   normalizeCloudRelPath,
+  resolveComputerTarget,
 } from "./cloud-computer";
 
 /**
@@ -160,12 +162,67 @@ export const CLOUD_TOOLS: Tool[] = [
   },
 ];
 
-/** Runs a non-sensitive cloud tool immediately against a fresh sandbox. */
-export async function executeCloudReadTool(
+/**
+ * Runs a non-sensitive computer tool immediately. Local-first: if an online
+ * paired device exists the command runs there (pageless shell/file action);
+ * otherwise it runs in the free cloud sandbox.
+ */
+export async function executeComputerReadTool(input: {
+  userId: string;
+  botId: string;
+  name: "computer_read_file" | "computer_list_files";
+  args: Record<string, unknown>;
+}): Promise<unknown> {
+  const path = typeof input.args.path === "string" ? input.args.path : "";
+  const target = await resolveComputerTarget(input.userId);
+  if (target.kind === "none")
+    throw new Error(
+      "No computer is available: connect Rook Node, or set up the cloud computer.",
+    );
+
+  if (target.kind === "local") {
+    const action =
+      input.name === "computer_read_file"
+        ? { type: "readFile" as const, path }
+        : { type: "listFiles" as const, path };
+    const commandId = makeCommandId();
+    const record = await db.enqueueNodeCommand({
+      commandId,
+      userId: input.userId,
+      nodeId: target.nodeId,
+      summary: cloudCommandSummary(input.name, input.args),
+      capability: "files-read",
+      envelope: buildCommandEnvelope({
+        userId: input.userId,
+        botId: input.botId,
+        pageId: `shell:${commandId}`,
+        pageRevision: 0,
+        capability: "files-read",
+        action,
+        seq: 1,
+        ttlMs: 120_000,
+      }),
+      requiresApproval: false,
+    });
+    if (!record) {
+      // The node went offline between resolve and enqueue — fall back to cloud.
+      return runCloudRead(input.name, path);
+    }
+    const completed = await waitForLocalCompletion(commandId, 15_000);
+    if (!completed)
+      throw new Error(
+        "Your computer did not respond in time. Try again, or the cloud computer will be used instead.",
+      );
+    return normalizeLocalReadResult(input.name, completed);
+  }
+
+  return runCloudRead(input.name, path);
+}
+
+async function runCloudRead(
   name: "computer_read_file" | "computer_list_files",
-  args: Record<string, unknown>,
+  path: string,
 ): Promise<unknown> {
-  const path = typeof args.path === "string" ? args.path : "";
   const client = await createCloudSandboxClient();
   try {
     if (name === "computer_read_file") {
@@ -179,34 +236,103 @@ export async function executeCloudReadTool(
   }
 }
 
+/** Maps a local node's pageless result to the shape the chat expects. */
+function normalizeLocalReadResult(
+  name: "computer_read_file" | "computer_list_files",
+  record: { result?: unknown },
+): unknown {
+  const value = record.result as
+    | { result?: { type?: string; path?: string; content?: string; entries?: Array<{ name: string; type: string; size: number }> } }
+    | undefined;
+  const inner = value?.result;
+  if (name === "computer_read_file") {
+    return { path: inner?.path ?? "", content: inner?.content ?? "" };
+  }
+  return {
+    path: inner?.path ?? "/",
+    entries: (inner?.entries ?? []).map((entry) => ({
+      name: entry.name,
+      path: `${inner?.path && inner.path !== "/" ? inner.path : ""}/${entry.name}`.replace(/^\/+/, "/"),
+      type: entry.type === "dir" ? "dir" : "file",
+      size: entry.size,
+    })),
+  };
+}
+
+/** Polls a local command until it completes or the timeout elapses. */
+async function waitForLocalCompletion(
+  commandId: string,
+  timeoutMs: number,
+): Promise<{ result?: unknown } | undefined> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const record = await db.getNodeCommandById(commandId).catch(() => undefined);
+    if (!record) return undefined;
+    if (record.state === "completed") return record;
+    if (record.state === "declined" || record.state === "expired")
+      return { result: undefined };
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+  }
+  return undefined;
+}
+
 /**
- * Prepares a sensitive cloud command as a durable, approval-gated proposal.
- * Returns the command id; execution happens only after the user approves.
+ * Prepares a sensitive computer command as a durable, approval-gated proposal.
+ * Routes to an online paired device when one exists, else to the cloud sandbox.
+ * Execution happens only after the user approves in Updates.
  */
-export async function prepareCloudCommandProposal(input: {
+export async function prepareComputerCommandProposal(input: {
   userId: string;
   botId: string;
   name: "computer_run_command" | "computer_write_file";
   args: { command?: string; cwd?: string; path?: string; content?: string };
-}): Promise<{ commandId: string; summary: string }> {
-  const commandId = `cmd-${Date.now().toString(36)}-${Math.random()
-    .toString(36)
-    .slice(2, 8)}`;
-  const capability = input.name === "computer_run_command" ? "shell" : "files-write";
+}): Promise<{ commandId: string; summary: string; target: "local" | "cloud" }> {
+  const commandId = makeCommandId();
+  const capability =
+    input.name === "computer_run_command" ? "shell" : "files-write";
   const action =
     input.name === "computer_run_command"
       ? {
-          type: "runCommand",
+          type: "runCommand" as const,
           command: input.args.command ?? "",
           ...(input.args.cwd ? { cwd: input.args.cwd } : {}),
         }
       : {
-          type: "writeFile",
+          type: "writeFile" as const,
           path: input.args.path ?? "",
           content: input.args.content ?? "",
         };
   const summary = cloudCommandSummary(input.name, input.args);
-  const record = await db.enqueueCloudCommand({
+  const target = await resolveComputerTarget(input.userId);
+  if (target.kind === "none")
+    throw new Error(
+      "No computer is available: connect Rook Node, or set up the cloud computer.",
+    );
+
+  if (target.kind === "local") {
+    const record = await db.enqueueNodeCommand({
+      commandId,
+      userId: input.userId,
+      nodeId: target.nodeId,
+      summary,
+      capability,
+      envelope: buildCommandEnvelope({
+        userId: input.userId,
+        botId: input.botId,
+        pageId: `shell:${commandId}`,
+        pageRevision: 0,
+        capability,
+        action,
+        seq: 1,
+        ttlMs: 120_000,
+      }),
+      requiresApproval: true,
+    });
+    if (record) return { commandId: record.commandId, summary, target: "local" };
+    // The node vanished — fall through to the cloud sandbox.
+  }
+
+  const cloudRecord = await db.enqueueCloudCommand({
     commandId,
     userId: input.userId,
     summary,
@@ -220,6 +346,13 @@ export async function prepareCloudCommandProposal(input: {
     }),
     requiresApproval: true,
   });
-  if (!record) throw new Error("Cloud computer storage is unavailable right now");
-  return { commandId: record.commandId, summary };
+  if (!cloudRecord)
+    throw new Error("Cloud computer storage is unavailable right now");
+  return { commandId: cloudRecord.commandId, summary, target: "cloud" };
+}
+
+function makeCommandId(): string {
+  return `cmd-${Date.now().toString(36)}-${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
 }

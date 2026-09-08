@@ -29,6 +29,25 @@ export function isCloudComputerConfigured(): boolean {
 }
 
 /**
+ * Where a Bot's computer action should run — the hybrid decision:
+ * an online paired device is the computer; the free cloud sandbox is the
+ * overflow when no device is reachable.
+ */
+export type ComputerTarget =
+  | { kind: "local"; nodeId: string }
+  | { kind: "cloud" }
+  | { kind: "none" };
+
+export async function resolveComputerTarget(
+  userId: string,
+): Promise<ComputerTarget> {
+  const node = await db.getOnlineRookNode(userId).catch(() => undefined);
+  if (node) return { kind: "local", nodeId: node.nodeId };
+  if (isCloudComputerConfigured()) return { kind: "cloud" };
+  return { kind: "none" };
+}
+
+/**
  * Cloud-computer capabilities. `shell` and `files-write` are sensitive
  * (approval-gated exactly like the local node's sensitive capabilities);
  * `files-read` runs immediately.

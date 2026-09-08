@@ -1541,6 +1541,14 @@ export async function listRookNodesForUser(
     );
 }
 
+/** First node currently reporting online, used by computer-target routing. */
+export async function getOnlineRookNode(
+  userId: string,
+): Promise<RookNodeRecord | undefined> {
+  const nodes = await listRookNodesForUser(userId);
+  return nodes.find((node) => node.status === "online");
+}
+
 export async function revokeRookNode(
   userId: string,
   nodeId: string,

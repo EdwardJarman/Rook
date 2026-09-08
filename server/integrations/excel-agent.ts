@@ -12,9 +12,9 @@ import {
   CLOUD_TOOL_NAMES,
   cloudCommandSummary,
   cloudTraceTitle,
-  executeCloudReadTool,
+  executeComputerReadTool,
   parseCloudToolArguments,
-  prepareCloudCommandProposal,
+  prepareComputerCommandProposal,
   type CloudToolName,
 } from "./cloud-tools";
 import {
@@ -92,8 +92,8 @@ export type ExcelAgentApproval = {
   title: string;
   detail: string;
   risk: "Medium";
-  /** Which approval resolver owns this proposal (excel vs cloud computer). */
-  kind?: "excel" | "cloud";
+  /** Which approval resolver owns this proposal (excel vs local vs cloud). */
+  kind?: "excel" | "local" | "cloud";
 };
 
 export function agentClockContext(
@@ -203,7 +203,7 @@ export async function runRookAgent(input: {
         ? "\n\nGitHub is available but not connected for this user. Tell them to open Account → GitHub and connect it if this request needs repository access."
         : "";
   const cloudNote = isCloudComputerConfigured()
-    ? "\n\nThe Rook cloud computer is available: a Linux sandbox with a workspace where you can run shell commands and read/write files. computer_run_command and computer_write_file are proposals — they never execute until the user approves them in Rook Updates. computer_read_file and computer_list_files run immediately. Use the cloud computer whenever the user asks you to run code, build or transform something, or work with files; keep commands small and self-contained and capture output with the command itself."
+    ? "\n\nThe computer is available. Rook routes computer work to the user's own device (Rook Node) whenever it is online, and falls back to the free Rook Cloud sandbox (a Linux environment with a workspace) when it is not. computer_run_command and computer_write_file are proposals — they never execute until the user approves them in Rook Updates. computer_read_file and computer_list_files run immediately. Use the computer whenever the user asks you to run code, build or transform something, or work with files; keep commands small and self-contained and capture output with the command itself."
     : "";
 
   const publicSearchQuery = shouldSearchPublicWeb(input.message)
@@ -326,14 +326,14 @@ export async function runRookAgent(input: {
           );
           trace.push({ kind: "tool", title: cloudTraceTitle(cloudTool) });
           if (CLOUD_SENSITIVE_TOOL_NAMES.has(cloudTool)) {
-            if (approvals.some((entry) => entry.kind === "cloud")) {
+            if (approvals.some((entry) => entry.kind !== undefined)) {
               toolResult = {
                 status: "not_prepared",
                 message:
-                  "One cloud computer action is already waiting for approval in this turn. Wait for the user to approve it before proposing another.",
+                  "One computer action is already waiting for approval in this turn. Wait for the user to approve it before proposing another.",
               };
             } else {
-              const proposal = await prepareCloudCommandProposal({
+              const proposal = await prepareComputerCommandProposal({
                 userId: input.userId,
                 botId: input.botId,
                 name: cloudTool as "computer_run_command" | "computer_write_file",
@@ -341,24 +341,27 @@ export async function runRookAgent(input: {
               });
               approvals.push({
                 actionId: proposal.commandId,
-                title: "Approve cloud computer action",
-                detail: proposal.summary,
+                title: "Approve computer action",
+                detail: `${proposal.summary} (${proposal.target === "local" ? "on your computer" : "in the cloud sandbox"})`,
                 risk: "Medium",
-                kind: "cloud",
+                kind: proposal.target,
               });
               toolResult = {
                 status: "approval_required",
                 command_id: proposal.commandId,
                 summary: proposal.summary,
+                target: proposal.target,
               };
             }
           } else {
             toolResult = {
               status: "completed",
-              result: await executeCloudReadTool(
-                cloudTool as "computer_read_file" | "computer_list_files",
+              result: await executeComputerReadTool({
+                userId: input.userId,
+                botId: input.botId,
+                name: cloudTool as "computer_read_file" | "computer_list_files",
                 args,
-              ),
+              }),
             };
           }        } else {
           const excelTool = name as ExcelToolName;
