@@ -28,7 +28,7 @@ export default function TabLayout() {
 
 /**
  * Desktop keeps the focused workroom rail. Android gets a persistent native
- * bottom bar: Bots, Library, Updates, and Account are all first-class phone
+ * bottom bar: Bots, Library, and Account are all first-class phone
  * destinations rather than hidden routes reachable only from header buttons.
  */
 function RookTabs() {
@@ -101,24 +101,9 @@ function RookTabs() {
         name="library"
         options={{
           title: "Library",
-          tabBarAccessibilityLabel: "Open Library",
+          tabBarAccessibilityLabel: "Open library",
           tabBarIcon: ({ color, size }) => (
             <MaterialIcons name="folder-open" color={color} size={size} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="activity"
-        options={{
-          title: "Updates",
-          tabBarAccessibilityLabel: "Open Updates",
-          tabBarBadge: undefined,
-          tabBarIcon: ({ color, size }) => (
-            <MaterialIcons
-              name="notifications-none"
-              color={color}
-              size={size}
-            />
           ),
         }}
       />

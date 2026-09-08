@@ -103,7 +103,7 @@ export const appRouter = router({
                   ? `${input.botName} prepared an Excel change`
                   : `${input.botName} completed a task`,
                 body: result.text.slice(0, 170),
-                url: needsApproval ? "/activity" : "/",
+                url: needsApproval ? "/" : "/",
               }),
             ),
         );
@@ -638,7 +638,7 @@ async function notifyNodeApprovalRequest(
             kind: "approval",
             title: "Rook Node needs your approval",
             body: summary.slice(0, 170),
-            url: "/activity",
+            url: "/",
           }),
         ),
     );

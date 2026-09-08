@@ -187,7 +187,7 @@ export async function runRookAgent(input: {
         connection.accounts.length > 1
           ? ` The user has ${connection.accounts.length} Microsoft accounts connected (${connection.accounts.map((account) => account.email || account.displayName || account.accountId).join(", ")}). Tools default to the primary account; pass account_id when the user names a different one.`
           : ""
-      } Use the Excel tools whenever the user asks about a workbook. Never guess workbook, worksheet, range, table, value, or formula data: inspect it with tools. Read tools may run immediately. Every write tool is only a proposal and is never executed until the user approves it in Rook Updates. Prepare no more than one write action per turn unless the user explicitly requests a batch.`
+      } Use the Excel tools whenever the user asks about a workbook. Never guess workbook, worksheet, range, table, value, or formula data: inspect it with tools. Read tools may run immediately. Every write tool is only a proposal and is never executed until the user approves it right in the chat. Prepare no more than one write action per turn unless the user explicitly requests a batch.`
     : connection.needsReauthorization
       ? "Microsoft Excel needs to be reconnected. Tell the user to open Account → Microsoft Excel and reconnect it if this request needs workbook access."
       : connection.configured
@@ -203,7 +203,7 @@ export async function runRookAgent(input: {
         ? "\n\nGitHub is available but not connected for this user. Tell them to open Account → GitHub and connect it if this request needs repository access."
         : "";
   const cloudNote = isCloudComputerConfigured()
-    ? "\n\nThe computer is available. Rook routes computer work to the user's own device (Rook Node) whenever it is online, and falls back to the free Rook Cloud sandbox (a Linux environment with a workspace) when it is not. computer_run_command and computer_write_file are proposals — they never execute until the user approves them in Rook Updates. computer_read_file and computer_list_files run immediately. Use the computer whenever the user asks you to run code, build or transform something, or work with files; keep commands small and self-contained and capture output with the command itself."
+    ? "\n\nThe computer is available. Rook routes computer work to the user's own device (Rook Node) whenever it is online, and falls back to the free Rook Cloud sandbox (a Linux environment with a workspace) when it is not. computer_run_command and computer_write_file are proposals — they never execute until the user approves them right in the chat. computer_read_file and computer_list_files run immediately. Use the computer whenever the user asks you to run code, build or transform something, or work with files; keep commands small and self-contained and capture output with the command itself."
     : "";
 
   const publicSearchQuery = shouldSearchPublicWeb(input.message)
@@ -285,7 +285,7 @@ export async function runRookAgent(input: {
         text:
           text ||
           (approvals.length
-            ? "I prepared the Excel change and paused for your approval in Updates."
+            ? "I've prepared it for your approval — confirm it right here in this chat."
             : "I could not produce a usable answer. Please try again."),
         model: resolvedModel,
         approvals,
@@ -431,7 +431,7 @@ export async function runRookAgent(input: {
 
   return {
     text: approvals.length
-      ? "I prepared the Excel change and paused for your approval in Updates."
+      ? "I've prepared it for your approval — confirm it right here in this chat."
       : "I reached the tool limit for this turn. Try asking for a smaller range or one operation at a time.",
     model: resolvedModel,
     approvals,

@@ -13,8 +13,8 @@ import {
 /**
  * Cloud-computer tools for the AI agent. Read tools run immediately against a
  * fresh sandbox; `computer_run_command` and `computer_write_file` are
- * sensitive — they only prepare a durable proposal that the user approves in
- * Updates, exactly like Excel write tools.
+ * sensitive — they only prepare a durable proposal that the user approves
+ * right in the chat, exactly like Excel write tools.
  */
 
 const pathParameter = z
@@ -279,7 +279,7 @@ async function waitForLocalCompletion(
 /**
  * Prepares a sensitive computer command as a durable, approval-gated proposal.
  * Routes to an online paired device when one exists, else to the cloud sandbox.
- * Execution happens only after the user approves in Updates.
+ * Execution happens only after the user approves right in the chat.
  */
 export async function prepareComputerCommandProposal(input: {
   userId: string;
