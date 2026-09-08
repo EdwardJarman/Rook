@@ -33,6 +33,24 @@ export function RookNotificationProvider({ children }: { children: ReactNode }) 
   useEffect(() => { if (!preferencesQuery.data) return; const next = { approval: preferencesQuery.data.approval, completion: preferencesQuery.data.completion }; setPreferences(next); void AsyncStorage.setItem(PREFERENCES_KEY, JSON.stringify(next)); }, [preferencesQuery.data]);
 
   const registerDevice = useCallback(async (token: string, next: NotificationPreferences) => { if (!installationId || !isAuthenticated) return false; const result = await registerMutation.mutateAsync({ installationId, expoPushToken: token, approvalEnabled: next.approval, completionEnabled: next.completion }); return result.registered; }, [installationId, isAuthenticated, registerMutation]);
+
+  // Do not prompt unexpectedly, but if the user has already allowed alerts,
+  // register this Android installation as soon as an authenticated session is available.
+  useEffect(() => {
+    if (!ready || !isAuthenticated || Platform.OS === "web") return;
+    let cancelled = false;
+    void (async () => {
+      const permission = await Notifications.getPermissionsAsync();
+      if (permission.status !== "granted") return;
+      const result = await requestToken();
+      if (cancelled) return;
+      setStatus(result.status);
+      setExpoPushToken(result.token);
+      if (result.token && await registerDevice(result.token, preferences) && !cancelled) setStatus("Enabled");
+    })();
+    return () => { cancelled = true; };
+  }, [installationId, isAuthenticated, preferences, ready, registerDevice]);
+
   const enableAlerts = useCallback(async () => { const result = await requestToken(); setStatus(result.status); setExpoPushToken(result.token); if (result.token && await registerDevice(result.token, preferences)) setStatus("Enabled"); }, [preferences, registerDevice]);
   const setPreference = useCallback((kind: NotificationKind, enabled: boolean) => { const next = { ...preferences, [kind]: enabled }; setPreferences(next); void AsyncStorage.setItem(PREFERENCES_KEY, JSON.stringify(next)); if (isAuthenticated) void savePreferences.mutateAsync(next).catch(() => undefined); if (expoPushToken) void registerDevice(expoPushToken, next).catch(() => undefined); }, [expoPushToken, isAuthenticated, preferences, registerDevice, savePreferences]);
   const sendTaskAlert = useCallback(async (event: { kind: NotificationKind; title: string; body: string; url: string }) => { if (!preferences[event.kind]) return; if (isAuthenticated) { try { const remote = await deliveryMutation.mutateAsync(event); if (remote.accepted) return; } catch { /* native local alert below remains a best-effort fallback */ } } await presentLocalAlert(event); }, [deliveryMutation, isAuthenticated, preferences]);

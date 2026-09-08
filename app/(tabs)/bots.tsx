@@ -1,45 +1,196 @@
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import { useState } from "react";
-import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
-import { Avatar, EmptyState, IconButton, SectionTitle, StatusPill, palette } from "@/components/rook-primitives";
-import { BotIdentityPicker } from "@/components/bot-identity-picker";
+import { AiModelSelector } from "@/components/ai-model-selector";
+import { BotCreateSheet } from "@/components/bot-create-sheet";
+import {
+  Avatar,
+  EmptyState,
+  IconButton,
+  PrimaryButton,
+  SecondaryButton,
+  ScreenHeader,
+  Sheet,
+  StatusPill,
+  useRookTheme,
+} from "@/components/rook-primitives";
 import { ScreenContainer } from "@/components/screen-container";
+import { providerForModel } from "@/lib/ai-provider";
 import { useDockScroll } from "@/lib/dock-visibility";
+import { tint } from "@/lib/ui";
 import { useWorkroom, type Bot } from "@/lib/workroom-store";
 
 export default function BotsScreen() {
-  const { bots, selectedBotId, selectBot, updateBotStatus, createBot } = useWorkroom();
+  const { colors } = useRookTheme();
+  const { aiProvider, bots, selectedBotId, selectBot, updateBotStatus, updateBotModel } = useWorkroom();
   const [openBot, setOpenBot] = useState<Bot | null>(null);
   const [newOpen, setNewOpen] = useState(false);
-  const [name, setName] = useState("");
-  const [role, setRole] = useState("");
-  const [purpose, setPurpose] = useState("");
-  const [approvalRule, setApprovalRule] = useState("Ask me before anything external, irreversible, or sensitive.");
-  const [color, setColor] = useState("#7563F5");
-  const [icon, setIcon] = useState("auto-awesome");
   const dockScroll = useDockScroll();
 
-  const handleCreate = () => {
-    if (!name.trim() || !role.trim() || !purpose.trim()) { Alert.alert("Finish your Bot", "Add a name, primary job, and working description before creating this Bot."); return; }
-    createBot({ name, role, purpose, approvalRule, color, icon });
-    setName(""); setRole(""); setPurpose(""); setApprovalRule("Ask me before anything external, irreversible, or sensitive."); setColor("#7563F5"); setIcon("auto-awesome"); setNewOpen(false);
-  };
+  return (
+    <ScreenContainer containerClassName="bg-background" className="flex-1" edges={["top", "left", "right"]}>
+      <ScrollView {...dockScroll} contentContainerStyle={pageStyles.content} showsVerticalScrollIndicator={false}>
+        <ScreenHeader
+          title="Bots"
+          lead={bots.length ? "A small team that stays close to the work." : "Make one teammate for the work you want to move forward."}
+          action={<IconButton icon="add" label="Create a Bot" onPress={() => setNewOpen(true)} tone="accent" />}
+        />
 
-  return <ScreenContainer containerClassName="bg-background" className="flex-1" edges={["top", "left", "right"]}>
-    <ScrollView {...dockScroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-      <View style={styles.head}><View><Text style={styles.title}>Bots</Text><Text style={styles.lead}>{bots.length ? "A small team that stays close to the work." : "Make one teammate for the work you want to move forward."}</Text></View><IconButton icon="add" label="Create a Bot" onPress={() => setNewOpen(true)} tone="mint" /></View>
-      {bots.length ? <><SectionTitle eyebrow="Your space" title="Your teammates" /><View style={styles.list}>{bots.map((bot) => <Pressable key={bot.id} accessibilityRole="button" onPress={() => { selectBot(bot.id); setOpenBot(bot); }} style={({ pressed }) => [styles.botRow, bot.id === selectedBotId && styles.botRowSelected, pressed && styles.pressed]}><Avatar label={bot.avatar} color={bot.color} icon={bot.icon} size={47} /><View style={styles.botCopy}><View style={styles.nameLine}><Text style={styles.botName}>{bot.name}</Text><Text style={styles.botTime}>{bot.lastActive}</Text></View><Text numberOfLines={1} style={styles.botMeta}>{bot.status === "Working" ? "Working now" : bot.role}</Text></View><MaterialIcons name="chevron-right" size={20} color={palette.mist} /></Pressable>)}</View><Pressable accessibilityRole="button" onPress={() => setNewOpen(true)} style={({ pressed }) => [styles.addAnother, pressed && styles.pressed]}><MaterialIcons name="add" size={18} color={palette.cloud} /><Text style={styles.addAnotherText}>Add another Bot</Text></Pressable></> : <View style={styles.emptyWrap}><EmptyState icon="person-add-alt-1" title="Your team starts here" detail="Begin with one clear job. Add another Bot only when the work naturally splits." action={<Pressable accessibilityRole="button" onPress={() => setNewOpen(true)} style={({ pressed }) => [styles.createButton, pressed && styles.pressed]}><Text style={styles.createButtonText}>Make a Bot</Text><MaterialIcons name="arrow-forward" size={18} color="#FFFFFF" /></Pressable>} /></View>}
-    </ScrollView>
+        {bots.length ? (
+          <>
+            <View style={{ gap: 10 }}>
+              {bots.map((bot) => (
+                <Pressable
+                  key={bot.id}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Open ${bot.name}`}
+                  onPress={() => {
+                    selectBot(bot.id);
+                    setOpenBot(bot);
+                  }}
+                  style={({ pressed }) => [
+                    pageStyles.botCard,
+                    { borderColor: bot.id === selectedBotId ? tint(colors.accent, 0.35) : colors.line },
+                    pressed && { opacity: 0.78, transform: [{ scale: 0.995 }] },
+                  ]}
+                >
+                  <Avatar label={bot.avatar} color={bot.color} icon={bot.icon} size={46} />
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
+                      <Text numberOfLines={1} style={{ color: colors.text, fontSize: 15, fontWeight: "700", letterSpacing: -0.2, flexShrink: 1 }}>
+                        {bot.name}
+                      </Text>
+                      <View
+                        style={{
+                          width: 7,
+                          height: 7,
+                          borderRadius: 4,
+                          backgroundColor:
+                            bot.status === "Working" ? colors.mint : bot.status === "Paused" ? colors.amber : colors.textFaint,
+                        }}
+                      />
+                    </View>
+                    <Text numberOfLines={1} style={{ color: colors.textSoft, fontSize: 12.5, marginTop: 3 }}>
+                      {bot.role}
+                    </Text>
+                    <Text style={{ color: colors.textFaint, fontSize: 11, marginTop: 4 }}>{bot.lastActive}</Text>
+                  </View>
+                  <MaterialIcons name="chevron-right" size={20} color={colors.textFaint} />
+                </Pressable>
+              ))}
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setNewOpen(true)}
+              style={({ pressed }) => [pageStyles.addAnother, pressed && { opacity: 0.7 }]}
+            >
+              <MaterialIcons name="add" size={18} color={colors.accent} />
+              <Text style={{ color: colors.accent, fontSize: 13.5, fontWeight: "600" }}>Add another Bot</Text>
+            </Pressable>
+          </>
+        ) : (
+          <View style={{ marginTop: 16 }}>
+            <EmptyState
+              icon="person-add-alt-1"
+              title="Your team starts here"
+              detail="Begin with one clear job. Add another Bot only when the work naturally splits."
+              action={<PrimaryButton label="Make a Bot" icon="add" onPress={() => setNewOpen(true)} />}
+            />
+          </View>
+        )}
+      </ScrollView>
 
-    <Modal transparent visible={Boolean(openBot)} animationType="slide" onRequestClose={() => setOpenBot(null)}><Pressable style={styles.shade} onPress={() => setOpenBot(null)}><Pressable style={styles.sheet} onPress={(event) => event.stopPropagation()}>{openBot ? <><View style={styles.grabber} /><View style={styles.profileHead}><Avatar label={openBot.avatar} color={openBot.color} icon={openBot.icon} size={57} /><View style={styles.profileCopy}><Text style={styles.profileName}>{openBot.name}</Text><Text style={styles.profileRole}>{openBot.role}</Text></View><StatusPill label={openBot.status} tone={openBot.status === "Working" ? "mint" : openBot.status === "Paused" ? "amber" : "muted"} /></View><Text style={styles.profilePurpose}>{openBot.purpose}</Text><InfoBlock label="MEMORY" value={openBot.memory} /><InfoBlock label="PAUSE POINT" value={openBot.approvalRule} /><View style={styles.actions}><Pressable accessibilityRole="button" onPress={() => { const status = openBot.status === "Paused" ? "Ready" : "Paused"; updateBotStatus(openBot.id, status); setOpenBot({ ...openBot, status }); }} style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}><Text style={styles.secondaryText}>{openBot.status === "Paused" ? "Resume" : "Pause"}</Text></Pressable><Pressable accessibilityRole="button" onPress={() => setOpenBot(null)} style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}><Text style={styles.secondaryText}>Done</Text></Pressable></View></> : null}</Pressable></Pressable></Modal>
+      {/* Bot profile */}
+      <Sheet visible={Boolean(openBot)} onClose={() => setOpenBot(null)}>
+        {openBot ? (
+          <>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
+              <Avatar label={openBot.avatar} color={openBot.color} icon={openBot.icon} size={56} />
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text numberOfLines={1} style={{ color: colors.text, fontSize: 21, lineHeight: 27, fontWeight: "700", letterSpacing: -0.5 }}>
+                  {openBot.name}
+                </Text>
+                <Text numberOfLines={1} style={{ color: colors.textSoft, fontSize: 13, marginTop: 3 }}>
+                  {openBot.role}
+                </Text>
+              </View>
+            </View>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 12 }}>
+              <StatusPill
+                label={openBot.status}
+                tone={openBot.status === "Working" ? "mint" : openBot.status === "Paused" ? "amber" : "muted"}
+              />
+              <Text style={{ color: colors.textFaint, fontSize: 12 }}>· {openBot.lastActive}</Text>
+            </View>
+            <Text style={{ color: colors.textSoft, fontSize: 13.5, lineHeight: 20, marginTop: 14 }}>{openBot.purpose}</Text>
 
-    <Modal transparent visible={newOpen} animationType="slide" onRequestClose={() => setNewOpen(false)}><Pressable style={styles.shade} onPress={() => setNewOpen(false)}><Pressable style={styles.sheet} onPress={(event) => event.stopPropagation()}><View style={styles.grabber} /><Text style={styles.setupEyebrow}>NEW BOT</Text><Text style={styles.setupTitle}>Start from your own words.</Text><Text style={styles.sheetLead}>No role templates or pre-made teammates. Describe the work exactly as you want it owned.</Text><Text style={styles.fieldLabel}>NAME</Text><TextInput autoFocus value={name} onChangeText={setName} placeholder="Name your Bot" placeholderTextColor="#8A8C94" style={styles.field} /><BotIdentityPicker color={color} icon={icon} onColorChange={setColor} onIconChange={setIcon} /><Text style={styles.fieldLabel}>PRIMARY JOB</Text><TextInput value={role} onChangeText={setRole} placeholder="What is its main job?" placeholderTextColor="#8A8C94" style={styles.field} /><Text style={styles.fieldLabel}>WORKING DESCRIPTION</Text><TextInput value={purpose} onChangeText={setPurpose} placeholder="What should it help with and how should it work?" placeholderTextColor="#8A8C94" multiline style={[styles.field, styles.detailField]} /><Text style={styles.fieldLabel}>PAUSE POINT</Text><TextInput value={approvalRule} onChangeText={setApprovalRule} placeholder="When should it stop and ask you?" placeholderTextColor="#8A8C94" multiline style={[styles.field, styles.detailField]} /><Pressable accessibilityRole="button" onPress={handleCreate} style={({ pressed }) => [styles.primary, pressed && styles.pressed]}><Text style={styles.primaryText}>Create Bot</Text><MaterialIcons name="arrow-forward" size={18} color="#FFFFFF" /></Pressable></Pressable></Pressable></Modal>
-  </ScreenContainer>;
+            <View style={{ gap: 12, marginTop: 18 }}>
+              <AiModelSelector
+                value={openBot.model || "openrouter/free"}
+                provider={providerForModel(openBot.model, aiProvider)}
+                onChange={(model) => {
+                  updateBotModel(openBot.id, model);
+                  setOpenBot({ ...openBot, model, lastActive: "Model updated" });
+                }}
+              />
+              <InfoBlock label="Memory" value={openBot.memory} />
+              <InfoBlock label="Pause point" value={openBot.approvalRule} />
+            </View>
+
+            <View style={{ flexDirection: "row", gap: 10, marginTop: 24 }}>
+              <SecondaryButton
+                label={openBot.status === "Paused" ? "Resume" : "Pause"}
+                icon={openBot.status === "Paused" ? "play-arrow" : "pause"}
+                onPress={() => {
+                  const status = openBot.status === "Paused" ? "Ready" : "Paused";
+                  updateBotStatus(openBot.id, status);
+                  setOpenBot({ ...openBot, status });
+                }}
+              />
+              <PrimaryButton label="Done" onPress={() => setOpenBot(null)} />
+            </View>
+          </>
+        ) : null}
+      </Sheet>
+
+      <BotCreateSheet visible={newOpen} onClose={() => setNewOpen(false)} />
+    </ScreenContainer>
+  );
 }
 
-function InfoBlock({ label, value }: { label: string; value: string }) { return <View style={styles.infoBlock}><Text style={styles.infoLabel}>{label}</Text><Text style={styles.infoText}>{value}</Text></View>; }
+function InfoBlock({ label, value }: { label: string; value: string }) {
+  const { colors } = useRookTheme();
+  return (
+    <View style={{ gap: 5 }}>
+      <Text style={{ color: colors.accent, fontSize: 11.5, fontWeight: "700", letterSpacing: 1, textTransform: "uppercase" }}>
+        {label}
+      </Text>
+      <Text style={{ color: colors.textSoft, fontSize: 13, lineHeight: 19 }}>{value}</Text>
+    </View>
+  );
+}
 
-const styles = StyleSheet.create({
-  content: { paddingHorizontal: 18, paddingTop: 18, paddingBottom: 30, gap: 20, maxWidth: 780, width: "100%", alignSelf: "center", flexGrow: 1 }, head: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 14 }, title: { color: palette.cloud, fontSize: 25, lineHeight: 31, fontWeight: "900", letterSpacing: -0.7 }, lead: { color: palette.mist, fontSize: 13, lineHeight: 19, marginTop: 5, maxWidth: 310 }, list: { gap: 5 }, botRow: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 11, paddingHorizontal: 10, borderWidth: 1, borderColor: palette.line, backgroundColor: palette.graphite, borderRadius: 18 }, botRowSelected: { backgroundColor: palette.elevated, borderColor: "#7563F532" }, botCopy: { flex: 1, minWidth: 0 }, nameLine: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }, botName: { color: palette.cloud, fontSize: 15, fontWeight: "800" }, botTime: { color: palette.mist, fontSize: 10, fontWeight: "700" }, botMeta: { color: palette.mist, fontSize: 12, marginTop: 4 }, addAnother: { flexDirection: "row", gap: 8, alignItems: "center", alignSelf: "flex-start", backgroundColor: palette.elevated, borderRadius: 14, paddingHorizontal: 13, paddingVertical: 10 }, addAnotherText: { color: palette.cloud, fontSize: 13, fontWeight: "800" }, emptyWrap: { flex: 1, justifyContent: "center", paddingBottom: 80 }, createButton: { marginTop: 10, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: palette.ink, borderRadius: 16, paddingVertical: 13, paddingHorizontal: 17 }, createButtonText: { color: "#FFFFFF", fontSize: 13, fontWeight: "900" }, pressed: { opacity: 0.74, transform: [{ scale: 0.98 }] }, shade: { flex: 1, justifyContent: "flex-end", backgroundColor: "#17181B66" }, sheet: { backgroundColor: palette.graphite, borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 18, paddingBottom: 28, paddingTop: 9, borderTopWidth: 1, borderColor: palette.line, maxHeight: "90%" }, grabber: { alignSelf: "center", height: 4, width: 38, borderRadius: 3, backgroundColor: "#C4C5CB", marginBottom: 17 }, profileHead: { flexDirection: "row", alignItems: "center", gap: 11 }, profileCopy: { flex: 1 }, profileName: { color: palette.cloud, fontSize: 19, fontWeight: "900" }, profileRole: { color: palette.mist, fontSize: 12, marginTop: 3 }, profilePurpose: { color: palette.mist, fontSize: 13, lineHeight: 19, marginTop: 15 }, infoBlock: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.line, paddingTop: 12, marginTop: 15 }, infoLabel: { color: palette.mist, fontSize: 10, letterSpacing: 1, fontWeight: "900", marginBottom: 5 }, infoText: { color: palette.cloud, fontSize: 13, lineHeight: 18 }, actions: { flexDirection: "row", gap: 9, marginTop: 20 }, secondaryButton: { flex: 1, borderRadius: 14, backgroundColor: palette.elevated, borderWidth: 1, borderColor: palette.line, alignItems: "center", paddingVertical: 13 }, secondaryText: { color: palette.cloud, fontSize: 13, fontWeight: "800" }, setupEyebrow: { color: palette.mist, fontSize: 10, fontWeight: "900", letterSpacing: 1.1, marginBottom: 7 }, setupTitle: { color: palette.cloud, fontSize: 24, lineHeight: 30, fontWeight: "900", letterSpacing: -0.65 }, sheetLead: { color: palette.mist, fontSize: 13, lineHeight: 19, marginTop: 9, marginBottom: 16 }, fieldLabel: { color: palette.mist, fontSize: 10, fontWeight: "900", letterSpacing: 1.1, marginTop: 11, marginBottom: 6 }, field: { color: palette.cloud, backgroundColor: palette.elevated, borderWidth: 1, borderColor: palette.line, borderRadius: 15, paddingHorizontal: 13, paddingVertical: 11, fontSize: 14 }, detailField: { minHeight: 76, textAlignVertical: "top" }, primary: { marginTop: 20, backgroundColor: palette.ink, borderRadius: 16, paddingVertical: 14, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 }, primaryText: { color: "#FFFFFF", fontSize: 14, fontWeight: "900" },
+
+const pageStyles = StyleSheet.create({
+  content: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 34, gap: 20, maxWidth: 720, width: "100%", alignSelf: "center" },
+  botCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 13,
+    backgroundColor: "transparent",
+    borderWidth: 1,
+    borderRadius: 18,
+    padding: 14,
+  },
+  addAnother: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 7,
+    paddingVertical: 15,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderStyle: "dashed",
+  },
 });

@@ -1,0 +1,96 @@
+name: Build Rook Android APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    name: Build verified Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_aW5zcGlyZWQtaG9uZXliZWUtNDMuY2xlcmsuYWNjb3VudHMuZGV2JA
+      EXPO_PUBLIC_API_ORIGIN: https://www.rook.lighting
+      JAVA_TOOL_OPTIONS: -Xmx4g
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify Android sign-in callback configuration
+        run: |
+          pnpm exec expo config --type public --json > rook-expo-config.json
+          node scripts/assert-android-config.cjs rook-expo-config.json
+          node scripts/assert-hosted-auth-callback.cjs
+
+      - name: Generate Android project
+        run: pnpm exec expo prebuild --platform android --clean --no-install
+
+      - name: Create an Android signing key
+        shell: bash
+        run: |
+          KEYSTORE_PASSWORD="$(openssl rand -hex 24)"
+          echo "::add-mask::$KEYSTORE_PASSWORD"
+          echo "ROOK_KEYSTORE=$RUNNER_TEMP/rook-release.keystore" >> "$GITHUB_ENV"
+          echo "ROOK_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          keytool -genkeypair \
+            -keystore "$RUNNER_TEMP/rook-release.keystore" \
+            -storetype PKCS12 \
+            -storepass "$KEYSTORE_PASSWORD" \
+            -keypass "$KEYSTORE_PASSWORD" \
+            -alias rook \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Rook, OU=Mobile, O=Rook, L=London, C=GB"
+
+      - name: Build release APK
+        run: cd android && ./gradlew :app:assembleRelease --no-daemon
+
+      - name: Sign and verify APK
+        shell: bash
+        run: |
+          UNSIGNED_APK="$(find android/app/build/outputs/apk/release -name '*.apk' -print | head -n 1)"
+          test -n "$UNSIGNED_APK"
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n 1)"
+          "$BUILD_TOOLS/zipalign" -p -f 4 "$UNSIGNED_APK" Rook.apk
+          "$BUILD_TOOLS/apksigner" sign \
+            --ks "$ROOK_KEYSTORE" \
+            --ks-key-alias rook \
+            --ks-pass "pass:$ROOK_KEYSTORE_PASSWORD" \
+            --key-pass "pass:$ROOK_KEYSTORE_PASSWORD" \
+            --out Rook-signed.apk \
+            Rook.apk
+          mv Rook-signed.apk Rook.apk
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs Rook.apk
+          sha256sum Rook.apk | tee Rook.apk.sha256
+
+      - name: Upload verified APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Rook-Android-APK
+          path: |
+            Rook.apk
+            Rook.apk.sha256
+          if-no-files-found: error
+          retention-days: 30

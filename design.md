@@ -6,7 +6,11 @@ Rook is a calm, Bot-first AI workroom for managing specialized Bots. The design 
 
 ## Brand and color choices
 
-The Rook identity uses a clean, geometric signal motif: a warm electric mint accent against deep ink surfaces. The dark palette is built around **Ink #0B0D11**, **Graphite #151922**, **Elevated #1C2330**, **Cloud #F4F6F8**, **Mist #9AA4B2**, **Mint #77F3C4**, **Amber #F6C65B**, and **Coral #FF7B7B**. The light palette uses an off-white canvas with ink text and a slightly deeper mint accent. These colors provide clear state contrast without a busy or neon aesthetic.
+The Rook identity pairs a warm paper canvas with deep ink surfaces and a single green accent. Primary actions, user messages, and active controls are monochrome ink — the accent is reserved for interactive emphasis, success, and focus. Bot identities render as soft tinted washes rather than saturated fills, keeping the roster colorful but quiet.
+
+The light palette is built around **Canvas #FAF9F4**, **Surface #FFFFFF**, **Surface Alt #F2F0E9**, **Text #1E1C18**, **Text Soft #6E6A60**, **Line #EBE8DF**, **Ink #23211C** (with **On-Ink #FAF9F4**), and **Accent #177149**. The dark palette is true midnight black, matching T3 Code: **Canvas #000000**, **Surface #0C0C0C**, **Surface Alt #151515**, **Text #EDEBE6**, **Text Soft #9B978E**, **Line #1D1D1D**, **Ink #EDEBE6** (with **On-Ink #0A0A0A**), and **Accent #4CC38A**. Both schemes share one token set (`lib/ui.ts` on mobile, `rook-node/src/app/lib/tokens.ts` on desktop) so components are theme-correct by construction. Semantic tones — mint, amber (#8F6400 / #E5B567), coral (#B3402F / #E5735F) — always pair a readable foreground with a soft tinted background and are identical concepts in both schemes.
+
+Design tokens are resolved at runtime through `useRookTheme()` in `lib/ui.ts`, so every surface, including native, follows the user's light or dark preference. Shared primitives in `components/rook-primitives.tsx` (Avatar, buttons, StatusPill, Card, Sheet, Switch, SegmentedControl, Field, EmptyState) consume those tokens so screens stay consistent and theme-correct by construction.
 
 ## Screen list
 
@@ -46,9 +50,9 @@ The user starts a group workroom, selects a lead and specialists, describes the 
 
 ## Layout rules
 
-The Workroom screen uses a fixed, safe-area-aware top bar with the current Bot and connection state. The conversation occupies the middle scroll region. The composer sits above the home indicator, with a clear attach action and a primary send action. Bot switching, task details, skill references, and profile settings open in sheets or full-screen modals so the conversation remains the primary surface.
+The Workroom screen uses a fixed, safe-area-aware top bar with the current Bot and connection state. The conversation occupies the middle scroll region as a clean chat canvas: Bot replies render as plain text rows beside a small avatar, user messages as ink bubbles, and system events as quiet centered notes. The composer is a calm capsule above the home indicator, with a clear attach action and a primary send action that signals when it is armed. Bot switching, task details, skill references, and profile settings open in sheets or full-screen modals so the conversation remains the primary surface.
 
-The navigation includes **Work**, **Bots**, **Library**, **Updates**, and **Account**. Library is now explicitly named rather than implied as “Space”; Account is a direct destination rather than a hidden Library sub-section. Files, routines, skills, search, and privacy remain organized inside Library, while decisions and recent work live in Updates. On wide screens, the same named destinations remain visible without changing the information architecture.
+The navigation includes **Work**, **Bots**, **Library**, **Updates**, and **Account** rendered in a frosted floating dock that hides on scroll-down and returns on scroll-up. Library is explicitly named rather than implied as "Space"; Account is a direct destination rather than a hidden Library sub-section. Files, routines, skills, search, and privacy remain organized inside Library behind a segmented control; decisions and recent work live in Updates. On wide web canvases (960px and up), the dock yields to a quiet left sidebar — a rounded white panel floating on the canvas with the workspace mark, line-icon destinations, and a compact account footer — while each screen moves onto an inset stage beside it. The same named destinations remain visible on every width without changing the information architecture; phones and tablets keep the floating dock exactly as it is.
 
 ## Accessibility requirements
 

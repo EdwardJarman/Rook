@@ -14,7 +14,9 @@ const env = {
   appId: process.env.EXPO_PUBLIC_APP_ID ?? "",
   ownerId: process.env.EXPO_PUBLIC_OWNER_OPEN_ID ?? "",
   ownerName: process.env.EXPO_PUBLIC_OWNER_NAME ?? "",
-  apiBaseUrl: process.env.EXPO_PUBLIC_API_BASE_URL ?? "",
+  // Keep the legacy name for existing web deployments, but prefer the name
+  // supplied to the Android release workflow as well.
+  apiBaseUrl: process.env.EXPO_PUBLIC_API_BASE_URL ?? process.env.EXPO_PUBLIC_API_ORIGIN ?? "",
   deepLinkScheme: schemeFromBundleId,
 };
 
@@ -46,7 +48,15 @@ export function getApiBaseUrl(): string {
     }
   }
 
-  // Fallback to empty (will use relative URL)
+  // React Native cannot fetch a relative path. A production Android build must
+  // always use Rook's public API; without this, `/api/chatgpt/login` fails
+  // before the ChatGPT device-login flow can start and cloud workspaces cannot
+  // hydrate for an existing account.
+  if (ReactNative.Platform.OS !== "web") {
+    return "https://www.rook.lighting";
+  }
+
+  // Same-origin relative paths remain correct for a production web deployment.
   return "";
 }
 

@@ -58,6 +58,14 @@
 - [x] Diagnose the Vercel Metro SHA-1 failure for the NativeWind web cache
 - [x] Apply and validate a Vercel-safe static web export fix
 - [x] Push the complete verified Vercel cache-build fix to IcA
+- [x] Replace the desktop web floating dock with a quiet floating left sidebar, keeping the mobile dock unchanged
+- [x] Verify the desktop sidebar, breakpoint swap, and dark variant in a live browser and checkpoint the navigation update
+- [x] Rebuild the entire Rook UI on a runtime design-token system with true light and dark modes on every platform
+- [x] Redesign the Workroom as a clean chat canvas with ink user bubbles, plain-text Bot replies, and an armed-state capsule composer
+- [x] Redesign Bots, Library, Updates, and Account around shared primitives, segmented controls, and iOS-style switches
+- [x] Restyle the floating dock, onboarding, auth screens, and Clerk web card for the new visual system
+- [x] Remove template leftovers and the cross-tab AccountControls import; document the new system in design.md
+- [x] Validate the redesign with typecheck, lint, tests, and a production web export
 - [x] Checkpoint the Vercel Metro repair
 - [x] Confirm the Clerk integration checklist and account-linking permission
 - [x] Review UmU’s Expo auth architecture and Clerk mobile requirements
