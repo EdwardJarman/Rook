@@ -1,4 +1,4 @@
-import type { Sandbox } from "e2b";
+import type { Sandbox } from "e2b/dist/index.mjs";
 
 import * as db from "../db";
 import { cloudNodeId, isCloudNodeId } from "../../shared/node-relay";
@@ -128,14 +128,11 @@ export async function createCloudSandboxClient(
   if (!key) throw new Error("E2B_API_KEY is not set on this deployment");
   // e2b's package.json has no "exports" field, so a bare import("e2b")
   // resolves to its CJS build (main), which require()s chalk 5 — ESM-only —
-  // and crashes under plain Node (ERR_REQUIRE_ESM on Vercel; tsx masked it in
+  // and crashes under Node < 22 (ERR_REQUIRE_ESM on Vercel; tsx masked it in
   // dev). Load the ESM build directly: Node treats .mjs as ESM regardless of
-  // the package's type field. A variable specifier also keeps esbuild from
-  // rewriting the import during bundling.
-  const e2bEntry = "e2b/dist/index.mjs";
-  const { Sandbox: E2BSandbox } = (await import(
-    e2bEntry
-  )) as unknown as typeof import("e2b");
+  // the package's type field. The literal specifier keeps the import
+  // statically traceable for esbuild and Vercel's dependency tracer.
+  const { Sandbox: E2BSandbox } = await import("e2b/dist/index.mjs");
   const sandbox = (await E2BSandbox.create({
     timeoutMs: CLOUD_COMMAND_MAX_TIMEOUT_MS + 30_000,
   })) as Sandbox;
