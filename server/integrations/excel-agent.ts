@@ -249,6 +249,20 @@ export type ExcelAgentApproval = {
   kind?: "excel" | "local" | "cloud";
 };
 
+/**
+ * Sensitive actions are only complete after their approval resolver reports
+ * success. Provider prose is untrusted at this policy boundary.
+ */
+export function finalAgentText(
+  providerText: string,
+  approvals: readonly ExcelAgentApproval[],
+): string {
+  if (approvals.length) {
+    return "I've prepared this action and it is waiting for your approval here in the chat.";
+  }
+  return providerText || "I could not produce a usable answer. Please try again.";
+}
+
 export function agentClockContext(
   now = new Date(),
   requestedTimeZone?: string,
@@ -434,11 +448,7 @@ export async function runRookAgent(input: {
           ? stripScaffolding(answer.content.trim())
           : "";
       return {
-        text:
-          text ||
-          (approvals.length
-            ? "I've prepared it for your approval — confirm it right here in this chat."
-            : "I could not produce a usable answer. Please try again."),
+        text: finalAgentText(text, approvals),
         model: resolvedModel,
         approvals,
         usedTools,
@@ -539,7 +549,8 @@ export async function runRookAgent(input: {
               atMs: Date.now() - traceClock,
             });
             toolResult = { status: "completed", result: toolOutcome };
-          }        } else {
+          }
+        } else if (EXCEL_TOOLS.some((tool) => tool.function.name === name)) {
           const excelTool = name as ExcelToolName;
           const args = parseExcelToolArguments(
             excelTool,
@@ -598,6 +609,15 @@ export async function runRookAgent(input: {
             });
             toolResult = { status: "completed", result: toolOutcome };
           }
+        } else {
+          const failure = `The requested tool “${name}” is not available for this task.`;
+          trace.push({
+            kind: "tool",
+            title: "Skipped an unavailable tool",
+            detail: failure,
+            atMs: Date.now() - traceClock,
+          });
+          toolResult = { status: "error", message: failure };
         }
       } catch (error) {
         const failure =

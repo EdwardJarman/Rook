@@ -52,6 +52,8 @@ describe("chat experience refinements", () => {
     expect(chatScreen).toContain("nodes.computer.readFile");
     expect(workingIndicator).toContain("phaseHeadline");
     expect(workingIndicator).toContain("startedAtMs");
+    expect(workingIndicator).toContain("<DrivePixels color={colors.text} />");
+    expect(workingIndicator).not.toContain("<Sparkle");
     expect(workingIndicator).not.toContain("Thinking through a plan");
     expect(workingIndicator).not.toContain("Checking connected tools");
     expect(chatScreen).toContain("startedAtMs={replyStartedAtMs}");

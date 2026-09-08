@@ -20,9 +20,9 @@ import type { Bot } from "@/lib/workroom-store";
 
 /**
  * Live agent activity while the reply runs. The look follows the shared
- * ThinkingState reference: a sparkle header with a shimmer "Working…" label,
- * a chevron expander, and a vertical trace rail of completed tool steps plus
- * one spinner row for the step in flight.
+ * A small animated pixel grid heads the label, followed by a chevron expander
+ * and a vertical trace rail of completed tool steps plus one spinner row for
+ * the step in flight.
  *
  * Every row is real: completed steps arrive via server progress (kind/title/
  * detail/atMs) and stream in; before the first real step lands, one honest
@@ -85,7 +85,7 @@ export function AiWorkingIndicator({
           pressed && { opacity: 0.68 },
         ]}
       >
-        <Sparkle working color={colors.textSoft} />
+        <DrivePixels color={colors.text} />
         <WorkingLabel label={headline} color={colors.textSoft} />
         <Text
           accessible={false}
@@ -130,15 +130,6 @@ export function AiWorkingIndicator({
               />
             ))
           )}
-          <View
-            accessible={false}
-            importantForAccessibility="no-hide-descendants"
-            style={{ flexDirection: "row", gap: 2, marginTop: 2 }}
-          >
-            {DRIVE_PIXEL_DELAYS.slice(0, 5).map((delay, index) => (
-              <DrivePixel key={index} delay={delay} color={colors.textFaint} />
-            ))}
-          </View>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
             <Avatar
               label={bot.avatar}
@@ -172,30 +163,17 @@ function workingHeadline(step: AgentTraceStep): string {
   return "Working";
 }
 
-function Sparkle({ working, color }: { working: boolean; color: string }) {
-  const pulse = useSharedValue(1);
-  const reducedMotion = useReducedMotion();
-  useEffect(() => {
-    cancelAnimation(pulse);
-    if (!working || reducedMotion) {
-      pulse.value = 1;
-      return;
-    }
-    pulse.value = withRepeat(
-      withSequence(
-        withTiming(1.25, { duration: 600, easing: Easing.inOut(Easing.quad) }),
-        withTiming(1, { duration: 600, easing: Easing.inOut(Easing.quad) }),
-      ),
-      -1,
-      false,
-    );
-    return () => cancelAnimation(pulse);
-  }, [pulse, reducedMotion, working]);
-  const style = useAnimatedStyle(() => ({ transform: [{ scale: pulse.value }] }));
+function DrivePixels({ color }: { color: string }) {
   return (
-    <Animated.View style={style}>
-      <Text style={{ color, fontSize: 15, lineHeight: 18 }}>✦</Text>
-    </Animated.View>
+    <View
+      accessible={false}
+      importantForAccessibility="no-hide-descendants"
+      style={{ width: 16, height: 16, flexDirection: "row", flexWrap: "wrap", gap: 2 }}
+    >
+      {DRIVE_PIXEL_DELAYS.map((delay, index) => (
+        <DrivePixel key={index} delay={delay} color={color} />
+      ))}
+    </View>
   );
 }
 
