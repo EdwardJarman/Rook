@@ -75,16 +75,171 @@ const stripScaffolding = (text: string): string => {
     .trim();
 };
 
-const excelTraceTitle = (name: ExcelToolName) =>
-  EXCEL_WRITE_TOOL_NAMES.has(name)
-    ? "Prepared an Excel update for approval"
-    : "Checked connected Excel data";
+const excelTraceTitle = (name: ExcelToolName, args?: Record<string, unknown>) => {
+  if (EXCEL_WRITE_TOOL_NAMES.has(name)) {
+    try {
+      const summary = args ? excelWriteSummary(name, args) : "";
+      if (summary) return summary;
+    } catch {
+      // Fall through to the generic proposal label.
+    }
+    return "Prepared an Excel update for approval";
+  }
+  if (name === "excel_read_range")
+    return `Checked Excel ${args?.workbook_name ? `${String(args.workbook_name)} · ` : ""}${args?.worksheet ? `${String(args.worksheet)}!` : ""}${args?.address ? String(args.address) : "range"}`;
+  if (name === "excel_list_worksheets")
+    return `Listed worksheets in ${args?.workbook_name ? String(args.workbook_name) : "the workbook"}`;
+  if (name === "excel_list_tables")
+    return `Listed tables in ${args?.workbook_name ? String(args.workbook_name) : "the workbook"}`;
+  return "Listed Excel workbooks";
+};
 
 const toolResultText = (value: unknown) => {
   const serialized = JSON.stringify(value);
   return serialized.length <= 24_000
     ? serialized
     : `${serialized.slice(0, 24_000)}… (result truncated; request a smaller range)`;
+};
+
+const SECOND_TRIM_LIMIT = 96;
+
+const trimSecondLine = (value: string) =>
+  value.length <= SECOND_TRIM_LIMIT ? value : `${value.slice(0, SECOND_TRIM_LIMIT)}…`;
+
+const summarizeCellValue = (value: unknown): string => {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "string") return value.trim() ? trimSecondLine(value.trim()) : "—";
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return "…";
+};
+
+const summarizeExcelOutcome = (
+  name: string,
+  result: unknown,
+): { title: string; detail?: string } | undefined => {
+  if (!result || typeof result !== "object") return undefined;
+  const record = result as Record<string, unknown>;
+  if (name === "excel_list_workbooks" && Array.isArray(record.workbooks)) {
+    const names = record.workbooks
+      .slice(0, 3)
+      .map((entry) => String((entry as Record<string, unknown>)?.name ?? "").trim())
+      .filter(Boolean);
+    return {
+      title: `Found ${record.workbooks.length} workbook${record.workbooks.length === 1 ? "" : "s"}`,
+      detail: names.length ? names.join(", ") : undefined,
+    };
+  }
+  if (name === "excel_list_worksheets" && Array.isArray(record.worksheets)) {
+    const names = record.worksheets
+      .slice(0, 4)
+      .map((entry) => String((entry as Record<string, unknown>)?.name ?? "").trim())
+      .filter(Boolean);
+    return {
+      title: `Found ${record.worksheets.length} worksheet${record.worksheets.length === 1 ? "" : "s"}`,
+      detail: names.length ? names.join(", ") : undefined,
+    };
+  }
+  if (name === "excel_list_tables" && Array.isArray(record.tables)) {
+    return { title: `Found ${record.tables.length} table${record.tables.length === 1 ? "" : "s"}` };
+  }
+  if (name === "excel_read_range") {
+    const values = record.values as unknown[][] | undefined;
+    const formulas = record.formulas as unknown[][] | undefined;
+    const cells = Array.isArray(values)
+      ? values.flat().filter((cell) => cell !== null && cell !== "" && cell !== undefined)
+      : [];
+    const headline =
+      cells.length > 0
+        ? `Read ${cells.length} value${cells.length === 1 ? "" : "s"} — first: ${summarizeCellValue(cells[0])}`
+        : "Read the range (all values blank)";
+    const detail = Array.isArray(formulas)
+      ? formulas.flat().filter((cell) => typeof cell === "string" && String(cell).startsWith("=")).length > 0
+        ? "Includes formulas"
+        : undefined
+      : undefined;
+    return { title: headline, detail };
+  }
+  return undefined;
+};
+
+const summarizeGithubOutcome = (
+  name: string,
+  result: unknown,
+): { title: string; detail?: string } | undefined => {
+  if (!result || typeof result !== "object") return undefined;
+  const record = result as Record<string, unknown>;
+  if (name === "github_repo_overview") {
+    return {
+      title: `Checked ${String(record.fullName ?? "the repository")}`,
+      detail:
+        typeof record.description === "string" && record.description.trim()
+          ? trimSecondLine(record.description.trim())
+          : undefined,
+    };
+  }
+  if (name === "github_list_files" && Array.isArray(record.entries)) {
+    return { title: `Listed ${record.entries.length} file${record.entries.length === 1 ? "" : "s"}` };
+  }
+  if (name === "github_read_file") {
+    const content = typeof record.content === "string" ? record.content : "";
+    const lines = content.split("\n").filter((line) => line.trim());
+    return {
+      title: `Read ${String(record.path ?? "the file")}`,
+      detail: lines.length ? `${lines.length} lines${content.length > 4000 ? " (truncated)" : ""}` : undefined,
+    };
+  }
+  return undefined;
+};
+
+const summarizeComputerOutcome = (
+  name: string,
+  result: unknown,
+): { title: string; detail?: string } | undefined => {
+  if (!result || typeof result !== "object") return undefined;
+  const record = result as Record<string, unknown>;
+  if (name === "computer_read_file") {
+    const content = typeof record.content === "string" ? record.content : "";
+    const lines = content.split("\n").filter((line) => line.trim());
+    return {
+      title: `Read ${String(record.path ?? "the file")}`,
+      detail: lines.length ? `${lines.length} lines${content.length > 4000 ? " (truncated)" : ""}` : undefined,
+    };
+  }
+  if (name === "computer_list_files" && Array.isArray(record.entries)) {
+    return { title: `Listed ${record.entries.length} file${record.entries.length === 1 ? "" : "s"}` };
+  }
+  return undefined;
+};
+
+/** Concrete "what actually ran" line for a read tool after it completes. */
+const describeToolOutcome = (
+  name: string,
+  args: Record<string, unknown>,
+  result: unknown,
+): { title: string; detail?: string } => {
+  const outcome =
+    summarizeComputerOutcome(name, result) ??
+    summarizeGithubOutcome(name, result) ??
+    summarizeExcelOutcome(name, result);
+  if (outcome) return outcome;
+  if (CLOUD_TOOL_NAMES.has(name))
+    return {
+      title: cloudTraceTitle(
+        name as Parameters<typeof cloudTraceTitle>[0],
+        args,
+      ),
+    };
+  return { title: toolNameForTrace(name) };
+};
+
+const toolNameForTrace = (name: string) => {
+  try {
+    if (CLOUD_TOOL_NAMES.has(name))
+      return cloudCommandSummary(name as "computer_run_command", {});
+  } catch {
+    // Fall through to the raw name.
+  }
+  return name.replace(/_/g, " ");
 };
 
 export type ExcelAgentApproval = {
@@ -221,13 +376,11 @@ export async function runRookAgent(input: {
         .join("\n")}`
     : "";
   const trace: AgentTraceStep[] = [
-    { kind: "context", title: "Read the room context" },
     ...(publicSearchQuery
       ? [
           {
             kind: "search" as const,
-            title: "Searched the public web",
-            detail: publicSearchQuery,
+            title: `Searched the web for “${publicSearchQuery.length > 80 ? `${publicSearchQuery.slice(0, 80)}…` : publicSearchQuery}”`,
           },
           ...publicSearchResults.map((result) => ({
             kind: "source" as const,
@@ -237,7 +390,6 @@ export async function runRookAgent(input: {
           })),
         ]
       : []),
-    { kind: "response", title: "Prepared a response" },
   ];
 
   const messages: Message[] = [
@@ -313,18 +465,31 @@ export async function runRookAgent(input: {
             githubTool,
             call.function.arguments,
           );
-          trace.push({ kind: "tool", title: githubToolTraceTitle(githubTool) });
-          toolResult = {
-            status: "completed",
-            result: await executeGithubReadTool(input.userId, githubTool, args),
-          };
+          trace.push({
+            kind: "tool",
+            title: githubToolTraceTitle(githubTool, args),
+          });
+          {
+            const toolOutcome: unknown = await executeGithubReadTool(
+              input.userId,
+              githubTool,
+              args,
+            );
+            const described = describeToolOutcome(githubTool, args, toolOutcome);
+            trace.push({
+              kind: "tool",
+              title: described.title,
+              detail: described.detail,
+            });
+            toolResult = { status: "completed", result: toolOutcome };
+          }
         } else if (CLOUD_TOOL_NAMES.has(name)) {
           const cloudTool = name as CloudToolName;
           const args = parseCloudToolArguments(
             cloudTool,
             call.function.arguments,
           );
-          trace.push({ kind: "tool", title: cloudTraceTitle(cloudTool) });
+          trace.push({ kind: "tool", title: cloudTraceTitle(cloudTool, args) });
           if (CLOUD_SENSITIVE_TOOL_NAMES.has(cloudTool)) {
             if (approvals.some((entry) => entry.kind !== undefined)) {
               toolResult = {
@@ -354,22 +519,26 @@ export async function runRookAgent(input: {
               };
             }
           } else {
-            toolResult = {
-              status: "completed",
-              result: await executeComputerReadTool({
-                userId: input.userId,
-                botId: input.botId,
-                name: cloudTool as "computer_read_file" | "computer_list_files",
-                args,
-              }),
-            };
+            const toolOutcome: unknown = await executeComputerReadTool({
+              userId: input.userId,
+              botId: input.botId,
+              name: cloudTool as "computer_read_file" | "computer_list_files",
+              args,
+            });
+            const described = describeToolOutcome(cloudTool, args, toolOutcome);
+            trace.push({
+              kind: "tool",
+              title: described.title,
+              detail: described.detail,
+            });
+            toolResult = { status: "completed", result: toolOutcome };
           }        } else {
           const excelTool = name as ExcelToolName;
           const args = parseExcelToolArguments(
             excelTool,
             call.function.arguments,
           );
-          trace.push({ kind: "tool", title: excelTraceTitle(excelTool) });
+          trace.push({ kind: "tool", title: excelTraceTitle(excelTool, args) });
           if (EXCEL_WRITE_TOOL_NAMES.has(excelTool)) {
             if (approvals.length) {
               toolResult = {
@@ -404,22 +573,29 @@ export async function runRookAgent(input: {
               };
             }
           } else {
-            toolResult = {
-              status: "completed",
-              result: await executeExcelReadTool(input.userId, excelTool, args),
-            };
+            const toolOutcome: unknown = await executeExcelReadTool(
+              input.userId,
+              excelTool,
+              args,
+            );
+            const described = describeToolOutcome(excelTool, args, toolOutcome);
+            trace.push({
+              kind: "tool",
+              title: described.title,
+              detail: described.detail,
+            });
+            toolResult = { status: "completed", result: toolOutcome };
           }
         }
       } catch (error) {
+        const failure =
+          error instanceof Error ? error.message : "Connected tool failed";
         trace.push({
           kind: "tool",
-          title: "A connected-tool step could not be completed",
+          title: `Could not finish: ${toolNameForTrace(name)}`,
+          detail: failure,
         });
-        toolResult = {
-          status: "error",
-          message:
-            error instanceof Error ? error.message : "Connected tool failed",
-        };
+        toolResult = { status: "error", message: failure };
       }
       messages.push({
         role: "tool",

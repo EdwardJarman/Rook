@@ -71,16 +71,35 @@ export function parseCloudToolArguments(
   return result.data;
 }
 
-export function cloudTraceTitle(name: CloudToolName): string {
+export function cloudTraceTitle(
+  name: CloudToolName,
+  args?: Record<string, unknown>,
+): string {
+  const path =
+    typeof args?.path === "string" && args.path.trim()
+      ? args.path.trim()
+      : typeof args?.cwd === "string" && args.cwd.trim()
+        ? args.cwd.trim()
+        : "";
+  const here = path ? ` — ${path.length > 80 ? `${path.slice(0, 80)}…` : path}` : "";
   switch (name) {
-    case "computer_run_command":
-      return "Prepared a cloud shell command";
+    case "computer_run_command": {
+      const command =
+        typeof args?.command === "string" && args.command.trim()
+          ? args.command.trim().split("\n")[0].slice(0, 90)
+          : "";
+      // A proposal, not an execution — execution waits for chat approval.
+      return command
+        ? `Proposed command: ${command}`
+        : "Proposed a cloud shell command";
+    }
     case "computer_read_file":
-      return "Read a cloud workspace file";
+      return `Read cloud file${here || " from the workspace"}`;
     case "computer_write_file":
-      return "Prepared a cloud file write";
+      // A proposal, not an execution — execution waits for chat approval.
+      return `Proposed writing${here || " a cloud file"}`;
     case "computer_list_files":
-      return "Listed cloud workspace files";
+      return `Listed cloud files${here || " in the workspace"}`;
   }
 }
 

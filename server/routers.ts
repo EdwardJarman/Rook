@@ -43,6 +43,7 @@ import {
   executeCloudCommand,
   isCloudComputerConfigured,
 } from "./integrations/cloud-computer";
+import { executeComputerReadTool } from "./integrations/cloud-tools";
 
 export const appRouter = router({
   system: systemRouter,
@@ -594,6 +595,47 @@ export const appRouter = router({
               ),
             })),
         ),
+      // Browse the Bot's own cloud workspace: list one directory.
+      browse: protectedProcedure
+        .input(
+          z.object({
+            botId: z.string().min(1).max(128),
+            path: z.string().max(500).default(""),
+          }),
+        )
+        .query(async ({ ctx, input }) => {
+          const outcome = (await executeComputerReadTool({
+            userId: ctx.user.id,
+            botId: input.botId,
+            name: "computer_list_files",
+            args: { path: input.path },
+          })) as {
+            entries?: Array<{
+              name: string;
+              path: string;
+              type: string;
+              size?: number;
+            }>;
+          };
+          return { entries: outcome.entries ?? [] };
+        }),
+      // Open one Bot workspace file for reading.
+      readFile: protectedProcedure
+        .input(
+          z.object({
+            botId: z.string().min(1).max(128),
+            path: z.string().min(1).max(500),
+          }),
+        )
+        .query(async ({ ctx, input }) => {
+          const outcome = (await executeComputerReadTool({
+            userId: ctx.user.id,
+            botId: input.botId,
+            name: "computer_read_file",
+            args: { path: input.path },
+          })) as { path?: string; content?: string };
+          return { path: outcome.path ?? input.path, content: outcome.content ?? "" };
+        }),
       // Generic completion poll for any computer command. Cloud commands are
       // executed here; local ones were already delivered to the device, so this
       // just reports the recorded state.

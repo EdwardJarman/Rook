@@ -70,13 +70,7 @@ import {
   type ChatMarkdownInline,
 } from "@/lib/chat-markdown";
 import { splitMathNotation } from "@/lib/math-notation";
-import {
-  assessRisk,
-  fileSizeLabel,
-  guessDeliverableTitle,
-  isDeliverableWorthy,
-  wordCount,
-} from "@/lib/workroom-helpers";
+import { assessRisk, fileSizeLabel } from "@/lib/workroom-helpers";
 import { useWorkroom, type Approval, type Bot, type WorkMessage } from "@/lib/workroom-store";
 
 /**
@@ -117,6 +111,7 @@ export default function ChatScreen() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [connectorsOpen, setConnectorsOpen] = useState(false);
+  const [filesOpen, setFilesOpen] = useState(false);
   const [excelAttached, setExcelAttached] = useState(false);
   const [githubAttached, setGithubAttached] = useState(false);
   const [pendingImages, setPendingImages] = useState<PastedImage[]>([]);
@@ -223,7 +218,7 @@ export default function ChatScreen() {
         botId: approval.botId,
         author: "bot",
         body,
-        kind: "result",
+        kind: "message",
         taskId: approval.taskId,
         conversationId: activeChatId,
       });
@@ -482,11 +477,7 @@ export default function ChatScreen() {
         author: "bot",
         conversationId: activeChatId,
         body: response.text,
-        kind: response.approvals.length
-          ? "approval"
-          : isDeliverableWorthy(response.text)
-            ? "result"
-            : "message",
+        kind: response.approvals.length ? "approval" : "message",
         trace: response.trace,
         taskId: task.id,
       });
@@ -731,6 +722,13 @@ export default function ChatScreen() {
             </Text>
           </View>
           <View style={{ flexDirection: "row", gap: 8 }}>
+            {activeBot ? (
+              <IconButton
+                icon="folder-open"
+                label={`Open ${activeBot.name}'s files`}
+                onPress={() => setFilesOpen(true)}
+              />
+            ) : null}
             <IconButton
               icon="person-outline"
               label="Open account and connected apps"
@@ -1253,31 +1251,6 @@ export default function ChatScreen() {
                           </View>
                         );
                       }
-                      if (message.kind === "result") {
-                        return (
-                          <DeliverableCard
-                            key={message.id}
-                            message={message}
-                            bot={source}
-                            onSave={() => {
-                              const title = guessDeliverableTitle(message.body);
-                              workroom.addFile({
-                                name: `${title}.md`,
-                                size: fileSizeLabel(message.body.length),
-                                scope: "Selected-Bot shared",
-                                owner: source?.name ?? "Rook",
-                              });
-                              workroom.addMessage({
-                                botId: message.botId,
-                                author: "system",
-                                conversationId: activeChatId,
-                                body: `Saved “${title}” to Library → Files.`,
-                                kind: "activity",
-                              });
-                            }}
-                          />
-                        );
-                      }
                       if (message.kind === "approval") {
                         return (
                           <View
@@ -1305,49 +1278,13 @@ export default function ChatScreen() {
                           </View>
                         );
                       }
+                      // Ordinary bot reply: plain text with the real activity trace.
                       return (
-                        <View
+                        <BotMessage
                           key={message.id}
-                          style={{
-                            flexDirection: "row",
-                            gap: 10,
-                            paddingRight: 20,
-                          }}
-                        >
-                          <View style={{ width: 28, alignItems: "center" }}>
-                            <Avatar
-                              label={source?.avatar ?? "?"}
-                              color={source?.color}
-                              icon={source?.icon}
-                              size={28}
-                            />
-                          </View>
-                          <View style={{ flex: 1, minWidth: 0 }}>
-                            {message.trace?.length && source ? (
-                              <AgentActivityTrace
-                                bot={source}
-                                trace={message.trace}
-                              />
-                            ) : null}
-                            <ChatMarkdown
-                              text={message.body}
-                              color={colors.text}
-                              baseSize={15}
-                            />
-                            {message.attachmentName ? (
-                              <FileChip name={message.attachmentName} />
-                            ) : null}
-                            <Text
-                              style={{
-                                color: colors.textFaint,
-                                fontSize: 10.5,
-                                marginTop: 5,
-                              }}
-                            >
-                              {message.createdAt}
-                            </Text>
-                          </View>
-                        </View>
+                          message={message}
+                          bot={source}
+                        />
                       );
                     })}
                     {replyMutation.isPending && activeBot ? (
@@ -1915,6 +1852,12 @@ export default function ChatScreen() {
         onCreated={(bot) => addBotToChat(bot.id)}
       />
 
+      <BotFilesSheet
+        visible={filesOpen}
+        onClose={() => setFilesOpen(false)}
+        bot={activeBot}
+      />
+
       {/* Group workroom: hand a task from the active Bot to another Bot in the room. */}
       <Sheet visible={handoffOpen} onClose={() => setHandoffOpen(false)}>
         <SheetEyebrow>Hand off</SheetEyebrow>
@@ -2204,37 +2147,11 @@ function renderInlineMarkdown(
   );
 }
 
-function DeliverableCard({
-  message,
-  bot,
-  onSave,
-}: {
-  message: WorkMessage;
-  bot?: Bot;
-  onSave: () => void;
-}) {
+/** Plain bot reply: text plus the real activity trace underneath. */
+function BotMessage({ message, bot }: { message: WorkMessage; bot?: Bot }) {
   const { colors } = useRookTheme();
-  const [saved, setSaved] = useState(false);
-  const title = useMemo(
-    () => guessDeliverableTitle(message.body),
-    [message.body],
-  );
-  const words = useMemo(() => wordCount(message.body), [message.body]);
-
-  const handleSave = () => {
-    if (saved) return;
-    onSave();
-    setSaved(true);
-  };
-
   return (
-    <View
-      style={{
-        flexDirection: "row",
-        gap: 10,
-        maxWidth: "100%",
-      }}
-    >
+    <View style={{ flexDirection: "row", gap: 10, paddingRight: 20 }}>
       <View style={{ width: 28, alignItems: "center" }}>
         <Avatar
           label={bot?.avatar ?? "?"}
@@ -2243,111 +2160,301 @@ function DeliverableCard({
           size={28}
         />
       </View>
-      <View
-        style={{
-          flex: 1,
-          minWidth: 0,
-          borderRadius: 18,
-          borderWidth: 1,
-          borderColor: colors.line,
-          backgroundColor: colors.surface,
-          overflow: "hidden",
-        }}
-      >
-        <View
-          style={{
-            flexDirection: "row",
-            alignItems: "flex-start",
-            gap: 10,
-            padding: 14,
-            paddingBottom: 10,
-          }}
+      <View style={{ flex: 1, minWidth: 0 }}>
+        {message.trace?.length && bot ? (
+          <AgentActivityTrace bot={bot} trace={message.trace} />
+        ) : null}
+        <ChatMarkdown text={message.body} color={colors.text} baseSize={15} />
+        {message.attachmentName ? (
+          <FileChip name={message.attachmentName} />
+        ) : null}
+        <Text
+          style={{ color: colors.textFaint, fontSize: 10.5, marginTop: 5 }}
         >
-          <View
-            style={{
-              width: 34,
-              height: 34,
-              borderRadius: 12,
-              alignItems: "center",
-              justifyContent: "center",
-              backgroundColor: tint(colors.accent, 0.12),
-            }}
-          >
-            <MaterialIcons name="description" size={17} color={colors.accent} />
-          </View>
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text
-              numberOfLines={2}
-              style={{
-                color: colors.text,
-                fontSize: 14.5,
-                fontWeight: "700",
-                letterSpacing: -0.2,
-              }}
-            >
-              {title}
-            </Text>
-            <Text
-              style={{
-                color: colors.textFaint,
-                fontSize: 11.5,
-                marginTop: 2,
-              }}
-            >
-              {words} words · Result
-            </Text>
-          </View>
-        </View>
-
-        <View
-          style={{
-            paddingHorizontal: 14,
-            paddingBottom: 12,
-          }}
-        >
-          <ChatMarkdown
-            text={message.body}
-            color={colors.text}
-            baseSize={13.5}
-          />
-        </View>
-
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={saved ? "Saved to Library" : "Save to Library"}
-          onPress={handleSave}
-          disabled={saved}
-          style={({ pressed }) => [
-            {
-              flexDirection: "row",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 7,
-              minHeight: 44,
-              borderTopWidth: 1,
-              borderTopColor: colors.line,
-              backgroundColor: colors.surfaceAlt,
-            },
-            pressed && !saved && { opacity: 0.72 },
-          ]}
-        >
-          <MaterialIcons
-            name={saved ? "check" : "save-alt"}
-            size={16}
-            color={saved ? colors.mint : colors.textSoft}
-          />
-          <Text
-            style={{
-              color: saved ? colors.mint : colors.textSoft,
-              fontSize: 13,
-              fontWeight: "700",
-            }}
-          >
-            {saved ? "Saved to Library" : "Save to Library"}
-          </Text>
-        </Pressable>
+          {message.createdAt}
+        </Text>
       </View>
     </View>
+  );
+}
+
+/** Right-side panel: the focused Bot's own files, browsable and openable. */
+function BotFilesSheet({
+  visible,
+  onClose,
+  bot,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  bot: Bot | null;
+}) {
+  const { colors } = useRookTheme();
+  const workroom = useWorkroom();
+  const [currentPath, setCurrentPath] = useState("");
+  const [history, setHistory] = useState<string[]>([]);
+  const [openedPath, setOpenedPath] = useState<string | null>(null);
+  const browseFiles = trpc.nodes.computer.browse.useQuery(
+    { botId: bot?.id ?? "", path: currentPath },
+    { enabled: visible && Boolean(bot), retry: 1 },
+  );
+  const openedFile = trpc.nodes.computer.readFile.useQuery(
+    { botId: bot?.id ?? "", path: openedPath ?? "" },
+    { enabled: visible && Boolean(bot) && Boolean(openedPath), retry: 1 },
+  );
+
+  const botFiles = bot
+    ? workroom.files.filter((file) => file.owner === bot.name)
+    : [];
+  const botMessages = bot
+    ? workroom.messages.filter((message) => message.botId === bot.id)
+    : [];
+
+  useEffect(() => {
+    if (visible) {
+      setCurrentPath("");
+      setHistory([]);
+      setOpenedPath(null);
+    }
+  }, [visible, bot?.id]);
+
+  const openPath = (path: string) => {
+    setHistory((current) => [...current, currentPath]);
+    setCurrentPath(path);
+    setOpenedPath(null);
+  };
+
+  const goBack = () => {
+    setHistory((current) => {
+      const previous = current[current.length - 1] ?? "";
+      setCurrentPath(previous);
+      setOpenedPath(null);
+      return current.slice(0, -1);
+    });
+  };
+
+  const entries = Array.isArray(
+    (browseFiles.data as { entries?: unknown } | undefined)?.entries,
+  )
+    ? ((browseFiles.data as { entries: Array<{ name: string; path: string; type: string; size?: number }> }).entries)
+    : [];
+
+  return (
+    <Sheet visible={visible} onClose={onClose}>
+      <SheetEyebrow>{bot ? `${bot.name}'s files` : "Files"}</SheetEyebrow>
+      <Text
+        style={{
+          color: colors.text,
+          fontSize: 20,
+          lineHeight: 26,
+          fontWeight: "700",
+          letterSpacing: -0.4,
+        }}
+      >
+        {bot ? `${bot.name}'s workspace` : "Workspace files"}
+      </Text>
+      <Text
+        style={{
+          color: colors.textSoft,
+          fontSize: 13,
+          lineHeight: 18,
+          marginTop: 6,
+          marginBottom: 14,
+        }}
+      >
+        {bot
+          ? `Everything ${bot.name} has made or attached lives here.`
+          : "Open a Bot to see its files."}
+      </Text>
+      {history.length ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Go back one folder"
+          onPress={goBack}
+          style={{ alignSelf: "flex-start", paddingVertical: 6 }}
+        >
+          <Text style={{ color: colors.accent, fontSize: 13, fontWeight: "700" }}>
+            ‹ {currentPath || "Workspace"}
+          </Text>
+        </Pressable>
+      ) : null}
+      {browseFiles.isPending ? (
+        <Text style={{ color: colors.textFaint, fontSize: 13, marginTop: 8 }}>
+          Opening files…
+        </Text>
+      ) : null}
+      {browseFiles.isError ? (
+        <View style={{ gap: 8, marginTop: 8 }}>
+          <Text style={{ color: colors.coral, fontSize: 13 }}>
+            Rook could not open these files.
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Try loading files again"
+            onPress={() => void browseFiles.refetch()}
+          >
+            <Text
+              style={{ color: colors.accent, fontSize: 13, fontWeight: "700" }}
+            >
+              Try again
+            </Text>
+          </Pressable>
+        </View>
+      ) : null}
+      {browseFiles.data ? (
+        <ScrollView style={{ maxHeight: 320 }} showsVerticalScrollIndicator={false}>
+          <View style={{ gap: 6 }}>
+            {entries.map((entry) => (
+              <Pressable
+                key={entry.path}
+                accessibilityRole="button"
+                accessibilityLabel={`Open ${entry.name}`}
+                onPress={() =>
+                  entry.type === "dir"
+                    ? openPath(entry.path)
+                    : setOpenedPath(entry.path)
+                }
+                style={({ pressed }) => [
+                  {
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 10,
+                    minHeight: 46,
+                    borderRadius: 13,
+                    borderWidth: 1,
+                    borderColor: colors.line,
+                    paddingHorizontal: 12,
+                    backgroundColor: colors.surfaceAlt,
+                  },
+                  pressed && { opacity: 0.72 },
+                ]}
+              >
+                <MaterialIcons
+                  name={entry.type === "dir" ? "folder" : "description"}
+                  size={17}
+                  color={colors.textSoft}
+                />
+                <Text
+                  numberOfLines={1}
+                  style={{
+                    color: colors.text,
+                    fontSize: 13.5,
+                    fontWeight: "600",
+                    flex: 1,
+                  }}
+                >
+                  {entry.name}
+                </Text>
+                <MaterialIcons
+                  name="chevron-right"
+                  size={17}
+                  color={colors.textFaint}
+                />
+              </Pressable>
+            ))}
+            {entries.length === 0 && botFiles.length === 0 ? (
+              <Text style={{ color: colors.textFaint, fontSize: 13 }}>
+                Nothing here yet — ask {bot?.name ?? "this Bot"} to make
+                something.
+              </Text>
+            ) : null}
+            {botFiles.map((file) => (
+              <View
+                key={file.id}
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 10,
+                  minHeight: 46,
+                  borderRadius: 13,
+                  borderWidth: 1,
+                  borderColor: colors.line,
+                  paddingHorizontal: 12,
+                }}
+              >
+                <MaterialIcons
+                  name="attach-file"
+                  size={16}
+                  color={colors.textFaint}
+                />
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text
+                    numberOfLines={1}
+                    style={{
+                      color: colors.text,
+                      fontSize: 13,
+                      fontWeight: "600",
+                    }}
+                  >
+                    {file.name}
+                  </Text>
+                  <Text style={{ color: colors.textFaint, fontSize: 11 }}>
+                    {file.size} · {file.scope}
+                  </Text>
+                </View>
+              </View>
+            ))}
+          </View>
+          {openedPath ? (
+            <View
+              style={{
+                marginTop: 12,
+                borderRadius: 14,
+                borderWidth: 1,
+                borderColor: colors.line,
+                backgroundColor: colors.surfaceAlt,
+                padding: 12,
+                maxHeight: 280,
+              }}
+            >
+              <Text
+                style={{
+                  color: colors.text,
+                  fontSize: 13,
+                  fontWeight: "700",
+                  marginBottom: 6,
+                }}
+              >
+                {openedPath}
+              </Text>
+              {openedFile.isPending ? (
+                <Text style={{ color: colors.textFaint, fontSize: 12.5 }}>
+                  Opening…
+                </Text>
+              ) : openedFile.isError ? (
+                <Text style={{ color: colors.coral, fontSize: 12.5 }}>
+                  Rook could not open this file.
+                </Text>
+              ) : (
+                <ScrollView showsVerticalScrollIndicator={false}>
+                  <Text
+                    style={{
+                      color: colors.textSoft,
+                      fontSize: 12.5,
+                      lineHeight: 18,
+                    }}
+                  >
+                    {String(
+                      (openedFile.data as { content?: string } | undefined)
+                        ?.content ?? "",
+                    ).slice(0, 8000)}
+                  </Text>
+                </ScrollView>
+              )}
+            </View>
+          ) : null}
+          {botMessages.filter((message) => message.attachmentName).length >
+          0 ? (
+            <Text style={{ color: colors.textFaint, fontSize: 11.5, marginTop: 10 }}>
+              Attached in chat:{" "}
+              {botMessages
+                .filter((message) => message.attachmentName)
+                .map((message) => message.attachmentName)
+                .join(", ")}
+            </Text>
+          ) : null}
+        </ScrollView>
+      ) : null}
+    </Sheet>
   );
 }
 
