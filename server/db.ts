@@ -14,6 +14,7 @@ import {
   generatePairingToken,
   hashToken,
   secretsMatch,
+  cloudNodeId,
 } from "../shared/node-relay";
 import schema from "../instant.schema";
 import type {
@@ -799,8 +800,10 @@ export async function upsertGithubConnection(input: InsertGithubConnection) {
   const database = await requireDb();
   const now = new Date();
   await database.transact(
+    // The lookup key (userId) must not be re-set inside the payload: InstantDB
+    // rejects a lookup-update that writes the lookup attribute when the entity
+    // does not exist yet, which is exactly the first-connect case.
     database.tx.githubConnections.lookup("userId", input.userId).update({
-      userId: input.userId,
       githubUserId: input.githubUserId,
       login: input.login,
       displayName: input.displayName ?? undefined,
@@ -1538,6 +1541,14 @@ export async function listRookNodesForUser(
     );
 }
 
+/** First node currently reporting online, used by computer-target routing. */
+export async function getOnlineRookNode(
+  userId: string,
+): Promise<RookNodeRecord | undefined> {
+  const nodes = await listRookNodesForUser(userId);
+  return nodes.find((node) => node.status === "online");
+}
+
 export async function revokeRookNode(
   userId: string,
   nodeId: string,
@@ -1636,6 +1647,92 @@ export async function enqueueNodeCommand(input: {
     createdAt: now,
     updatedAt: now,
   };
+}
+
+/**
+ * Enqueues a command for the account's cloud computer. Same durable envelope
+ * and approval lifecycle as local node commands, but no paired node row is
+ * required — the server itself executes these via the cloud sandbox.
+ */
+export async function enqueueCloudCommand(input: {
+  commandId: string;
+  userId: string;
+  summary: string;
+  capability: string;
+  envelope: Record<string, unknown>;
+  requiresApproval: boolean;
+}): Promise<NodeCommandRecord | undefined> {
+  const database = await requireDb();
+  const now = new Date();
+  await database.transact(
+    database.tx.nodeCommands[id()].update({
+      commandId: input.commandId,
+      userId: input.userId,
+      nodeId: cloudNodeId(input.userId),
+      state: input.requiresApproval ? "awaiting_approval" : "pending",
+      summary: input.summary.slice(0, 300),
+      capability: input.capability.slice(0, 40),
+      envelope: input.envelope,
+      expiresAt: new Date(now.getTime() + COMMAND_TTL_MS),
+      createdAt: now,
+      updatedAt: now,
+    }),
+  );
+  return {
+    id: input.commandId,
+    commandId: input.commandId,
+    userId: input.userId,
+    nodeId: cloudNodeId(input.userId),
+    state: input.requiresApproval ? "awaiting_approval" : "pending",
+    summary: input.summary.slice(0, 300),
+    capability: input.capability.slice(0, 40),
+    envelope: input.envelope,
+    expiresAt: new Date(now.getTime() + COMMAND_TTL_MS),
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+/**
+ * Claims one approved cloud command for execution (pending -> delivered) and
+ * returns its envelope. The server is the only claimant for cloud commands.
+ */
+export async function claimNextCloudCommand(
+  commandId: string,
+): Promise<{ commandId: string; envelope: Record<string, unknown> } | undefined> {
+  const database = await getDb();
+  if (!database) return undefined;
+  const { nodeCommands } = await database.query({
+    nodeCommands: { $: { where: { commandId }, limit: 1 } },
+  });
+  const row = nodeCommands[0] as unknown as
+    (Record<string, unknown> & { id: string }) | undefined;
+  if (!row) return undefined;
+  if (textValue(row, "nodeId") !== cloudNodeId(textValue(row, "userId")))
+    return undefined;
+  if (textValue(row, "state") !== "pending") return undefined;
+  if (asDateValue(row.expiresAt).getTime() <= Date.now()) return undefined;
+  await database.transact(
+    database.tx.nodeCommands[row.id].update({
+      state: "delivered",
+      updatedAt: new Date(),
+    }),
+  );
+  return { commandId: textValue(row, "commandId"), envelope: record(row.envelope) };
+}
+
+/** Reads one command record (used by the cloud poll path). */
+export async function getNodeCommandById(
+  commandId: string,
+): Promise<NodeCommandRecord | undefined> {
+  const database = await getDb();
+  if (!database) return undefined;
+  const { nodeCommands } = await database.query({
+    nodeCommands: { $: { where: { commandId }, limit: 1 } },
+  });
+  const raw = nodeCommands[0] as unknown as
+    (Record<string, unknown> & { id: string }) | undefined;
+  return raw ? existingNodeCommand(raw) : undefined;
 }
 
 /**

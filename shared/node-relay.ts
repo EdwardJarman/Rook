@@ -224,7 +224,23 @@ export const RELAY_SENSITIVE_CAPABILITIES: readonly string[] = [
   "delete",
   "security",
   "irreversible",
+  // Cloud-computer shell commands run arbitrary code, so they are sensitive.
+  "shell",
 ];
+
+/**
+ * Cloud-computer node id: the per-user "virtual node" that the server itself
+ * executes. Embeds the user id so command queues can never cross accounts.
+ */
+const CLOUD_NODE_PREFIX = "cloud-";
+
+export function cloudNodeId(userId: string): string {
+  return `${CLOUD_NODE_PREFIX}${userId}`;
+}
+
+export function isCloudNodeId(nodeId: string): boolean {
+  return nodeId.startsWith(CLOUD_NODE_PREFIX);
+}
 
 /**
  * Builds a version-1 CommandEnvelope for relay delivery. `seq` is owned by

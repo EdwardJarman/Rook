@@ -59,7 +59,7 @@ describe("chat experience refinements", () => {
     expect(avatar).not.toContain("materialGlyphMap");
   });
 
-  it("records and renders only user-safe response activity", () => {
+  it("records and renders only real response activity", () => {
     expect(agent).toContain("shouldSearchPublicWeb(input.message)");
     expect(agent).toContain("await searchPublicWeb(publicSearchQuery)");
     expect(agent).toContain("trace,");
@@ -70,9 +70,14 @@ describe("chat experience refinements", () => {
     );
     expect(systemPrompt).toContain("Your computer (Rook Node");
     expect(chatScreen).toContain("<AgentActivityTrace");
-    expect(workingIndicator).toContain("Reading your request");
+    expect(chatScreen).not.toContain("Save to Library");
+    expect(chatScreen).toContain("<BotFilesSheet");
+    expect(chatScreen).toContain("nodes.computer.browse");
+    expect(chatScreen).toContain("nodes.computer.readFile");
+    expect(workingIndicator).toContain("Thinking through a plan");
     expect(agent).toContain("Public search result");
     expect(activityTrace).toContain("Linking.openURL");
+    expect(activityTrace).toContain("isBoilerplate");
   });
 
   it("uses a compact rounded model dialog without dropping the provider model list", () => {

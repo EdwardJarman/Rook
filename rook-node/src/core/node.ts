@@ -16,10 +16,11 @@ import { ApprovalManager } from "../control/approvals.js";
 import { FileBroker } from "../files/broker.js";
 import { ChromiumRuntime } from "../runtime/chromium.js";
 import { executeAction } from "../control/executor.js";
+import { executeShellAction } from "../control/shell-executor.js";
 import { CommandValidator, type DeviceBinding } from "../control/protocol.js";
 import { evaluateUrlWithDns } from "../security/network-policy.js";
 import type { Capability, CommandEnvelope, CommandRejectCode, CommandResult, LeaseRecord, NodeHealth, TabRecord, TypedAction } from "../types.js";
-import { allowsCapability, SENSITIVE_CAPABILITIES } from "../types.js";
+import { allowsCapability, isPagelessAction, SENSITIVE_CAPABILITIES } from "../types.js";
 
 export class RookNode {
   readonly db: RookDatabase;
@@ -104,6 +105,18 @@ export class RookNode {
 
   private async runAction(command: CommandEnvelope): Promise<unknown> {
     const needsApproval = SENSITIVE_CAPABILITIES.has(command.capability);
+
+    // Pageless actions (shell + workspace files) run on the node itself.
+    if (isPagelessAction(command.action)) {
+      const result = await executeShellAction(
+        this.config,
+        command.botId,
+        command.action as Parameters<typeof executeShellAction>[2],
+      );
+      if (needsApproval && command.approval) this.approvals.consumeNonce(command.approval);
+      this.runtime.checkpoint(this.db);
+      return result;
+    }
 
     // Tab lifecycle actions mutate the registry, not a single page.
     if (command.action.type === "newTab") return this.openTabForCommand(command);

@@ -1,7 +1,7 @@
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import * as Linking from "expo-linking";
 import * as WebBrowser from "expo-web-browser";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Platform,
@@ -14,6 +14,7 @@ import {
 } from "react-native";
 
 import { Card, StatusPill } from "@/components/rook-primitives";
+import { getApiBaseUrl } from "@/constants/oauth";
 import { rookAlert, rookConfirm } from "@/lib/rook-alert";
 import { trpc } from "@/lib/trpc";
 import { tint, useRookTheme } from "@/lib/ui";
@@ -28,6 +29,7 @@ export function GithubConnectionCard() {
   const selectRepo = trpc.github.selectRepo.useMutation();
   const unselectRepo = trpc.github.unselectRepo.useMutation();
   const [browserOpen, setBrowserOpen] = useState(false);
+  const [pendingConnect, setPendingConnect] = useState(false);
   const [search, setSearch] = useState("");
 
   const repos = trpc.github.repos.useQuery(undefined, {
@@ -42,6 +44,9 @@ export function GithubConnectionCard() {
     return Linking.createURL("/account");
   }, []);
 
+  const connected = status.data?.connected === true;
+  const needsReauthorization = status.data?.needsReauthorization === true;
+
   const refresh = async () => {
     await Promise.all([
       utils.github.status.invalidate(),
@@ -49,8 +54,59 @@ export function GithubConnectionCard() {
     ]);
   };
 
+  // Returning from the OAuth redirect must land the user straight in the repo
+  // picker. Web reloads the page, so component state is lost — the callback
+  // result in the query string is the only surviving signal.
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const result = params.get("github");
+    if (!result) return;
+    if (result === "connected") setBrowserOpen(true);
+    if (result === "error") {
+      const reason = params.get("reason");
+      rookAlert(
+        "GitHub connection failed",
+        reason
+          ? `Rook reached GitHub but could not save the connection. The server said: ${reason}`
+          : "Rook reached GitHub but could not save the connection. Please try Connect GitHub again — if it keeps failing, the deployment may be missing environment variables.",
+      );
+    }
+    if (result === "cancelled")
+      rookAlert(
+        "GitHub not connected",
+        "The GitHub authorization was cancelled, so Rook has no connection saved.",
+      );
+    if (result === "invalid")
+      rookAlert(
+        "GitHub link expired",
+        "The GitHub connection request expired before it finished. Please press Connect GitHub and try again.",
+      );
+    window.history.replaceState(null, "", window.location.pathname);
+  }, []);
+
+  // Native browsers/webviews keep the app mounted, so a fresh connect is
+  // observable here: open the picker the moment the connection lands.
+  useEffect(() => {
+    if (!pendingConnect) return;
+    if (status.isLoading) return;
+    if (connected) {
+      setBrowserOpen(true);
+      setPendingConnect(false);
+    } else if (needsReauthorization || !status.data?.configured) {
+      setPendingConnect(false);
+    }
+  }, [
+    pendingConnect,
+    connected,
+    needsReauthorization,
+    status.isLoading,
+    status.data?.configured,
+  ]);
+
   const connectGithub = async () => {
     try {
+      setPendingConnect(true);
       const url = await authorize.mutateAsync({ returnTo });
       if (Platform.OS === "web") {
         window.location.assign(url);
@@ -59,6 +115,7 @@ export function GithubConnectionCard() {
       await WebBrowser.openAuthSessionAsync(url, returnTo);
       await refresh();
     } catch (error) {
+      setPendingConnect(false);
       rookAlert(
         "GitHub unavailable",
         error instanceof Error
@@ -109,8 +166,17 @@ export function GithubConnectionCard() {
       );
   };
 
-  const connected = status.data?.connected === true;
-  const needsReauthorization = status.data?.needsReauthorization === true;
+  // Local dev talks to localhost: explain .env.local + restart. Hosted
+  // deployments need new env vars + a redeploy instead.
+  // (connected/needsReauthorization are declared once above.)
+  const localApi = /localhost|127\.0\.0\.1/i.test(getApiBaseUrl());
+  const setupHint = status.data?.missingEnv?.length
+    ? `Setup needed on this deployment: missing ${status.data.missingEnv.join(", ")}. ${
+        localApi
+          ? "Add them to .env.local and restart the API server."
+          : "Add them to the host environment, then redeploy — hosts only apply new variables to new deployments."
+      }`
+    : "Setup needed on this deployment: add GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET.";
   const selected = status.data?.selectedRepos ?? [];
   const term = search.trim().toLowerCase();
   const candidateRepos = (repos.data ?? []).filter(
@@ -417,9 +483,7 @@ export function GithubConnectionCard() {
           </Pressable>
           {!status.data?.configured ? (
             <Text style={[styles.browserNote, { color: colors.textFaint }]}>
-              {status.data?.missingEnv?.length
-                ? `Setup needed on this deployment: missing ${status.data.missingEnv.join(", ")}. Redeploy after adding them — Vercel only applies new env vars to new deployments.`
-                : "Setup needed on this deployment: add GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET."}
+              {setupHint}
             </Text>
           ) : null}
         </>

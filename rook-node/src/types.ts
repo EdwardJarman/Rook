@@ -41,7 +41,10 @@ export type Capability =
   | "purchase"
   | "delete"
   | "security"
-  | "irreversible";
+  | "irreversible"
+  | "shell"
+  | "files-read"
+  | "files-write";
 
 /** Sensitive actions that require an explicit approval bound to the action. */
 export const SENSITIVE_CAPABILITIES: ReadonlySet<Capability> = new Set<Capability>([
@@ -53,6 +56,9 @@ export const SENSITIVE_CAPABILITIES: ReadonlySet<Capability> = new Set<Capabilit
   "delete",
   "security",
   "irreversible",
+  // Shell commands run arbitrary code on this machine; file writes mutate it.
+  "shell",
+  "files-write",
 ]);
 
 /** Typed browser actions understood by the executor. No arbitrary eval. */
@@ -77,7 +83,26 @@ export type TypedAction =
   | { type: "closeTab"; pageId?: string }
   | { type: "back" }
   | { type: "forward" }
-  | { type: "reload" };
+  | { type: "reload" }
+  // Pageless actions: shell and file operations on the node's workspace.
+  // They carry no page binding; `pageId` in the envelope is a unique virtual
+  // page per command so replay protection still applies per (device, bot, page).
+  | { type: "runCommand"; command: string; cwd?: string }
+  | { type: "readFile"; path: string }
+  | { type: "writeFile"; path: string; content: string }
+  | { type: "listFiles"; path?: string };
+
+/** Actions that do not operate on a browser tab. */
+const PAGELESS_ACTIONS = new Set<string>([
+  "runCommand",
+  "readFile",
+  "writeFile",
+  "listFiles",
+]);
+
+export function isPagelessAction(action: TypedAction): boolean {
+  return PAGELESS_ACTIONS.has(action.type);
+}
 
 /** Default capability a planner should claim for an action. */
 export function capabilityForAction(action: TypedAction): Capability {
@@ -108,6 +133,13 @@ export function capabilityForAction(action: TypedAction): Capability {
     case "press":
     case "select":
       return "form";
+    case "runCommand":
+      return "shell";
+    case "readFile":
+    case "listFiles":
+      return "files-read";
+    case "writeFile":
+      return "files-write";
   }
 }
 

@@ -46,6 +46,8 @@ import {
   COMPUTER_TOOLS,
   type ComputerProposal,
 } from "./computer-tools";
+import { CLOUD_TOOLS } from "./cloud-tools";
+import { isCloudComputerConfigured } from "./cloud-computer";
 import { executeAgentTool, orderToolset } from "./agent-tool-executor";
 import {
   isMicrosoftExcelConfigured,
@@ -55,11 +57,14 @@ import {
 import { searchPublicWeb } from "./web-research";
 import type { AgentTraceStep } from "../../shared/agent-trace";
 
+
 export type ExcelAgentApproval = {
   actionId: string;
   title: string;
   detail: string;
   risk: "Medium";
+  /** Which approval resolver owns this proposal (excel vs local vs cloud). */
+  kind?: "excel" | "local" | "cloud";
 };
 
 export function agentClockContext(
@@ -251,6 +256,9 @@ export async function prepareAgentTurn(
     // Computer tools are always offered: computer_status is read-only and
     // safe with no pairing, and proposals never execute without the user.
     computer: COMPUTER_TOOLS,
+    // Cloud computer tools when the free sandbox is configured: reads run
+    // immediately, run/write are approval-gated proposals like the rest.
+    cloud: isCloudComputerConfigured() ? CLOUD_TOOLS : [],
     skills: registrySkills.length ? SKILL_TOOLS : [],
   });
   const tools = toolset.length ? toolset : undefined;
@@ -261,7 +269,7 @@ export async function prepareAgentTurn(
         connection.accounts.length > 1
           ? ` The user has ${connection.accounts.length} Microsoft accounts connected (${connection.accounts.map((account) => account.email || account.displayName || account.accountId).join(", ")}). Tools default to the primary account; pass account_id when the user names a different one.`
           : ""
-      } Use the Excel tools whenever the user asks about a workbook. Never guess workbook, worksheet, range, table, value, or formula data: inspect it with tools. Read tools may run immediately. Every write tool is only a proposal and is never executed until the user approves it in Rook Updates. Prepare no more than one write action per turn unless the user explicitly requests a batch.`
+      } Use the Excel tools whenever the user asks about a workbook. Never guess workbook, worksheet, range, table, value, or formula data: inspect it with tools. Read tools may run immediately. Every write tool is only a proposal and is never executed until the user approves it right in the chat. Prepare no more than one write action per turn unless the user explicitly requests a batch.`
     : connection.needsReauthorization
       ? "Microsoft Excel needs to be reconnected. Tell the user to open Account → Microsoft Excel and reconnect it if this request needs workbook access."
       : connection.configured
@@ -276,6 +284,9 @@ export async function prepareAgentTurn(
       : github.configured
         ? "GitHub is available but not connected for this user. Tell them to open Account → GitHub and connect it if this request needs repository access."
         : "GitHub is not configured for this deployment. Do not claim repository access.";
+  const cloudNote = isCloudComputerConfigured()
+    ? "\n\nThe computer is available. Rook routes computer work to the user's own device (Rook Node) whenever it is online, and falls back to the free Rook Cloud sandbox (a Linux environment with a workspace) when it is not. computer_run_command and computer_write_file are proposals — they never execute until the user approves them right in the chat. computer_read_file and computer_list_files run immediately. Use the computer whenever the user asks you to run code, build or transform something, or work with files; keep commands small and self-contained and capture output with the command itself."
+    : "";
 
   const publicSearchQuery = shouldSearchPublicWeb(input.message)
     ? input.message.replace(/\s+/g, " ").trim()
@@ -356,7 +367,7 @@ export async function prepareAgentTurn(
     clockTimeZone: clock.timeZone,
     clockIso: clock.iso,
     capabilities: {
-      computer: computer.block,
+      computer: `${computer.block}${cloudNote}`,
       excel: connectionNote,
       github: githubNote,
       web: "Public web search runs automatically when the question needs fresh external facts (news, prices, versions, docs). Results arrive as snippets with source titles — never claim you opened a page unless a tool confirms it.",
@@ -559,16 +570,16 @@ export async function runRookAgent(input: RookAgentInput) {
       const text =
         (clean ||
           (approvals.length
-            ? "I prepared the Excel change and paused for your approval in Updates."
+            ? "I've prepared it for your approval - confirm it right here in this chat."
             : computerProposals.length
-              ? "I proposed a computer task below — review it in Updates, then run it from the Computer panel."
+              ? "I proposed a computer task below - approve it right here in this chat, then run it from the Computer panel."
               : "")) + truncatedNote;
       const finalText =
         text.trim() ||
         (approvals.length
-          ? "I prepared the Excel change and paused for your approval in Updates."
+          ? "I've prepared it for your approval - confirm it right here in this chat."
           : computerProposals.length
-            ? "I proposed a computer task below — review it in Updates, then run it from the Computer panel."
+            ? "I proposed a computer task below - approve it right here in this chat, then run it from the Computer panel."
             : friendlyAgentError(new Error("empty reply")));
       if (continuationsUsed > 0) {
         trace.push({
@@ -651,9 +662,12 @@ export async function runRookAgent(input: RookAgentInput) {
         trace.push(executed.traceStep);
         rendered = toolResultText(executed.resultPayload);
       } catch (error) {
+        const failure =
+          error instanceof Error ? error.message : "Connected tool failed";
         trace.push({
           kind: "tool",
-          title: "A connected-tool step could not be completed",
+          title: `Could not finish: ${name.replace(/_/g, " ")}`,
+          detail: failure,
         });
         rendered = toolResultText({
           status: "error",
@@ -692,9 +706,9 @@ export async function runRookAgent(input: RookAgentInput) {
   emitTelemetry();
   return {
     text: approvals.length
-      ? "I prepared the Excel change and paused for your approval in Updates."
+      ? "I've prepared it for your approval - confirm it right here in this chat."
       : computerProposals.length
-        ? "I proposed a computer task below — review it in Updates, then run it from the Computer panel."
+        ? "I proposed a computer task below - approve it right here in this chat, then run it from the Computer panel."
         : "I reached the tool limit for this turn. Try asking for a smaller range or one operation at a time.",
     files: [],
     model: resolvedModel,

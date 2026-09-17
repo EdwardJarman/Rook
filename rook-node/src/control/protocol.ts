@@ -19,7 +19,10 @@ import type {
   CommandResult,
   TypedAction,
 } from "../types.js";
-import { SENSITIVE_CAPABILITIES } from "../types.js";
+import {
+  isPagelessAction,
+  SENSITIVE_CAPABILITIES,
+} from "../types.js";
 import { allowsCapability, capabilityForAction, COMMAND_SKEW_MS } from "../types.js";
 import type { RookDatabase } from "../state/database.js";
 
@@ -45,6 +48,14 @@ const ACTION_KEYS = new Set([
   "type", "goto", "click", "clickAt", "press", "select", "scrollTo", "scrollBy",
   "drag", "hover", "readUrl", "readTitle", "readText", "readAttribute", "screenshot",
   "newTab", "switchTab", "closeTab", "back", "forward", "reload",
+  "runCommand", "readFile", "writeFile", "listFiles",
+]);
+
+const PAGELESS_ACTION_TYPES = new Set<string>([
+  "runCommand",
+  "readFile",
+  "writeFile",
+  "listFiles",
 ]);
 
 export class CommandValidator {
@@ -72,8 +83,11 @@ export class CommandValidator {
 
     // Page revision
     // newTab is allowed to carry a placeholder page: the tab cannot exist
-    // before the command that creates it.
-    if (command.action.type !== "newTab") {
+    // before the command that creates it. Pageless actions (shell + workspace
+    // files) never touch a tab, so they carry a unique virtual page instead.
+    const rawAction = command.action as { type?: string };
+    const pageless = typeof rawAction?.type === "string" && PAGELESS_ACTION_TYPES.has(rawAction.type);
+    if (!pageless && command.action.type !== "newTab") {
       const revision = this.deps.tabRevision(command.pageId);
       if (revision === undefined) return { ok: false, code: "REVISION", message: "Unknown page" };
       if (command.pageRevision !== revision) return { ok: false, code: "REVISION", message: "Page changed since command was prepared" };

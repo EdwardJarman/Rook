@@ -26,6 +26,16 @@ import {
   type ComputerToolName,
 } from "./computer-tools";
 import {
+  CLOUD_SENSITIVE_TOOL_NAMES,
+  CLOUD_TOOLS,
+  CLOUD_TOOL_NAMES,
+  cloudTraceTitle,
+  executeComputerReadTool as executeCloudReadTool,
+  parseCloudToolArguments,
+  prepareComputerCommandProposal,
+  type CloudToolName,
+} from "./cloud-tools";
+import {
   executeGithubReadTool,
   GITHUB_TOOL_NAMES,
   GITHUB_TOOLS,
@@ -75,6 +85,10 @@ export const TOOL_RISK = {
   github_read_file: "read-only",
   computer_status: "read-only",
   computer_propose_task: "approval-gated",
+  computer_read_file: "read-only",
+  computer_list_files: "read-only",
+  computer_run_command: "approval-gated",
+  computer_write_file: "approval-gated",
   read_skill: "read-only",
 } as const satisfies Record<string, "read-only" | "approval-gated">;
 
@@ -86,24 +100,33 @@ export function allOfferedToolNames(): string[] {
     ...EXCEL_TOOLS.map((tool) => tool.function.name),
     ...GITHUB_TOOLS.map((tool) => tool.function.name),
     ...COMPUTER_TOOLS.map((tool) => tool.function.name),
+    ...CLOUD_TOOLS.map((tool) => tool.function.name),
     ...SKILL_TOOLS.map((tool) => tool.function.name),
   ];
 }
 
 /**
- * FROZEN tool-family order: Excel → GitHub → computer → skills. Provider
- * prefix-caches key on exact tool-list bytes (OpenAI's own Codex outage
- * was an unsorted tool list), so existing families must never move
+ * FROZEN tool-family order: Excel → GitHub → computer → cloud → skills.
+ * Provider prefix-caches key on exact tool-list bytes (OpenAI's own Codex
+ * outage was an unsorted tool list), so existing families must never move
  * opportunistically — pinned by test. New families append last only,
- * deliberately, with a cache-bust note: skills appended 2026-09-16.
+ * deliberately, with a cache-bust note: skills appended for the skills
+ * loop; cloud appended merging origin/main's cloud computer.
  */
 export function orderToolset(input: {
   excel: Tool[];
   github: Tool[];
   computer: Tool[];
+  cloud?: Tool[];
   skills?: Tool[];
 }): Tool[] {
-  return [...input.excel, ...input.github, ...input.computer, ...(input.skills ?? [])];
+  return [
+    ...input.excel,
+    ...input.github,
+    ...input.computer,
+    ...(input.cloud ?? []),
+    ...(input.skills ?? []),
+  ];
 }
 
 /**
@@ -299,6 +322,63 @@ export async function executeAgentTool(input: {
           executeExcelReadTool(userId, excelTool, args),
           20_000,
           `Excel tool ${excelTool}`,
+        ),
+      },
+    };
+  }
+
+  if (CLOUD_TOOL_NAMES.has(name)) {
+    const cloudTool = name as CloudToolName;
+    const args = parseCloudToolArguments(cloudTool, rawArgs);
+    const argRecord = args as Record<string, unknown>;
+    if (CLOUD_SENSITIVE_TOOL_NAMES.has(cloudTool)) {
+      if (input.computerProposals.length >= 1) {
+        return {
+          traceStep: step(cloudTraceTitle(cloudTool, argRecord)),
+          resultPayload: {
+            status: "not_prepared",
+            message:
+              "One computer action is already waiting for approval in this turn. Wait for the user to approve it before proposing another.",
+          },
+        };
+      }
+      const proposal = await prepareComputerCommandProposal({
+        userId: input.userId,
+        botId: input.botId,
+        name: cloudTool as "computer_run_command" | "computer_write_file",
+        args: args as { command?: string; cwd?: string; path?: string; content?: string },
+      });
+      input.computerProposals.push({
+        proposalId: proposal.commandId,
+        title: proposal.summary,
+        detail:
+          proposal.target === "local"
+            ? "Runs on your computer once approved"
+            : "Runs in the cloud sandbox once approved",
+      });
+      return {
+        traceStep: step(cloudTraceTitle(cloudTool, argRecord), proposal.summary),
+        resultPayload: {
+          status: "approval_required",
+          command_id: proposal.commandId,
+          summary: proposal.summary,
+          target: proposal.target,
+        },
+      };
+    }
+    return {
+      traceStep: step(cloudTraceTitle(cloudTool, argRecord)),
+      resultPayload: {
+        status: "completed",
+        result: await withToolTimeout(
+          executeCloudReadTool({
+            userId: input.userId,
+            botId: input.botId,
+            name: cloudTool as "computer_read_file" | "computer_list_files",
+            args: argRecord,
+          }),
+          20_000,
+          `Cloud tool ${cloudTool}`,
         ),
       },
     };

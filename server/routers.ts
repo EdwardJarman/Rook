@@ -4,6 +4,7 @@ import { normalizeWorkroomSnapshot } from "../shared/workroom-snapshot";
 import {
   buildCommandEnvelope,
   generateCommandId,
+  isCloudNodeId,
   isSensitiveCapability,
 } from "../shared/node-relay";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
@@ -39,6 +40,13 @@ import {
   setPrimaryMicrosoftAccount,
 } from "./integrations/microsoft-excel";
 import { sendExpoPushAlert } from "./push-alerts";
+import {
+  buildCloudCommandEnvelope,
+  cloudMissingEnvVars,
+  executeCloudCommand,
+  isCloudComputerConfigured,
+} from "./integrations/cloud-computer";
+import { executeComputerReadTool } from "./integrations/cloud-tools";
 
 export const appRouter = router({
   system: systemRouter,
@@ -151,7 +159,7 @@ export const appRouter = router({
                     : `${input.botName} proposed a computer task`
                   : `${input.botName} completed a task`,
                 body: result.text.slice(0, 170),
-                url: needsApproval ? "/activity" : "/",
+                url: needsApproval ? "/" : "/",
               }),
             ),
         );
@@ -592,6 +600,133 @@ export const appRouter = router({
             ),
           })),
       ),
+    computer: router({
+      // Full computer status for the hybrid: local paired devices first, then
+      // the free cloud sandbox as overflow.
+      status: protectedProcedure.query(async ({ ctx }) => {
+        const nodes = await db.listRookNodesForUser(ctx.user.id);
+        return {
+          cloudConfigured: isCloudComputerConfigured(),
+          cloudMissingEnv: cloudMissingEnvVars(),
+          localNodesOnline: nodes.filter((node) => node.status === "online").length,
+        };
+      }),
+      requestCommand: protectedProcedure
+        .input(
+          z.object({
+            botId: z.string().min(1).max(128),
+            capability: z.enum(["shell", "files-read", "files-write"]),
+            action: z.record(z.string(), z.unknown()),
+            summary: z.string().min(1).max(300),
+          }),
+        )
+        .mutation(async ({ ctx, input }) => {
+          const record = await db.enqueueCloudCommand({
+            commandId: generateCommandId(),
+            userId: ctx.user.id,
+            summary: input.summary,
+            capability: input.capability,
+            envelope: buildCloudCommandEnvelope({
+              userId: ctx.user.id,
+              botId: input.botId,
+              capability: input.capability,
+              action: input.action,
+              seq: 1,
+            }),
+            requiresApproval: isSensitiveCapability(input.capability),
+          });
+          if (!record) throw new Error("The Rook cloud computer is unavailable.");
+          const needsApproval = record.state === "awaiting_approval";
+          if (needsApproval)
+            await notifyNodeApprovalRequest(ctx.user.id, input.summary);
+          return {
+            commandId: record.commandId,
+            state: record.state,
+            requiresApproval: needsApproval,
+          };
+        }),
+      decideCommand: protectedProcedure
+        .input(
+          z.object({
+            commandId: z.string().min(4).max(80),
+            decision: z.enum(["approved", "declined"]),
+          }),
+        )
+        .mutation(({ ctx, input }) =>
+          db
+            .decideNodeCommand(ctx.user.id, input.commandId, input.decision)
+            .then((record) => ({
+              decided: Boolean(
+                record?.state === "pending" ||
+                (record?.state === "declined" &&
+                  input.decision === "declined"),
+              ),
+            })),
+        ),
+      // Browse the Bot's own cloud workspace: list one directory.
+      browse: protectedProcedure
+        .input(
+          z.object({
+            botId: z.string().min(1).max(128),
+            path: z.string().max(500).default(""),
+          }),
+        )
+        .query(async ({ ctx, input }) => {
+          const outcome = (await executeComputerReadTool({
+            userId: ctx.user.id,
+            botId: input.botId,
+            name: "computer_list_files",
+            args: { path: input.path },
+          })) as {
+            entries?: Array<{
+              name: string;
+              path: string;
+              type: string;
+              size?: number;
+            }>;
+          };
+          return { entries: outcome.entries ?? [] };
+        }),
+      // Open one Bot workspace file for reading.
+      readFile: protectedProcedure
+        .input(
+          z.object({
+            botId: z.string().min(1).max(128),
+            path: z.string().min(1).max(500),
+          }),
+        )
+        .query(async ({ ctx, input }) => {
+          const outcome = (await executeComputerReadTool({
+            userId: ctx.user.id,
+            botId: input.botId,
+            name: "computer_read_file",
+            args: { path: input.path },
+          })) as { path?: string; content?: string };
+          return { path: outcome.path ?? input.path, content: outcome.content ?? "" };
+        }),
+      // Generic completion poll for any computer command. Cloud commands are
+      // executed here; local ones were already delivered to the device, so this
+      // just reports the recorded state.
+      poll: protectedProcedure
+        .input(z.object({ commandId: z.string().min(4).max(80) }))
+        .mutation(async ({ ctx, input }) => {
+          const record = await db.getNodeCommandById(input.commandId);
+          if (!record || record.userId !== ctx.user.id)
+            throw new Error("Command not found.");
+          if (record.state === "awaiting_approval")
+            return { state: "awaiting_approval", ok: false, result: null, message: "Waiting for approval" };
+          if (record.state === "pending" && isCloudNodeId(record.nodeId)) {
+            const executed = await executeCloudCommand(input.commandId);
+            return { state: "completed", ...executed };
+          }
+          return {
+            state: record.state,
+            ok: record.state === "completed",
+            result: record.result,
+            message: record.state === "completed" ? undefined : "Waiting for the computer to finish",
+          };
+        }),
+    }),
   }),
 });
 
@@ -613,7 +748,7 @@ async function notifyNodeApprovalRequest(
             kind: "approval",
             title: "Rook Node needs your approval",
             body: summary.slice(0, 170),
-            url: "/activity",
+            url: "/",
           }),
         ),
     );

@@ -111,6 +111,8 @@ export type Approval = {
   /** Epoch ms at creation (local clock) — used for stale-approval reconciliation. */
   createdAtMs: number;
   externalActionId?: string;
+  /** Which resolver owns this proposal (excel vs local vs cloud computer). */
+  kind?: "excel" | "local" | "cloud";
   taskId?: string;
   /**
    * Preserved computer-proposal payload (proposalId/url) so a second device

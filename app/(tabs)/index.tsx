@@ -13,6 +13,7 @@ import { useRouter } from "expo-router";
 import { useAuth as useClerkAuth } from "@clerk/expo";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   Image,
   KeyboardAvoidingView,
@@ -126,6 +127,7 @@ export default function ChatScreen() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [connectorsOpen, setConnectorsOpen] = useState(false);
+  const [filesOpen, setFilesOpen] = useState(false);
   const [excelAttached, setExcelAttached] = useState(false);
   const [githubAttached, setGithubAttached] = useState(false);
   const [attachedSkills, setAttachedSkills] = useState<string[]>([]);
@@ -236,9 +238,140 @@ export default function ChatScreen() {
           approval.botId === activeBot.id && approval.state === "Pending",
       )
     : undefined;
-  const pendingCount = approvals.filter(
-    (approval) => approval.state === "Pending",
-  ).length;
+
+  const resolveExcelAction = trpc.excel.resolveAction.useMutation();
+  const computerDecideCommand = trpc.nodes.computer.decideCommand.useMutation();
+  const computerPoll = trpc.nodes.computer.poll.useMutation();
+  const [resolvingApprovalId, setResolvingApprovalId] = useState<string | null>(
+    null,
+  );
+
+  /**
+   * Approvals resolve here, in the chat — no tab switching. The proposal card
+   * below the thread carries Approve/Decline; the result lands back in the
+   * conversation as a bot message.
+   */
+  const decideInline = async (
+    approval: Approval,
+    decision: "approve" | "decline",
+  ) => {
+    if (resolvingApprovalId) return;
+    if (!approval.externalActionId) {
+      workroom.resolveApproval(
+        approval.id,
+        decision === "approve" ? "Approved" : "Declined",
+      );
+      return;
+    }
+    setResolvingApprovalId(approval.id);
+    const approved = decision === "approve";
+    const say = (body: string) =>
+      workroom.addMessage({
+        botId: approval.botId,
+        author: "bot",
+        body,
+        kind: "message",
+        taskId: approval.taskId,
+        conversationId: activeChatId,
+      });
+    try {
+      if (approval.kind === "cloud" || approval.kind === "local") {
+        await computerDecideCommand.mutateAsync({
+          commandId: approval.externalActionId,
+          decision: approved ? ("approved" as const) : ("declined" as const),
+        });
+        workroom.resolveApproval(
+          approval.id,
+          approved ? "Approved" : "Declined",
+        );
+        if (!approved) {
+          if (approval.taskId)
+            workroom.updateTaskStatus(
+              approval.taskId,
+              "Cancelled",
+              "The proposed action was declined.",
+            );
+          say("Declined — I won't run that action.");
+          return;
+        }
+        // Cloud commands execute server-side; local ones are delivered to the
+        // device and complete within a few seconds. Poll until terminal.
+        let executed:
+          | { ok: boolean; result?: unknown; message?: string; state?: string }
+          | undefined;
+        for (let attempt = 0; attempt < 6; attempt += 1) {
+          executed = await computerPoll.mutateAsync({
+            commandId: approval.externalActionId,
+          });
+          if (
+            !executed ||
+            executed.state === "completed" ||
+            executed.state === "declined" ||
+            executed.state === "expired"
+          )
+            break;
+          await new Promise((resolve) => setTimeout(resolve, 1_200));
+        }
+        const summary = summarizeComputerResult(
+          executed ?? { ok: false, message: "The command did not finish." },
+        );
+        if (executed?.ok) {
+          if (approval.taskId)
+            workroom.updateTaskStatus(
+              approval.taskId,
+              "Completed",
+              "The approved action finished.",
+            );
+          say(`Done. ${summary}`);
+        } else {
+          if (approval.taskId)
+            workroom.updateTaskStatus(
+              approval.taskId,
+              "Completed",
+              "The action finished with an error.",
+            );
+          say(`The computer reported: ${executed?.message ?? summary}`);
+        }
+        return;
+      }
+
+      const result = await resolveExcelAction.mutateAsync({
+        actionId: approval.externalActionId,
+        decision,
+      });
+      workroom.resolveApproval(
+        approval.id,
+        approved ? "Approved" : "Declined",
+      );
+      if (result.executed) {
+        if (approval.taskId)
+          workroom.updateTaskStatus(
+            approval.taskId,
+            "Completed",
+            "The approved Excel change was applied.",
+          );
+        say(`Excel updated. ${result.summary}`);
+      } else {
+        if (approval.taskId)
+          workroom.updateTaskStatus(
+            approval.taskId,
+            "Cancelled",
+            "The proposed Excel change was declined.",
+          );
+        say("Declined — I won't change the workbook.");
+      }
+    } catch (error) {
+      Alert.alert(
+        "Action not completed",
+        error instanceof Error
+          ? error.message
+          : "Rook could not complete this action. Nothing was changed.",
+      );
+    } finally {
+      setResolvingApprovalId(null);
+    }
+  };
+
   const [handoffOpen, setHandoffOpen] = useState(false);
   /* Group workroom: the most recent open task owned by the active Bot in this chat. */
   const activeTaskForHandoff = useMemo(() => {
@@ -360,7 +493,7 @@ export default function ChatScreen() {
         kind: "approval",
         title: "Approval needed in Rook",
         body: `${activeBot.name} needs your decision`,
-        url: "/activity",
+        url: "/",
       });
       workroom.addMessage({
         botId: activeBot.id,
@@ -473,14 +606,15 @@ export default function ChatScreen() {
           task.id,
           "Approval required",
           response.approvals.length
-            ? "Review the exact Excel change in Updates."
-            : "Review the proposed computer task in Updates.",
+            ? "Review the exact Excel change in this chat."
+            : "Review the proposed computer task in this chat.",
         );
         response.approvals.forEach((approval) =>
           workroom.addApproval({
             botId: activeBot.id,
             taskId: task.id,
             externalActionId: approval.actionId,
+            kind: approval.kind ?? "excel",
             title: approval.title,
             detail: approval.detail,
             risk: approval.risk,
@@ -510,7 +644,7 @@ export default function ChatScreen() {
             body: response.approvals.length
               ? `${activeBot.name} prepared a workbook change`
               : `${activeBot.name} proposed a computer task`,
-            url: "/activity",
+            url: "/",
           });
       } else {
         workroom.updateTaskStatus(
@@ -837,28 +971,13 @@ export default function ChatScreen() {
             </Text>
           </View>
           <View style={{ flexDirection: "row", gap: 8 }}>
-            <View>
+            {activeBot ? (
               <IconButton
-                icon="notifications-none"
-                label="Open updates"
-                onPress={() => router.navigate("/activity" as never)}
+                icon="folder-open"
+                label={`Open ${activeBot.name}'s files`}
+                onPress={() => setFilesOpen(true)}
               />
-              {pendingCount > 0 ? (
-                <View
-                  style={{
-                    position: "absolute",
-                    top: 4,
-                    right: 4,
-                    width: 8,
-                    height: 8,
-                    borderRadius: 4,
-                    backgroundColor: colors.amber,
-                    borderWidth: 1.5,
-                    borderColor: colors.canvas,
-                  }}
-                />
-              ) : null}
-            </View>
+            ) : null}
             <IconButton
               icon="person-outline"
               label="Open account and connected apps"
@@ -1096,66 +1215,138 @@ export default function ChatScreen() {
                 showsVerticalScrollIndicator={false}
               >
                 {pendingApproval ? (
-                  <Pressable
-                    accessibilityRole="button"
-                    onPress={() => router.navigate("/activity" as never)}
-                    style={({ pressed }) => [
-                      {
-                        flexDirection: "row",
-                        alignItems: "center",
-                        gap: 11,
-                        padding: 14,
-                        borderRadius: 16,
-                        backgroundColor: colors.amberSoft,
-                        borderWidth: 1,
-                        borderColor: tint(colors.amber, 0.28),
-                        opacity: pressed ? 0.75 : 1,
-                      },
-                    ]}
+                  <View
+                    style={{
+                      gap: 11,
+                      padding: 14,
+                      borderRadius: 16,
+                      backgroundColor: colors.amberSoft,
+                      borderWidth: 1,
+                      borderColor: tint(colors.amber, 0.28),
+                    }}
                   >
                     <View
                       style={{
-                        width: 34,
-                        height: 34,
-                        borderRadius: 12,
-                        backgroundColor: tint(colors.amber, 0.14),
+                        flexDirection: "row",
                         alignItems: "center",
-                        justifyContent: "center",
+                        gap: 11,
                       }}
                     >
-                      <MaterialIcons
-                        name="shield"
-                        size={18}
-                        color={colors.amber}
-                      />
-                    </View>
-                    <View style={{ flex: 1, minWidth: 0 }}>
-                      <Text
+                      <View
                         style={{
-                          color: colors.text,
-                          fontSize: 13.5,
-                          fontWeight: "600",
+                          width: 34,
+                          height: 34,
+                          borderRadius: 12,
+                          backgroundColor: tint(colors.amber, 0.14),
+                          alignItems: "center",
+                          justifyContent: "center",
                         }}
                       >
-                        A decision is waiting
-                      </Text>
-                      <Text
-                        numberOfLines={1}
+                        <MaterialIcons
+                          name="shield"
+                          size={18}
+                          color={colors.amber}
+                        />
+                      </View>
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text
+                          style={{
+                            color: colors.text,
+                            fontSize: 13.5,
+                            fontWeight: "600",
+                          }}
+                        >
+                          Approval needed
+                        </Text>
+                        <Text
+                          numberOfLines={2}
+                          style={{
+                            color: colors.amber,
+                            fontSize: 12,
+                            marginTop: 2,
+                          }}
+                        >
+                          {pendingApproval.detail}
+                        </Text>
+                      </View>
+                    </View>
+                    {resolvingApprovalId === pendingApproval.id ? (
+                      <View
                         style={{
-                          color: colors.amber,
-                          fontSize: 12,
-                          marginTop: 2,
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 9,
                         }}
                       >
-                        {pendingApproval.title}
-                      </Text>
-                    </View>
-                    <MaterialIcons
-                      name="chevron-right"
-                      size={20}
-                      color={colors.amber}
-                    />
-                  </Pressable>
+                        <ActivityIndicator
+                          size="small"
+                          color={colors.amber}
+                        />
+                        <Text
+                          style={{
+                            color: colors.amber,
+                            fontSize: 12.5,
+                            fontWeight: "600",
+                          }}
+                        >
+                          Working…
+                        </Text>
+                      </View>
+                    ) : (
+                      <View style={{ flexDirection: "row", gap: 10 }}>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel="Decline this action"
+                          onPress={() => void decideInline(pendingApproval, "decline")}
+                          style={({ pressed }) => ({
+                            flex: 1,
+                            minHeight: 42,
+                            borderRadius: 13,
+                            borderWidth: 1,
+                            borderColor: colors.line,
+                            backgroundColor: colors.surfaceAlt,
+                            alignItems: "center",
+                            justifyContent: "center",
+                            opacity: pressed ? 0.75 : 1,
+                          })}
+                        >
+                          <Text
+                            style={{
+                              color: colors.text,
+                              fontSize: 13,
+                              fontWeight: "700",
+                            }}
+                          >
+                            Decline
+                          </Text>
+                        </Pressable>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel="Approve this action"
+                          onPress={() => void decideInline(pendingApproval, "approve")}
+                          style={({ pressed }) => ({
+                            flex: 1,
+                            minHeight: 42,
+                            borderRadius: 13,
+                            backgroundColor: colors.ink,
+                            alignItems: "center",
+                            justifyContent: "center",
+                            opacity: pressed ? 0.75 : 1,
+                          })}
+                        >
+                          <Text
+                            style={{
+                              color: colors.onInk,
+                              fontSize: 13,
+                              fontWeight: "700",
+                            }}
+                          >
+                            Approve
+                          </Text>
+                        </Pressable>
+                      </View>
+                    )}
+                  </View>
                 ) : null}
 
                 {activeTaskForHandoff && handoffCandidates.length ? (
@@ -1433,6 +1624,7 @@ export default function ChatScreen() {
                           </View>
                         );
                       }
+                      // Ordinary bot reply: plain text with the real activity trace.
                       return (
                         <View
                           key={message.id}
@@ -2105,6 +2297,11 @@ export default function ChatScreen() {
       {viewerFile ? (
         <FileViewerPanel file={viewerFile} onClose={() => setViewerFile(null)} />
       ) : null}
+      <BotFilesSheet
+        visible={filesOpen}
+        onClose={() => setFilesOpen(false)}
+        bot={activeBot}
+      />
 
       {/* Group workroom: hand a task from the active Bot to another Bot in the room. */}
       <Sheet visible={handoffOpen} onClose={() => setHandoffOpen(false)}>
@@ -2688,6 +2885,286 @@ function FileViewerPanel({
   );
 }
 
+/** Right-side panel: the focused Bot's own files, browsable and openable. */
+function BotFilesSheet({
+  visible,
+  onClose,
+  bot,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  bot: Bot | null;
+}) {
+  const { colors } = useRookTheme();
+  const workroom = useWorkroom();
+  const [currentPath, setCurrentPath] = useState("");
+  const [history, setHistory] = useState<string[]>([]);
+  const [openedPath, setOpenedPath] = useState<string | null>(null);
+  const browseFiles = trpc.nodes.computer.browse.useQuery(
+    { botId: bot?.id ?? "", path: currentPath },
+    { enabled: visible && Boolean(bot), retry: 1 },
+  );
+  const openedFile = trpc.nodes.computer.readFile.useQuery(
+    { botId: bot?.id ?? "", path: openedPath ?? "" },
+    { enabled: visible && Boolean(bot) && Boolean(openedPath), retry: 1 },
+  );
+
+  const botFiles = bot
+    ? workroom.files.filter((file) => file.owner === bot.name)
+    : [];
+  const botMessages = bot
+    ? workroom.messages.filter((message) => message.botId === bot.id)
+    : [];
+
+  useEffect(() => {
+    if (visible) {
+      setCurrentPath("");
+      setHistory([]);
+      setOpenedPath(null);
+    }
+  }, [visible, bot?.id]);
+
+  const openPath = (path: string) => {
+    setHistory((current) => [...current, currentPath]);
+    setCurrentPath(path);
+    setOpenedPath(null);
+  };
+
+  const goBack = () => {
+    setHistory((current) => {
+      const previous = current[current.length - 1] ?? "";
+      setCurrentPath(previous);
+      setOpenedPath(null);
+      return current.slice(0, -1);
+    });
+  };
+
+  const entries = Array.isArray(
+    (browseFiles.data as { entries?: unknown } | undefined)?.entries,
+  )
+    ? ((browseFiles.data as { entries: Array<{ name: string; path: string; type: string; size?: number }> }).entries)
+    : [];
+
+  return (
+    <Sheet visible={visible} onClose={onClose}>
+      <SheetEyebrow>{bot ? `${bot.name}'s files` : "Files"}</SheetEyebrow>
+      <Text
+        style={{
+          color: colors.text,
+          fontSize: 20,
+          lineHeight: 26,
+          fontWeight: "700",
+          letterSpacing: -0.4,
+        }}
+      >
+        {bot ? `${bot.name}'s workspace` : "Workspace files"}
+      </Text>
+      <Text
+        style={{
+          color: colors.textSoft,
+          fontSize: 13,
+          lineHeight: 18,
+          marginTop: 6,
+          marginBottom: 14,
+        }}
+      >
+        {bot
+          ? `Everything ${bot.name} has made or attached lives here.`
+          : "Open a Bot to see its files."}
+      </Text>
+      {history.length ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Go back one folder"
+          onPress={goBack}
+          style={{ alignSelf: "flex-start", paddingVertical: 6 }}
+        >
+          <Text style={{ color: colors.accent, fontSize: 13, fontWeight: "700" }}>
+            ‹ {currentPath || "Workspace"}
+          </Text>
+        </Pressable>
+      ) : null}
+      {browseFiles.isPending ? (
+        <Text style={{ color: colors.textFaint, fontSize: 13, marginTop: 8 }}>
+          Opening files…
+        </Text>
+      ) : null}
+      {browseFiles.isError ? (
+        <View style={{ gap: 8, marginTop: 8 }}>
+          <Text style={{ color: colors.coral, fontSize: 13 }}>
+            Rook could not open these files.
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Try loading files again"
+            onPress={() => void browseFiles.refetch()}
+          >
+            <Text
+              style={{ color: colors.accent, fontSize: 13, fontWeight: "700" }}
+            >
+              Try again
+            </Text>
+          </Pressable>
+        </View>
+      ) : null}
+      {browseFiles.data ? (
+        <ScrollView style={{ maxHeight: 320 }} showsVerticalScrollIndicator={false}>
+          <View style={{ gap: 6 }}>
+            {entries.map((entry) => (
+              <Pressable
+                key={entry.path}
+                accessibilityRole="button"
+                accessibilityLabel={`Open ${entry.name}`}
+                onPress={() =>
+                  entry.type === "dir"
+                    ? openPath(entry.path)
+                    : setOpenedPath(entry.path)
+                }
+                style={({ pressed }) => [
+                  {
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 10,
+                    minHeight: 46,
+                    borderRadius: 13,
+                    borderWidth: 1,
+                    borderColor: colors.line,
+                    paddingHorizontal: 12,
+                    backgroundColor: colors.surfaceAlt,
+                  },
+                  pressed && { opacity: 0.72 },
+                ]}
+              >
+                <MaterialIcons
+                  name={entry.type === "dir" ? "folder" : "description"}
+                  size={17}
+                  color={colors.textSoft}
+                />
+                <Text
+                  numberOfLines={1}
+                  style={{
+                    color: colors.text,
+                    fontSize: 13.5,
+                    fontWeight: "600",
+                    flex: 1,
+                  }}
+                >
+                  {entry.name}
+                </Text>
+                <MaterialIcons
+                  name="chevron-right"
+                  size={17}
+                  color={colors.textFaint}
+                />
+              </Pressable>
+            ))}
+            {entries.length === 0 && botFiles.length === 0 ? (
+              <Text style={{ color: colors.textFaint, fontSize: 13 }}>
+                Nothing here yet — ask {bot?.name ?? "this Bot"} to make
+                something.
+              </Text>
+            ) : null}
+            {botFiles.map((file) => (
+              <View
+                key={file.id}
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 10,
+                  minHeight: 46,
+                  borderRadius: 13,
+                  borderWidth: 1,
+                  borderColor: colors.line,
+                  paddingHorizontal: 12,
+                }}
+              >
+                <MaterialIcons
+                  name="attach-file"
+                  size={16}
+                  color={colors.textFaint}
+                />
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text
+                    numberOfLines={1}
+                    style={{
+                      color: colors.text,
+                      fontSize: 13,
+                      fontWeight: "600",
+                    }}
+                  >
+                    {file.name}
+                  </Text>
+                  <Text style={{ color: colors.textFaint, fontSize: 11 }}>
+                    {file.size} · {file.scope}
+                  </Text>
+                </View>
+              </View>
+            ))}
+          </View>
+          {openedPath ? (
+            <View
+              style={{
+                marginTop: 12,
+                borderRadius: 14,
+                borderWidth: 1,
+                borderColor: colors.line,
+                backgroundColor: colors.surfaceAlt,
+                padding: 12,
+                maxHeight: 280,
+              }}
+            >
+              <Text
+                style={{
+                  color: colors.text,
+                  fontSize: 13,
+                  fontWeight: "700",
+                  marginBottom: 6,
+                }}
+              >
+                {openedPath}
+              </Text>
+              {openedFile.isPending ? (
+                <Text style={{ color: colors.textFaint, fontSize: 12.5 }}>
+                  Opening…
+                </Text>
+              ) : openedFile.isError ? (
+                <Text style={{ color: colors.coral, fontSize: 12.5 }}>
+                  Rook could not open this file.
+                </Text>
+              ) : (
+                <ScrollView showsVerticalScrollIndicator={false}>
+                  <Text
+                    style={{
+                      color: colors.textSoft,
+                      fontSize: 12.5,
+                      lineHeight: 18,
+                    }}
+                  >
+                    {String(
+                      (openedFile.data as { content?: string } | undefined)
+                        ?.content ?? "",
+                    ).slice(0, 8000)}
+                  </Text>
+                </ScrollView>
+              )}
+            </View>
+          ) : null}
+          {botMessages.filter((message) => message.attachmentName).length >
+          0 ? (
+            <Text style={{ color: colors.textFaint, fontSize: 11.5, marginTop: 10 }}>
+              Attached in chat:{" "}
+              {botMessages
+                .filter((message) => message.attachmentName)
+                .map((message) => message.attachmentName)
+                .join(", ")}
+            </Text>
+          ) : null}
+        </ScrollView>
+      ) : null}
+    </Sheet>
+  );
+}
+
 function FileChip({ name }: { name: string }) {
   const { colors } = useRookTheme();
   return (
@@ -2796,4 +3273,35 @@ function deviceTimeZone() {
   } catch {
     return "UTC";
   }
+}
+
+/** Builds a one-line human summary from a computer command execution result. */
+function summarizeComputerResult(executed: {
+  ok: boolean;
+  result?: unknown;
+  message?: string;
+}): string {
+  const outer = executed.result as
+    | { ok?: boolean; result?: unknown; message?: string | null }
+    | null
+    | undefined;
+  // Stored results nest the action result under `result`; accept either shape.
+  const result =
+    outer && typeof outer === "object" && "result" in outer && outer.result !== null
+      ? (outer.result as Record<string, unknown>)
+      : (outer as Record<string, unknown> | null | undefined);
+  if (result && typeof result === "object") {
+    if ("exitCode" in result || result.type === "runResult")
+      return `exit ${String(result.exitCode ?? "?")}${
+        typeof result.stdout === "string" && result.stdout.trim()
+          ? ` — ${result.stdout.trim().split("\n")[0].slice(0, 160)}`
+          : ""
+      }`;
+    if ("content" in result) return String(result.content ?? "").slice(0, 200);
+    if (result.type === "fileWritten" || "written" in result)
+      return `wrote ${String(result.path ?? result.written ?? "")}`;
+    if ("entries" in result)
+      return `listed ${Array.isArray(result.entries) ? result.entries.length : 0} entries`;
+  }
+  return executed.message ?? "the command finished";
 }

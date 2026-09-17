@@ -107,6 +107,52 @@ async function main() {
   assert.equal((await store.consumeMicrosoftOAuthState(state))?.userId, user.id);
   assert.equal(await store.consumeMicrosoftOAuthState(state), undefined);
 
+  // GitHub connector entities — a schema gap here fails only the GitHub
+  // surfaces, so they are exercised explicitly rather than assumed present.
+  const githubState = `smoke-github-state-${suffix}`;
+  await store.createGithubOAuthState({
+    state: githubState,
+    userId: user.id,
+    returnTo: "https://www.rook.lighting/account",
+    expiresAt: new Date(Date.now() + 60_000),
+  });
+  assert.equal(
+    (await store.consumeGithubOAuthState(githubState))?.userId,
+    user.id,
+  );
+  assert.equal(await store.consumeGithubOAuthState(githubState), undefined);
+
+  await store.upsertGithubConnection({
+    userId: user.id,
+    githubUserId: `smoke-gh-${suffix}`,
+    login: "smoke-user",
+    displayName: "Smoke User",
+    avatarUrl: null,
+    encryptedAccessToken: "smoke-access-token",
+    encryptedRefreshToken: "smoke-refresh-token",
+    expiresAt: new Date(Date.now() + 60_000),
+    scopes: "repo read:user offline_access",
+    status: "connected",
+  });
+  assert.equal(
+    (await store.getGithubConnection(user.id))?.login,
+    "smoke-user",
+  );
+  await store.addGithubSelectedRepo(user.id, {
+    fullName: "smoke-owner/smoke-repo",
+    repoId: 123456,
+    privateRepo: true,
+    defaultBranch: "main",
+    description: "Smoke-test GitHub repo selection.",
+  });
+  const selectedRepos = await store.listGithubSelectedRepos(user.id);
+  assert.equal(selectedRepos.length, 1);
+  assert.equal(selectedRepos[0].fullName, "smoke-owner/smoke-repo");
+  await store.removeGithubSelectedRepo(user.id, "smoke-owner/smoke-repo");
+  assert.equal((await store.listGithubSelectedRepos(user.id)).length, 0);
+  await store.deleteGithubConnection(user.id);
+  assert.equal(await store.getGithubConnection(user.id), undefined);
+
   const actionId = `smoke-action-${suffix}`;
   await store.createExcelPendingAction({
     id: actionId,

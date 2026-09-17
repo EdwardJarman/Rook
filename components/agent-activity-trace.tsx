@@ -12,29 +12,50 @@ const iconForStep = (kind: AgentTraceStep["kind"]) => {
   if (kind === "source") return "language";
   if (kind === "tool") return "task-alt";
   if (kind === "approval") return "shield";
+  if (kind === "context") return "forum";
   return "check-circle-outline";
 };
 
+/**
+ * Real activity only: every row is something the agent actually did this
+ * turn (a web search, a source, a tool call with its concrete target).
+ * Boilerplate rows like "read the room context" are dropped at render so
+ * the expander never shows the same mock text twice.
+ */
 export function AgentActivityTrace({
   bot,
   trace,
+  live,
 }: {
   bot: Bot;
   trace: AgentTraceStep[];
+  /** Live turn in progress: start expanded and narrate the latest step. */
+  live?: boolean;
 }) {
   const { colors } = useRookTheme();
-  const [expanded, setExpanded] = useState(false);
-  const sourceCount = trace.filter((step) => step.kind === "source").length;
-  const searchable = sourceCount > 0;
-  const summary = searchable
-    ? `${sourceCount} public ${sourceCount === 1 ? "source" : "sources"} found`
-    : "Response activity";
+  const [expanded, setExpanded] = useState(Boolean(live));
+  const steps = trace.filter((step) => !isBoilerplate(step));
+  if (!steps.length) return null;
+
+  const first = steps[0];
+  const latest = steps[steps.length - 1];
+  const sourceCount = steps.filter((step) => step.kind === "source").length;
+  const summary =
+    live && latest
+      ? latest.title
+      : live
+        ? "Working…"
+        : sourceCount > 0
+          ? `${sourceCount} public ${sourceCount === 1 ? "source" : "sources"} found`
+          : steps.length === 1
+            ? first.title
+            : `${first.title} · +${steps.length - 1} more`;
 
   return (
     <View style={{ marginBottom: 9, maxWidth: 520 }}>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`${expanded ? "Hide" : "Show"} ${summary.toLowerCase()}`}
+        accessibilityLabel={`${expanded ? "Hide" : "Show"} response activity`}
         accessibilityState={{ expanded }}
         onPress={() => setExpanded((current) => !current)}
         style={({ pressed }) => ({
@@ -55,7 +76,13 @@ export function AgentActivityTrace({
           size={20}
         />
         <Text
-          style={{ color: colors.textSoft, fontSize: 12, fontWeight: "600" }}
+          numberOfLines={1}
+          style={{
+            color: colors.textSoft,
+            fontSize: 12,
+            fontWeight: "600",
+            maxWidth: 320,
+          }}
         >
           {summary}
         </Text>
@@ -78,26 +105,21 @@ export function AgentActivityTrace({
             paddingVertical: 3,
           }}
         >
-          {trace.map((step, index) => {
+          {steps.map((step, index) => {
             const content = (
               <>
                 <MaterialIcons
                   name={iconForStep(step.kind)}
                   size={14}
-                  color={
-                    step.kind === "source" ? colors.accent : colors.textFaint
-                  }
+                  color={colors.textFaint}
                 />
                 <View style={{ flex: 1, minWidth: 0 }}>
                   <Text
-                    numberOfLines={1}
+                    numberOfLines={2}
                     style={{
-                      color:
-                        step.kind === "source"
-                          ? colors.textSoft
-                          : colors.textFaint,
+                      color: colors.textSoft,
                       fontSize: 11.5,
-                      fontWeight: step.kind === "source" ? "600" : "500",
+                      fontWeight: "500",
                     }}
                   >
                     {step.title}
@@ -151,4 +173,20 @@ export function AgentActivityTrace({
       ) : null}
     </View>
   );
+}
+
+const BOILERPLATE_TITLES = new Set([
+  "Read the room context",
+  "Read the current conversation",
+  "Prepared a response",
+  "Preparing a response",
+  "Reading your request",
+  "Response activity",
+  "Checked connected Excel data",
+]);
+
+function isBoilerplate(step: AgentTraceStep) {
+  if (step.url) return false;
+  if (step.kind === "source" || step.kind === "search") return false;
+  return BOILERPLATE_TITLES.has(step.title.trim());
 }

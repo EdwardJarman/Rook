@@ -177,9 +177,9 @@ export async function runRookAgentStream(
     const finalText =
       text.trim() ||
       (approvals.length
-        ? "I prepared the Excel change and paused for your approval in Updates."
+        ? "I've prepared it for your approval - confirm it right here in this chat."
         : computerProposals.length
-          ? "I proposed a computer task below — review it in Updates, then run it from the Computer panel."
+          ? "I proposed a computer task below - approve it right here in this chat, then run it from the Computer panel."
           : friendlyAgentError(new Error("empty reply")));
     emitTelemetry();
     return {
@@ -512,9 +512,9 @@ export async function runRookAgentStream(
   });
   return endTurn(
     approvals.length
-      ? "I prepared the Excel change and paused for your approval in Updates."
+      ? "I've prepared it for your approval - confirm it right here in this chat."
       : computerProposals.length
-        ? "I proposed a computer task below — review it in Updates, then run it from the Computer panel."
+        ? "I proposed a computer task below - approve it right here in this chat, then run it from the Computer panel."
         : "I reached the tool limit for this turn. Try asking for a smaller range or one operation at a time.",
   );
 }

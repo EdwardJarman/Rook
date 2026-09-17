@@ -117,5 +117,9 @@ export async function executeAction(page: Page, action: TypedAction, guard: Navi
       return { type: "switchTab" };
     case "closeTab":
       return { type: "closeTab" };
+    default:
+      // Pageless actions (shell/workspace files) are handled by the shell
+      // executor before a page is ever resolved.
+      throw new ActionError("UNKNOWN_ACTION", `Action ${String(action.type)} is not a browser action`);
   }
 }

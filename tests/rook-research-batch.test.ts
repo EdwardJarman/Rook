@@ -88,9 +88,10 @@ describe("frozen tool order (cache-safe registry)", () => {
 
   it("annotates every offered tool with an honest risk tier, and nothing else", () => {
     const offered = allOfferedToolNames();
-    // 13 families + read_skill (appended deliberately 2026-09-16; see
+    // 13 families + read_skill (appended deliberately for the skills loop)
+    // + 4 cloud computer tools (appended merging origin/main; see
     // orderToolset cache-bust note in agent-tool-executor.ts).
-    expect(offered).toHaveLength(14);
+    expect(offered).toHaveLength(18);
     for (const name of offered) {
       expect(
         TOOL_RISK[name as keyof typeof TOOL_RISK],
@@ -108,6 +109,8 @@ describe("frozen tool order (cache-safe registry)", () => {
     expect(gated).toEqual(
       [
         "computer_propose_task",
+        "computer_run_command",
+        "computer_write_file",
         "excel_add_worksheet",
         "excel_append_table_rows",
         "excel_create_workbook",
