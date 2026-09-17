@@ -37,7 +37,9 @@ export const providerForModelId = (id: string): string => {
 };
 
 export async function listModels(profile: CliProfile): Promise<CatalogModel[]> {
-  const data = await trpc<{ models: CatalogModel[] }>(profile, "ai.models");
+  const data = await trpc<{ models: CatalogModel[] }>(profile, "ai.models", undefined, {
+    timeoutMs: 30_000,
+  });
   return data.models ?? [];
 }
 

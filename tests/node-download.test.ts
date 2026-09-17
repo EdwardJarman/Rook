@@ -95,6 +95,7 @@ describe("Rook CLI installation", () => {
     expect(script).not.toContain("releases/latest/download");
     expect(script).not.toContain("rook.exe");
     expect(script).toContain("has no cli/ yet");
+    expect(script).toContain("this window is ready too");
     // Windows PowerShell 5.1 misdecodes UTF-8 without BOM: served bytes
     // must stay strictly ASCII (verified once live, pinned here forever).
     expect(script).not.toMatch(/[^\x00-\x7F]/);

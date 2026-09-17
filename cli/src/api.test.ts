@@ -111,6 +111,20 @@ describe("trpc client", () => {
       trpc({ ...profile, apiUrl: "http://127.0.0.1:1" }, "ai.models"),
     ).rejects.toThrow(/unreachable/);
   });
+
+  it("fails loudly instead of hanging on wedged servers", async () => {
+    const hanging: string = await new Promise((resolve) => {
+      server = createServer((_req, res) => {
+        // Accept and hold: headers only, body never ends.
+        res.writeHead(200, { "Content-Type": "application/json" });
+      }).listen(0, "127.0.0.1", () => {
+        resolve(`http://127.0.0.1:${(server!.address() as { port: number }).port}`);
+      });
+    });
+    await expect(
+      trpc({ ...profile, apiUrl: hanging }, "ai.models", undefined, { timeoutMs: 300 }),
+    ).rejects.toThrow(/took too long/);
+  }, 15000);
 });
 
 describe("agent stream client", () => {

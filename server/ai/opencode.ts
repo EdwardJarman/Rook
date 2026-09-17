@@ -26,6 +26,13 @@
 
 import type { InvokeParams, InvokeResult, Message } from "../_core/llm";
 import type { RookAiModel } from "./openrouter";
+import {
+  OPENCODE_DEFAULT_BASE,
+  ensureManagedServer,
+  isLoopbackBaseUrl,
+  isManagedEnabled,
+  managedAuthPassword,
+} from "./opencode-server";
 
 export const OPENCODE_MODEL_PREFIX = "opencode:";
 export const OPENCODE_DEFAULT_MODEL = `${OPENCODE_MODEL_PREFIX}big-pickle`;
@@ -106,8 +113,24 @@ export const opencodeBaseUrl = (): string =>
 
 export const isOpenCodeConfigured = (): boolean => opencodeBaseUrl().length > 0;
 
+/**
+ * Where turns actually dial. Explicit OPENCODE_BASE_URL wins; otherwise a
+ * managed Rook server on loopback is assumed (zero-config local dev) —
+ * unless management is disabled, in which case there is no server.
+ */
+export const effectiveOpenCodeBase = (): string => {
+  const explicit = opencodeBaseUrl();
+  if (explicit) return explicit;
+  return isManagedEnabled() ? OPENCODE_DEFAULT_BASE : "";
+};
+
+export const isOpenCodeManaged = (): boolean =>
+  !isOpenCodeConfigured() &&
+  isManagedEnabled() &&
+  isLoopbackBaseUrl(effectiveOpenCodeBase());
+
 const opencodeAuthHeader = (): Record<string, string> => {
-  const password = (process.env.OPENCODE_SERVER_PASSWORD ?? "").trim();
+  const password = managedAuthPassword();
   if (!password) return {};
   const username = (process.env.OPENCODE_SERVER_USERNAME ?? "").trim() || "opencode";
   return {
@@ -116,7 +139,7 @@ const opencodeAuthHeader = (): Record<string, string> => {
 };
 
 export const listOpenCodeModels = (): RookAiModel[] => {
-  if (!isOpenCodeConfigured()) return [];
+  if (!effectiveOpenCodeBase()) return [];
   return OPENCODE_MODELS.map((model) => ({
     id: `${OPENCODE_MODEL_PREFIX}${model.upstreamId}`,
     name: model.name,
@@ -188,10 +211,10 @@ const apiFetch = async (
   path: string,
   init?: RequestInit & { userSignal?: AbortSignal | null; timeoutMs?: number },
 ): Promise<Response> => {
-  const base = opencodeBaseUrl();
+  const base = effectiveOpenCodeBase();
   if (!base)
     throw new Error(
-      "OpenCode is not connected. Start `opencode serve` and set OPENCODE_BASE_URL (e.g. http://127.0.0.1:4123), then select OpenCode again.",
+      "OpenCode is not connected. Set OPENCODE_BASE_URL (e.g. http://127.0.0.1:4123) or enable the managed server with OPENCODE_MANAGED=1, then select OpenCode again.",
     );
   let response: Response;
   try {
@@ -363,7 +386,9 @@ export type OpenCodeStatus = {
 };
 
 export const opencodeStatus = async (): Promise<OpenCodeStatus> => {
-  if (!isOpenCodeConfigured()) {
+  const base = effectiveOpenCodeBase();
+  const managed = isOpenCodeManaged();
+  if (!base) {
     return {
       provider: "opencode",
       configured: false,
@@ -371,10 +396,16 @@ export const opencodeStatus = async (): Promise<OpenCodeStatus> => {
       freeModels: OPENCODE_MODELS.length,
       dailyFreeRequestAllowance: null,
       message:
-        "Start `opencode serve` on this machine and set OPENCODE_BASE_URL (e.g. http://127.0.0.1:4123), then restart the Rook server.",
+        "OpenCode management is off and no server is set. Set OPENCODE_BASE_URL (e.g. http://127.0.0.1:4123) or enable it with OPENCODE_MANAGED=1, then select OpenCode again.",
     };
   }
   try {
+    // Managed loopback servers self-heal here: a dead server is restarted
+    // before we report, so the card flips back to Online by itself.
+    let started = false;
+    if (managed) {
+      started = (await ensureManagedServer(base)).started;
+    }
     const response = await apiFetch("/global/health", {
       signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
     });
@@ -386,6 +417,9 @@ export const opencodeStatus = async (): Promise<OpenCodeStatus> => {
       version?: string;
     };
     const operational = body.healthy !== false;
+    const where = managed
+      ? `Rook runs your OpenCode server locally${started ? " (just started)" : ""}`
+      : `OpenCode server at ${base}`;
     return {
       provider: "opencode",
       configured: true,
@@ -393,7 +427,7 @@ export const opencodeStatus = async (): Promise<OpenCodeStatus> => {
       freeModels: OPENCODE_MODELS.length,
       dailyFreeRequestAllowance: null,
       message: operational
-        ? `${OPENCODE_MODELS.length} selected free models are available${body.version ? ` (opencode v${body.version})` : ""}.`
+        ? `${where}: ${OPENCODE_MODELS.length} selected free models are available${body.version ? ` (opencode v${body.version})` : ""}.`
         : "The OpenCode server answered but reported unhealthy.",
     };
   } catch (error) {
@@ -431,6 +465,12 @@ export async function invokeOpenCode(
     `(If you create or modify files, always state each file's absolute path in your reply.)`;
   const userSignal = opts?.signal ?? null;
   if (userSignal?.aborted) throw new Error("OpenCode request was aborted.");
+
+  // Managed servers self-heal per turn: a rebooted machine or a dead
+  // process restarts transparently instead of failing the chat.
+  if (isOpenCodeManaged()) {
+    await ensureManagedServer(effectiveOpenCodeBase());
+  }
 
   const post = async (path: string, body: Record<string, unknown>, action: string) => {
     const response = await apiFetch(path, {
@@ -744,7 +784,7 @@ const readTurnFile = async (absPath: string): Promise<TurnFile | null> => {
  * answer is complete without its attachments.
  */
 export const collectOpenCodeFiles = async (answerText: string): Promise<TurnFile[]> => {
-  if (!isOpenCodeConfigured() || !answerText) return [];
+  if (!effectiveOpenCodeBase() || !answerText) return [];
   const files: TurnFile[] = [];
   for (const path of extractArtifactPaths(answerText)) {
     try {

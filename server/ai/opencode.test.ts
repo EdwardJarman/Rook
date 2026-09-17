@@ -41,6 +41,10 @@ beforeEach(() => {
   delete process.env.OPENCODE_BASE_URL;
   delete process.env.OPENCODE_SERVER_PASSWORD;
   delete process.env.OPENCODE_SERVER_USERNAME;
+  // Legacy gating tests pin the unmanaged path; managed behavior has its
+  // own describes below. Never leak management into other suites.
+  process.env.OPENCODE_MANAGED = "0";
+  delete process.env.OPENCODE_BIN;
 });
 
 afterEach(() => {
@@ -49,11 +53,20 @@ afterEach(() => {
   delete process.env.OPENCODE_BASE_URL;
   delete process.env.OPENCODE_SERVER_PASSWORD;
   delete process.env.OPENCODE_SERVER_USERNAME;
+  delete process.env.OPENCODE_MANAGED;
+  delete process.env.OPENCODE_BIN;
 });
 
 describe("opencode catalog gating", () => {
-  it("lists nothing until OPENCODE_BASE_URL is set", () => {
+  it("lists nothing until OPENCODE_BASE_URL is set (unmanaged)", () => {
     expect(listOpenCodeModels()).toEqual([]);
+  });
+
+  it("lists the curated catalog by default when managed", () => {
+    delete process.env.OPENCODE_MANAGED;
+    const models = listOpenCodeModels();
+    expect(models.length).toBeGreaterThanOrEqual(5);
+    expect(models[0]?.id).toBe(OPENCODE_DEFAULT_MODEL);
   });
 
   it("lists curated free models with big-pickle first once configured", () => {

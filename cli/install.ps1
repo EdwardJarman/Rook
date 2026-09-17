@@ -57,6 +57,12 @@ try {
     [Environment]::SetEnvironmentVariable("Path", "$UserPath;$BinDir", "User")
     Write-Host "rook install: added $BinDir to your user PATH (new terminals pick it up)."
   }
+  # irm | iex runs inside the caller's session: update this shell too so
+  # `rook` works immediately without opening a new terminal.
+  if ($env:Path -notlike "*$BinDir*") {
+    $env:Path = "$env:Path;$BinDir"
+    Write-Host "rook install: this window is ready too - run rook login."
+  }
 
   $Version = & (Join-Path $BinDir "rook.cmd") version 2>$null
   if ($LASTEXITCODE -eq 0 -and $Version) {

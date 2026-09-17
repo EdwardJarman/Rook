@@ -109,7 +109,9 @@ async function main(): Promise<void> {
       const { me } = await loginWithBrowser(apiUrl, {
         webUrl: flags.webUrl,
         onOpened: (manualUrl) =>
-          eprintln(`If nothing opened, visit:\n  ${manualUrl}\nWaiting for approval…`),
+          eprintln(
+            `If nothing opened, visit:\n  ${manualUrl}\nWaiting for approval in your browser (up to 5 minutes, Ctrl+C to cancel)…`,
+          ),
       });
       println(`Signed in as ${me.name ?? me.id} (${apiUrl}).`);
       return;

@@ -135,10 +135,12 @@ export async function listenForCallback(timeoutMs = 5 * 60 * 1_000): Promise<{
   };
 }
 
+const FAST_CALL_TIMEOUT_MS = 30_000;
+
 export async function fetchMe(profile: CliProfile): Promise<Me> {
   if (!profile.token) return null;
   try {
-    return await trpc<Me>(profile, "auth.me");
+    return await trpc<Me>(profile, "auth.me", undefined, { timeoutMs: FAST_CALL_TIMEOUT_MS });
   } catch (error) {
     if (error instanceof ApiError && error.code === "UNAUTHORIZED") return null;
     throw error;

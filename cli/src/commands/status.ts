@@ -18,7 +18,12 @@ export async function providerStatuses(profile: CliProfile): Promise<ProviderSta
   const out: ProviderStatus[] = [];
   for (const provider of PROVIDERS) {
     try {
-      const status = await trpc<ProviderStatus>(profile, "ai.status", { provider });
+      const status = await trpc<ProviderStatus>(
+        profile,
+        "ai.status",
+        { provider },
+        { timeoutMs: 30_000 },
+      );
       out.push(status);
     } catch (error) {
       out.push({

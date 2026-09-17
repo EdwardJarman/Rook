@@ -43,7 +43,10 @@ async function authedFetch(
         ...(init?.headers ?? {}),
       },
     });
-  } catch {
+  } catch (error) {
+    // Timeouts and user aborts must surface as-is, never as "unreachable".
+    const signal = init?.signal as AbortSignal | undefined;
+    if (signal?.aborted) throw error;
     throw unreachable(profile.apiUrl);
   }
   return response;
@@ -61,7 +64,7 @@ export async function trpc<T>(
   profile: CliProfile,
   procPath: string,
   input?: unknown,
-  opts?: { method?: "GET" | "POST" },
+  opts?: { method?: "GET" | "POST"; timeoutMs?: number; signal?: AbortSignal },
 ): Promise<T> {
   const method = opts?.method ?? "GET";
   const path =
@@ -70,10 +73,31 @@ export async function trpc<T>(
           JSON.stringify({ "0": { json: input ?? null } }),
         )}`
       : `/api/trpc/${procPath}?batch=1`;
-  const response = await authedFetch(profile, path, {
-    method,
-    ...(method === "POST" ? { body: JSON.stringify({ "0": { json: input ?? null } }) } : {}),
-  });
+  // Fast metadata calls pass timeoutMs so a wedged server fails loudly
+  // instead of hanging the terminal forever. Long turns (workroom.reply)
+  // deliberately pass none.
+  const signals: AbortSignal[] = [];
+  if (opts?.signal) signals.push(opts.signal);
+  if (opts?.timeoutMs) signals.push(AbortSignal.timeout(opts.timeoutMs));
+  const signal =
+    signals.length > 1 && typeof AbortSignal.any === "function"
+      ? AbortSignal.any(signals)
+      : (signals[0] ?? undefined);
+  let response: Response;
+  try {
+    response = await authedFetch(profile, path, {
+      method,
+      ...(method === "POST" ? { body: JSON.stringify({ "0": { json: input ?? null } }) } : {}),
+      ...(signal ? { signal } : {}),
+    });
+  } catch (error) {
+    if (opts?.timeoutMs && error instanceof Error && error.name === "TimeoutError") {
+      throw new ApiError(
+        `Rook server took too long to answer (${profile.apiUrl}). Is it overloaded? Try again.`,
+      );
+    }
+    throw error;
+  }
   if (response.status === 401 || response.status === 403) {
     throw new ApiError(
       "Sign-in expired or rejected. Run `rook login` again.",

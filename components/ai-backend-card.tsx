@@ -1,8 +1,10 @@
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
-import { Text, View } from "react-native";
+import { useState } from "react";
+import { Platform, Pressable, Text, View } from "react-native";
 
 import { Card, StatusPill } from "@/components/rook-primitives";
 import { providerLabel } from "@/lib/ai-provider";
+import { buildOpenCodeSetupPrompt } from "@/lib/opencode-setup";
 import { trpc } from "@/lib/trpc";
 import { tint, useRookTheme } from "@/lib/ui";
 
@@ -18,6 +20,23 @@ export function AiBackendCard({
   });
   const data = status.data;
   const ready = data?.operational === true;
+  const [copied, setCopied] = useState(false);
+
+  const copySetupPrompt = async () => {
+    const prompt = buildOpenCodeSetupPrompt();
+    try {
+      if (Platform.OS === "web" && typeof navigator !== "undefined" && navigator.clipboard) {
+        await navigator.clipboard.writeText(prompt);
+      } else {
+        const Clipboard = await import("expo-clipboard");
+        await Clipboard.setStringAsync(prompt);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopied(false);
+    }
+  };
   const label = status.isLoading
     ? "Checking"
     : ready
@@ -111,6 +130,33 @@ export function AiBackendCard({
             : data?.message || "Checking the live free-model catalog…"}
         </Text>
       </View>
+
+      {provider === "opencode" && !ready && !status.isLoading ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={copied ? "Setup prompt copied" : "Copy setup prompt for your OpenCode assistant"}
+          onPress={() => void copySetupPrompt()}
+          style={({ pressed }) => ({
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 7,
+            minHeight: 42,
+            borderRadius: 13,
+            backgroundColor: tint(colors.accent, dark ? 0.16 : 0.08),
+            opacity: pressed ? 0.72 : 1,
+          })}
+        >
+          <MaterialIcons
+            name={copied ? "check" : "content-copy"}
+            size={15}
+            color={colors.accent}
+          />
+          <Text style={{ color: colors.accent, fontSize: 12.5, fontWeight: "700" }}>
+            {copied ? "Copied — paste it to your OpenCode assistant" : "Copy setup prompt for my OpenCode assistant"}
+          </Text>
+        </Pressable>
+      ) : null}
     </Card>
   );
 }
