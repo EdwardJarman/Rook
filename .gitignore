@@ -72,6 +72,10 @@ Thumbs.db
 
 # Local tool workspaces (never committed)
 .kilo/
+.opencode/
+
+# Agent loop scratch state (local memory, never committed)
+LOOP_STATE*.md
 
 # Rook Node build outputs
 rook-node/build/

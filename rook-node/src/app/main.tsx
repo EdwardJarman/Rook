@@ -5,11 +5,15 @@ import "@/styles/globals.css";
 import { App } from "./App";
 import { ErrorBoundary } from "./components/error-boundary";
 import { mountSendBridge } from "./lib/send-bridge";
+import { mountCloudSync } from "./lib/cloud-sync";
 
 const root = document.getElementById("root");
 if (!root) throw new Error("Missing #root");
 
 mountSendBridge();
+// Same login → same bots and chats as mobile/web. Local-first: no token
+// or any failure silently keeps the local workroom.
+mountCloudSync();
 
 ReactDOM.createRoot(root).render(
   <React.StrictMode>

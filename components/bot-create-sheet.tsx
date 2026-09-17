@@ -1,5 +1,5 @@
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
-import { useEffect, useMemo, useState } from "react";
+import { useState } from "react";
 import {
   Alert,
   KeyboardAvoidingView,
@@ -18,15 +18,11 @@ import {
   DEFAULT_BOT_COLOR,
   DEFAULT_BOT_ICON,
 } from "@/components/bot-identity-picker";
-import { AiModelSelector } from "@/components/ai-model-selector";
 import { BotIdentityMark } from "@/components/bot-orb";
 import { GlassSurface } from "@/components/liquid-glass";
 import { RookLogo } from "@/components/rook-logo";
 import { Field, useRookTheme } from "@/components/rook-primitives";
-import {
-  defaultModelForProvider,
-  providerForModel,
-} from "@/lib/ai-provider";
+import { defaultModelForProvider } from "@/lib/ai-provider";
 import { trpc } from "@/lib/trpc";
 import { tint } from "@/lib/ui";
 import { useWorkroom, type Bot } from "@/lib/workroom-store";
@@ -77,11 +73,9 @@ export function BotCreateSheet({
   const [step, setStep] = useState<Step>(1);
   const [name, setName] = useState("");
   const [role, setRole] = useState("");
-  const [purpose, setPurpose] = useState("");
   const [approvalRule, setApprovalRule] = useState(DEFAULT_APPROVAL);
   const [color, setColor] = useState(DEFAULT_BOT_COLOR);
   const [icon, setIcon] = useState(DEFAULT_BOT_ICON);
-  const [model, setModel] = useState("openrouter/free");
 
   const compactMobile = Platform.OS !== "web" && width < 600;
   // Keep the native creator as a deliberate floating dialog rather than an
@@ -97,32 +91,14 @@ export function BotCreateSheet({
       : Math.min(Math.max(height - 230, 486), 550)
     : Math.min(height - 72, 600);
   const copy = step === 1 ? null : STEP_COPY[step];
-  const suggestedModel = useMemo(() => {
-    const models = modelCatalog.data?.models ?? [];
-    // A connected ChatGPT 5.5 route wins for new Bots. If it is not offered by
-    // this account, preserve the selected Rook provider and its own fallback.
-    return models.find((entry) => entry.id === "chatgpt:gpt-5.5") ??
-      models.find((entry) => entry.id.startsWith("chatgpt:") && /gpt[- ]?5\.5/i.test(`${entry.id} ${entry.name}`)) ??
-      defaultModelForProvider(models, aiProvider) ??
-      models.find((entry) => entry.id === "openrouter/free") ??
-      models[0];
-  }, [aiProvider, modelCatalog.data?.models]);
-  const modelProvider = providerForModel(model, aiProvider);
-
-  useEffect(() => {
-    if (!visible) return;
-    setModel(suggestedModel?.id ?? "openrouter/free");
-  }, [suggestedModel?.id, visible]);
 
   const reset = () => {
     setStep(1);
     setName("");
     setRole("");
-    setPurpose("");
     setApprovalRule(DEFAULT_APPROVAL);
     setColor(DEFAULT_BOT_COLOR);
     setIcon(DEFAULT_BOT_ICON);
-    setModel("openrouter/free");
   };
 
   const close = () => {
@@ -131,10 +107,10 @@ export function BotCreateSheet({
   };
 
   const continueForward = () => {
-    if (step === 2 && (!name.trim() || !role.trim() || !purpose.trim())) {
+    if (step === 2 && (!name.trim() || !role.trim())) {
       Alert.alert(
         "Describe the work",
-        "Add a primary job and a clear description of what this Bot should own.",
+        "Give this Bot a name and a primary job so it knows what to do.",
       );
       return;
     }
@@ -142,14 +118,20 @@ export function BotCreateSheet({
   };
 
   const handleCreate = () => {
+    // No per-Bot model lock: the Bot answers with the workroom provider's
+    // default, and the composer model picker offers every Rook model for
+    // free choice at send time. The primary job doubles as the purpose.
+    const fallbackModel =
+      defaultModelForProvider(modelCatalog.data?.models ?? [], aiProvider)?.id ??
+      "openrouter/free";
     const bot = createBot({
       name: name.trim(),
       role: role.trim(),
-      purpose: purpose.trim(),
+      purpose: role.trim(),
       approvalRule: approvalRule.trim() || DEFAULT_APPROVAL,
       color,
       icon,
-      model,
+      model: fallbackModel,
     });
     reset();
     onClose();
@@ -296,18 +278,6 @@ export function BotCreateSheet({
                       onChangeText={setRole}
                       placeholder="Research analyst"
                       autoFocus
-                      style={{
-                        backgroundColor: dark
-                          ? "rgba(11, 15, 21, 0.52)"
-                          : "rgba(255, 255, 255, 0.52)",
-                        borderColor: colors.lineStrong,
-                      }}
-                    />
-                    <Field
-                      label="What it owns"
-                      value={purpose}
-                      onChangeText={setPurpose}
-                      placeholder="Summarizes sources, flags contradictions, and returns a brief I can act on."
                       multiline
                       style={{
                         minHeight: 112,
@@ -336,7 +306,6 @@ export function BotCreateSheet({
                         borderColor: colors.lineStrong,
                       }}
                     />
-                    <AiModelSelector value={model} provider={modelProvider} onChange={setModel} />
                     <View
                       style={[
                         styles.summaryCard,

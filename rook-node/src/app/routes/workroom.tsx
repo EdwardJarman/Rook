@@ -454,6 +454,24 @@ function MessageRow({ message }: { message: Message }) {
             {message.attachmentName}
           </div>
         ) : null}
+        {!isUser && message.trace?.length ? (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 2,
+              fontSize: 11.5,
+              color: tokens.textFaint,
+            }}
+          >
+            {message.trace.map((step, index) => (
+              <div key={`${index}-${step.title}`}>
+                <span style={{ marginRight: 6 }}>·</span>
+                {step.title}
+              </div>
+            ))}
+          </div>
+        ) : null}
         <div>
           {message.pending ? (
             <span

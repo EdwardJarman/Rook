@@ -9,7 +9,7 @@ import {
   getBotOrbMaterial,
   type BotOrbMaterial,
 } from "@/components/bot-orb";
-import { tint, useRookTheme } from "@/lib/ui";
+import { useRookTheme } from "@/lib/ui";
 
 export const BOT_COLORS = [
   "#111318",
@@ -49,7 +49,7 @@ export function BotIdentityPicker({
   onIconChange: (icon: string) => void;
   showPreview?: boolean;
 }) {
-  const { colors, dark } = useRookTheme();
+  const { colors } = useRookTheme();
   const material = getBotOrbMaterial(icon) ?? DEFAULT_BOT_ORB_MATERIAL;
 
   return (
@@ -115,7 +115,7 @@ export function BotIdentityPicker({
                   {
                     borderColor: selected ? color : colors.line,
                     backgroundColor: selected
-                      ? tint(color, dark ? 0.2 : 0.09)
+                      ? colors.canvas
                       : colors.surfaceAlt,
                     opacity: pressed ? 0.72 : 1,
                     transform: [{ scale: pressed ? 0.98 : 1 }],

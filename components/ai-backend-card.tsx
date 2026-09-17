@@ -9,7 +9,7 @@ import { tint, useRookTheme } from "@/lib/ui";
 export function AiBackendCard({
   provider = "openrouter",
 }: {
-  provider?: "openrouter" | "orcarouter" | "tokenrouter";
+  provider?: "openrouter" | "orcarouter" | "tokenrouter" | "opencode";
 }) {
   const { colors, dark } = useRookTheme();
   const status = trpc.ai.status.useQuery({ provider }, {
@@ -39,7 +39,7 @@ export function AiBackendCard({
             justifyContent: "center",
           }}
         >
-          <MaterialIcons name={provider === "orcarouter" ? "public" : provider === "tokenrouter" ? "toll" : "hub"} size={21} color={colors.accent} />
+          <MaterialIcons name={provider === "orcarouter" ? "public" : provider === "tokenrouter" ? "toll" : provider === "opencode" ? "terminal" : "hub"} size={21} color={colors.accent} />
         </View>
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text
@@ -61,7 +61,9 @@ export function AiBackendCard({
               marginTop: 3,
             }}
           >
-            Server-managed access to selected free models. Keys never reach the app.
+            {provider === "opencode"
+              ? "Your own OpenCode server — a real local CLI agent. Needs `opencode serve` + OPENCODE_BASE_URL on the Rook server."
+              : "Server-managed access to selected free models. Keys never reach the app."}
           </Text>
         </View>
         <StatusPill label={label} tone={ready ? "mint" : data?.configured ? "amber" : "muted"} />

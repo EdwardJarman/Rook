@@ -9,7 +9,17 @@
  * so the chat remains usable in development / offline.
  */
 import { workroom } from "./workroom";
-import { trpc, getTrpcClient } from "./trpc";
+import { getTrpcClient } from "./trpc";
+import {
+  approvalsFromReply,
+  filterChatContext,
+  messageKindFor,
+  replyTextOf,
+  taskForSend,
+  traceFromReply,
+  turnNeedsDecision,
+  type ReplyResult,
+} from "./reply-artifacts";
 
 type SendDetail = {
   text: string;
@@ -67,11 +77,31 @@ export function mountSendBridge() {
 }
 
 async function deliver(detail: SendDetail) {
-  const { botId, replyId, text, userMessageId, attachments } = detail;
+  const { botId, replyId, text, attachments } = detail;
   const bot = workroom.get().bots.find((b) => b.id === botId);
   if (!bot) {
     workroom.updateMessage(replyId, {
       body: "I can't find that Bot on this computer. Open the Bots tab to create or re-add it.",
+      pending: false,
+    });
+    return;
+  }
+
+  const task = taskForSend({ botId, body: text });
+  workroom.addTask(task);
+  workroom.updateBot(botId, { status: "Working" });
+
+  // Over-long messages fail server validation with a raw error payload —
+  // refuse honestly up front instead of sending a doomed request.
+  if (text.length > 4000) {
+    workroom.updateTask(task.id, {
+      status: "Failed",
+      summary: "Message too long to send.",
+      nextAction: "Shorten it and try again.",
+    });
+    workroom.updateBot(botId, { status: "Ready" });
+    workroom.updateMessage(replyId, {
+      body: `That message is ${text.length.toLocaleString()} characters; Rook sends up to 4,000 per turn. Shorten it or split it across messages — nothing was sent.`,
       pending: false,
     });
     return;
@@ -91,25 +121,55 @@ async function deliver(detail: SendDetail) {
       }
     ).workroom;
     if (!router?.reply) throw new Error("workroom.reply route not available");
+    const state = workroom.get();
     const result = (await router.reply.mutate({
       botId,
-      taskId: userMessageId,
-      botName: bot.name,
-      botRole: bot.role,
-      botPurpose: bot.purpose,
+      taskId: task.id,
+      botName: bot.name.slice(0, 80),
+      botRole: bot.role.slice(0, 120),
+      botPurpose: bot.purpose.slice(0, 500),
       model: bot.model && bot.model !== "auto" ? bot.model : undefined,
       message: text,
-      recentContext: workroom
-        .get()
-        .messages.slice(-8)
-        .map((m) => ({ author: m.author, body: m.body })),
-    })) as { text?: string } | undefined;
+      userTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      botMemory: bot.memory.slice(0, 4000),
+      recentContext: filterChatContext(state.messages, state.chatBotIds),
+    })) as ReplyResult | undefined;
+    const needsDecision = turnNeedsDecision(result);
+    for (const approval of approvalsFromReply(result, { botId, taskId: task.id })) {
+      workroom.addApproval(approval);
+    }
+    const memories = Array.isArray(result?.suggestedMemories)
+      ? result.suggestedMemories.filter(
+          (m): m is { key: string; value: string } =>
+            typeof m?.key === "string" && typeof m?.value === "string",
+        )
+      : [];
+    if (memories.length) workroom.updateBotMemory(botId, memories);
+    workroom.updateTask(task.id, {
+      status: needsDecision ? "Approval required" : "Completed",
+      summary: needsDecision
+        ? "Review the proposal in Approvals."
+        : "Result returned. You can refine or start a new task.",
+      nextAction: needsDecision
+        ? "Approve or decline in Approvals."
+        : "Review the result and decide what happens next.",
+    });
+    workroom.updateBot(botId, { status: "Ready", lastActive: "just now" });
     workroom.updateMessage(replyId, {
-      body: result?.text?.trim() || "…",
+      body: replyTextOf(result),
       pending: false,
+      kind: messageKindFor(result),
+      taskId: task.id,
+      trace: traceFromReply(result),
     });
   } catch (err) {
     const authenticated = Boolean(await currentToken().catch(() => null));
+    workroom.updateTask(task.id, {
+      status: "Failed",
+      summary: "The reply did not arrive.",
+      nextAction: "Check your connection and send it again.",
+    });
+    workroom.updateBot(botId, { status: "Ready" });
     workroom.updateMessage(replyId, {
       body: friendlyFallback(text, bot.name, attachments, authenticated),
       pending: false,

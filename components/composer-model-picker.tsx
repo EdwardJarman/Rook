@@ -5,11 +5,21 @@ import { Modal, Pressable, ScrollView, Text, View } from "react-native";
 import {
   defaultModelForProvider,
   modelsForProvider,
+  providerForModel,
   providerLabel,
   type AiProvider,
 } from "@/lib/ai-provider";
 import { trpc } from "@/lib/trpc";
 import { tint, useRookTheme } from "@/lib/ui";
+
+/** Display order for the grouped model list: local agent first. */
+const PROVIDER_ORDER: AiProvider[] = [
+  "opencode",
+  "openrouter",
+  "orcarouter",
+  "tokenrouter",
+  "chatgpt",
+];
 
 export function ComposerModelPicker({
   value,
@@ -26,14 +36,17 @@ export function ComposerModelPicker({
     staleTime: 5 * 60 * 1000,
     retry: 1,
   });
-  const models = useMemo(
-    () => modelsForProvider(catalog.data?.models ?? [], provider),
-    [catalog.data?.models, provider],
-  );
+  // Free choice: every Rook model across all providers, grouped with the
+  // provider's own section. Bots are never locked to one provider's list.
+  const models = useMemo(() => {
+    const all = catalog.data?.models ?? [];
+    return PROVIDER_ORDER.flatMap((group) => modelsForProvider(all, group));
+  }, [catalog.data?.models]);
   const selected = useMemo(
     () =>
       models.find((model) => model.id === value) ??
-      defaultModelForProvider(models, provider),
+      defaultModelForProvider(models, provider) ??
+      models[0],
     [models, provider, value],
   );
   const selectionLabel = selected?.automatic
@@ -44,7 +57,7 @@ export function ComposerModelPicker({
     <>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`Choose ${providerLabel(provider)} model`}
+        accessibilityLabel="Choose model from all providers"
         accessibilityState={{ expanded: open }}
         onPress={() => setOpen(true)}
         style={({ pressed }) => [
@@ -131,7 +144,7 @@ export function ComposerModelPicker({
                     letterSpacing: 0.8,
                   }}
                 >
-                  {providerLabel(provider).toUpperCase()}
+                  MODELS · ALL PROVIDERS
                 </Text>
                 <Text
                   numberOfLines={1}
@@ -173,7 +186,30 @@ export function ComposerModelPicker({
             >
               {models.map((model) => {
                 const active = model.id === selected?.id;
+                const group = providerForModel(model.id, provider);
+                const at = models.findIndex((entry) => entry.id === model.id);
+                const previousGroup =
+                  at > 0
+                    ? providerForModel(models[at - 1]?.id, provider)
+                    : undefined;
+                const showGroupHeader = group !== previousGroup;
                 return (
+                  <View key={model.id}>
+                    {showGroupHeader ? (
+                      <Text
+                        style={{
+                          color: colors.textFaint,
+                          fontSize: 10,
+                          fontWeight: "800",
+                          letterSpacing: 0.9,
+                          paddingHorizontal: 11,
+                          paddingTop: at === 0 ? 2 : 10,
+                          paddingBottom: 2,
+                        }}
+                      >
+                        {providerLabel(group).toUpperCase()}
+                      </Text>
+                    ) : null}
                   <Pressable
                     key={model.id}
                     accessibilityRole="radio"
@@ -237,6 +273,7 @@ export function ComposerModelPicker({
                       />
                     ) : null}
                   </Pressable>
+                  </View>
                 );
               })}
               {!catalog.isLoading && !models.length ? (
