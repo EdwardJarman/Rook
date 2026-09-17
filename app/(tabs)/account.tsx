@@ -12,7 +12,6 @@ import {
 } from "react-native";
 
 import { AiBackendCard } from "@/components/ai-backend-card";
-import { AiProviderSwitch } from "@/components/ai-provider-switch";
 import { ChatGPTConnectionCard } from "@/components/chatgpt-connection-card";
 import { ComputersCard } from "@/components/computers-card";
 import { ExcelConnectionCard } from "@/components/excel-connection-card";
@@ -64,8 +63,8 @@ export default function AccountScreen() {
             title="AI backend"
             caption="Connect your own plan or use Rook’s shared free models."
           />
-          <AiProviderSwitch />
           <ChatGPTConnectionCard />
+          <AiBackendCard provider="opencode" />
           <AiBackendCard provider="openrouter" />
           <AiBackendCard provider="orcarouter" />
           <AiBackendCard provider="tokenrouter" />

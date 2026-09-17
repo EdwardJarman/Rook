@@ -8,8 +8,9 @@ import type {
   ToolChoice,
 } from "../_core/llm";
 import type { RookAiModel } from "./openrouter";
+import { isReasoningRejectedError } from "./agent-reliability";
 
-const REQUEST_TIMEOUT_MS = 45_000;
+const REQUEST_TIMEOUT_MS = 90_000;
 const ORCAROUTER_API_BASE = "https://api.orcarouter.ai/v1";
 const TOKENROUTER_API_BASE = "https://api.tokenrouter.com/v1";
 
@@ -87,7 +88,7 @@ type GatewayErrorBody = {
 };
 
 export type RouterGatewayStatus = {
-  provider: "orcarouter" | "tokenrouter";
+  provider: "orcarouter" | "tokenrouter" | "opencode";
   configured: boolean;
   operational: boolean;
   freeModels: number;
@@ -325,7 +326,35 @@ async function invokeGateway(
     const body = response
       ? await readJson<GatewayErrorBody>(response)
       : {};
-    throw new Error(errorMessage(config.name, response?.status ?? 503, body));
+    const failure = new Error(errorMessage(config.name, response?.status ?? 503, body));
+    if (
+      (payload.reasoning !== undefined || payload.thinking !== undefined) &&
+      isReasoningRejectedError(failure)
+    ) {
+      delete payload.reasoning;
+      delete payload.thinking;
+      const retry = await fetch(`${config.apiBase}/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${key}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      }).catch(() => undefined);
+      if (retry?.ok) {
+        const retryResult = await readJson<InvokeResult>(retry);
+        if (!retryResult.choices?.length)
+          throw new Error(`${config.name} did not return a response.`);
+        return { ...retryResult, model: internalId(config, upstream) };
+      }
+      if (retry) {
+        const retryBody = await readJson<GatewayErrorBody>(retry);
+        throw new Error(errorMessage(config.name, retry.status, retryBody));
+      }
+      throw failure;
+    }
+    throw failure;
   }
 
   const result = await readJson<InvokeResult>(response);
@@ -347,3 +376,23 @@ export const __routerGatewayModelIdsForTests = {
   orcarouter: ORCAROUTER_MODELS.map((model) => model.upstreamId),
   tokenrouter: TOKENROUTER_MODELS.map((model) => model.upstreamId),
 };
+
+/**
+ * Streaming target for an already-validated gateway model id (check with
+ * `isOrcaRouterModel` / `isTokenRouterModel` first). Returns undefined when
+ * the id does not belong to either gateway.
+ */
+export function gatewayStreamTarget(
+  modelId: string | undefined,
+): { url: string; apiKey: string; upstream: string } | undefined {
+  for (const config of [orcaConfig, tokenConfig]) {
+    if (!modelId?.startsWith(config.prefix)) continue;
+    if (!matchesConfig(modelId, config)) return undefined;
+    return {
+      url: `${config.apiBase}/chat/completions`,
+      apiKey: config.apiKey(),
+      upstream: modelId.slice(config.prefix.length),
+    };
+  }
+  return undefined;
+}

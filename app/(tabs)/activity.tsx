@@ -16,6 +16,7 @@ import { useDockScroll } from "@/lib/dock-visibility";
 import { trpc } from "@/lib/trpc";
 import { tint, type ToneName } from "@/lib/ui";
 import { useWorkroom, type Approval } from "@/lib/workroom-store";
+import { reconcileApprovals } from "@/lib/workroom-helpers";
 
 export default function ActivityScreen() {
   const { colors } = useRookTheme();
@@ -41,9 +42,13 @@ export default function ActivityScreen() {
         risk: "Medium",
         state: "Pending",
         createdAt: new Date(action.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        createdAtMs: new Date(action.createdAt).getTime(),
       }));
-    return [...local, ...recovered];
-  }, [approvals, serverPendingActions.data]);
+    const serverIds = serverPendingActions.isSuccess
+      ? new Set((serverPendingActions.data ?? []).map((action) => action.id))
+      : null;
+    return reconcileApprovals([...local, ...recovered], serverIds, Date.now());
+  }, [approvals, serverPendingActions.data, serverPendingActions.isSuccess]);
   const unreadCount = notifications.filter((notification) => !notification.read).length;
   const dockScroll = useDockScroll();
 
@@ -51,6 +56,8 @@ export default function ActivityScreen() {
     if (resolvingId) return;
     if (!approval.externalActionId) {
       resolveApproval(approval.id, decision === "approve" ? "Approved" : "Declined");
+      if (approval.blockedBody && approval.taskId)
+        updateTaskStatus(approval.taskId, "Cancelled", "Discarded before sending. Nothing was attempted.");
       return;
     }
     setResolvingId(approval.id);
@@ -147,8 +154,14 @@ export default function ActivityScreen() {
                       />
                     </View>
                     <Text style={{ color: colors.textSoft, fontSize: 13, lineHeight: 19 }}>{approval.detail}</Text>
+                    {approval.blockedBody ? (
+                      <Text style={{ color: colors.textFaint, fontSize: 12, lineHeight: 17 }}>
+                        Decide from the chat thread — the message is waiting there with Send anyway / Edit / Discard.
+                      </Text>
+                    ) : null}
                     <View style={{ flexDirection: "row", gap: 10 }}>
                       <SecondaryButton label={resolvingId === approval.id ? "Working…" : "Decline"} onPress={() => void decide(approval, "decline")} destructive />
+                      {approval.blockedBody ? null : (
                       <Pressable
                         accessibilityRole="button"
                         accessibilityLabel={`Approve ${approval.title}`}
@@ -169,8 +182,9 @@ export default function ActivityScreen() {
                         ]}
                         >
                           <MaterialIcons name="check" size={17} color={colors.onInk} />
-                        <Text style={{ color: colors.onInk, fontSize: 15, fontWeight: "600" }}>{resolvingId === approval.id ? "Applying…" : "Approve"}</Text>
-                      </Pressable>
+                          <Text style={{ color: colors.onInk, fontSize: 15, fontWeight: "600" }}>{resolvingId === approval.id ? "Applying…" : "Approve"}</Text>
+                        </Pressable>
+                      )}
                     </View>
                   </View>
                 );

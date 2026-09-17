@@ -4,12 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Platform, Pressable, ScrollView, Text, View } from "react-native";
 
 import { RookLogo } from "@/components/rook-logo";
+import { cliInstallCommands, installApiBaseUrl } from "@/lib/cli-install";
 import { useRookTheme } from "@/lib/ui";
-
-const POSIX_INSTALL_COMMAND =
-  "curl -fsSL https://www.rook.lighting/api/download/cli/install.sh | sh";
-const POWERSHELL_INSTALL_COMMAND =
-  "irm https://www.rook.lighting/api/download/cli/install.ps1 | iex";
 
 /**
  * GitHub's `releases/latest/download/<asset>` URL always resolves to the
@@ -205,8 +201,20 @@ export default function DownloadScreen() {
       : "posix",
   );
   const [copied, setCopied] = useState(false);
+  // Same one-liners as the landing page: production origin in prod, the
+  // local API server in dev.
+  const installCommands =
+    Platform.OS === "web" && typeof window !== "undefined" && window.location
+      ? cliInstallCommands(
+          installApiBaseUrl({
+            protocol: window.location.protocol,
+            hostname: window.location.hostname,
+            port: window.location.port,
+          }),
+        )
+      : cliInstallCommands("https://www.rook.lighting");
   const command =
-    shell === "posix" ? POSIX_INSTALL_COMMAND : POWERSHELL_INSTALL_COMMAND;
+    shell === "posix" ? installCommands.posix : installCommands.powershell;
 
   const copyInstaller = async () => {
     if (
@@ -522,10 +530,10 @@ export default function DownloadScreen() {
                       marginTop: 4,
                     }}
                   >
-                    Install Rook CLI for your current user. It includes the
-                    isolated Rook Node runtime and opens the secure connection
-                    flow when you run{" "}
-                    <Text style={{ fontWeight: "800" }}>rook</Text>.
+                    Install Rook CLI for your current user: the same models
+                    as the web app, in your terminal. Then run{" "}
+                    <Text style={{ fontWeight: "800" }}>rook login</Text>{" "}
+                    once to sign this device in.
                   </Text>
                 </View>
                 <MaterialIcons

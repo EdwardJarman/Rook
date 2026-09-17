@@ -59,7 +59,7 @@ export const GITHUB_TOOLS: Tool[] = [
     function: {
       name: "github_repo_overview",
       description:
-        "Show one repository's overview from the user's GitHub working set: description, default branch, languages, and when it was last pushed.",
+        "Use when asked about a repository's state. Shows one working-set repository's description, default branch, languages, and last push. Read-only.",
       parameters: {
         type: "object",
         properties: {
@@ -75,7 +75,7 @@ export const GITHUB_TOOLS: Tool[] = [
     function: {
       name: "github_list_files",
       description:
-        "List the files and subdirectories at one path of a repository in the GitHub working set. Start from the root when unsure.",
+        "Use to discover real paths before reading — never guess file paths. Lists files and subdirectories at one path (repository root by default) in a working-set repo. Read-only.",
       parameters: {
         type: "object",
         properties: {
@@ -96,7 +96,7 @@ export const GITHUB_TOOLS: Tool[] = [
     function: {
       name: "github_read_file",
       description:
-        "Read one text file from a repository in the GitHub working set. Use github_list_files first to discover exact paths.",
+        "Use to quote or analyze exact code. Reads one text file (path like src/index.ts — call github_list_files first for the exact path). Read-only.",
       parameters: {
         type: "object",
         properties: {

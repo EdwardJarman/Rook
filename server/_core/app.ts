@@ -4,6 +4,7 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { appRouter } from "../routers.js";
 import { getAiBackendStatus } from "../ai";
 import { handleChatGPTRoute } from "../ai/chatgpt";
+import { registerAgentStreamRoute } from "../agent-stream-route";
 import { createContext } from "./context";
 import { registerOAuthRoutes } from "./oauth";
 import { registerNodeDownloadRoutes } from "../download-routes";
@@ -58,6 +59,7 @@ export function createApp() {
 
   registerStorageProxy(app);
   registerOAuthRoutes(app);
+  registerAgentStreamRoute(app);
   registerNodeDownloadRoutes(app);
   registerNodeRelayRoutes(app, {
     consumePairingToken: (token) => db.consumePairingToken(token),

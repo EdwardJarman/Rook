@@ -3,7 +3,7 @@ import { gunzipSync, gzipSync } from "node:zlib";
 
 import { createClerkClient, verifyToken } from "@clerk/backend";
 import type { KeyValueStore } from "@opencoredev/loginwithchatgpt-core";
-import type { RateLimitBucket, StoredSession } from "@opencoredev/loginwithchatgpt-server";
+import type { StoredSession } from "@opencoredev/loginwithchatgpt-server";
 import type { Request as ExpressRequest, Response as ExpressResponse } from "express";
 import type { ModelMessage } from "ai";
 
@@ -13,7 +13,6 @@ import type { AiModel } from "./index";
 
 const CHATGPT_PREFIX = "chatgpt:";
 const SESSION_METADATA_KEY = "rookChatGPTSession";
-const RATE_METADATA_KEY = "rookChatGPTRate";
 const SESSION_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 const ALLOWED_EXTERNAL_ROUTES = new Set(["/login", "/status", "/session", "/logout", "/models"]);
 
@@ -160,10 +159,12 @@ async function createInternalRequest(
   return new Request(`${requestOrigin(request)}/api/chatgpt${path}`, { method, headers });
 }
 
-async function runtimeFor(request: ExpressRequest): Promise<ChatGPTRuntime> {
+async function runtimeFor(
+  request: ExpressRequest,
+  effort: "low" | "medium" | "high" = "medium",
+): Promise<ChatGPTRuntime> {
   const clerkUserId = await clerkUserIdForRequest(request);
   const sessionStore = new ClerkPrivateMetadataStore<StoredSession>(clerkUserId, SESSION_METADATA_KEY);
-  const rateStore = new ClerkPrivateMetadataStore<RateLimitBucket>(clerkUserId, RATE_METADATA_KEY);
   const secret = sessionSecret();
   const { createChatGPTHandler, sign } = await import("@opencoredev/loginwithchatgpt-server");
   const signedSession = await sign(userSessionKey(clerkUserId), secret);
@@ -175,9 +176,8 @@ async function runtimeFor(request: ExpressRequest): Promise<ChatGPTRuntime> {
     allowedOrigins: ["https://rook.lighting", "https://www.rook.lighting"],
     responsesProxy: {
       maxRequestBytes: 2 * 1024 * 1024,
-      rateLimit: { limit: 20, windowMs: 60_000, store: rateStore },
     },
-    reasoningEffort: "medium",
+    reasoningEffort: effort,
     textVerbosity: "medium",
   });
   return {
@@ -254,10 +254,9 @@ export async function listChatGPTModels(request: ExpressRequest): Promise<AiMode
 
 export async function deleteChatGPTSession(request: ExpressRequest): Promise<void> {
   const clerkUserId = await clerkUserIdForRequest(request);
-  await Promise.all([
-    new ClerkPrivateMetadataStore<StoredSession>(clerkUserId, SESSION_METADATA_KEY).delete(""),
-    new ClerkPrivateMetadataStore<RateLimitBucket>(clerkUserId, RATE_METADATA_KEY).delete(""),
-  ]);
+  await new ClerkPrivateMetadataStore<StoredSession>(clerkUserId, SESSION_METADATA_KEY).delete("");
+  // Best-effort cleanup of legacy rate buckets from before the limiter was removed.
+  await new ClerkPrivateMetadataStore<StoredSession>(clerkUserId, "rookChatGPTRate").delete("").catch(() => undefined);
 }
 
 function parseToolInput(value: string): unknown {
@@ -327,7 +326,10 @@ export async function invokeChatGPT(
 ): Promise<InvokeResult> {
   const model = chatGPTModelSlug(params.model || "");
   if (!model) throw new Error("Choose a ChatGPT model after connecting your account.");
-  const runtime = await runtimeFor(request);
+  const requestedEffort = (params.reasoning as { effort?: unknown } | undefined)?.effort;
+  const effort =
+    requestedEffort === "low" || requestedEffort === "high" ? requestedEffort : "medium";
+  const runtime = await runtimeFor(request, effort);
   const [{ createChatGPTProxyProvider }, { streamText, jsonSchema, tool }] = await Promise.all([
     import("@opencoredev/loginwithchatgpt-ai"),
     import("ai"),
@@ -399,7 +401,7 @@ export function userFacingChatGPTText(value: string) {
 
 export const __chatGPTSessionMetadataKeysForTests = {
   session: SESSION_METADATA_KEY,
-  rate: RATE_METADATA_KEY,
+  rate: "rookChatGPTRate",
 };
 
 export const __chatGPTUserSessionKeyForTests = userSessionKey;

@@ -2,7 +2,8 @@ export type AiProvider =
   | "openrouter"
   | "chatgpt"
   | "orcarouter"
-  | "tokenrouter";
+  | "tokenrouter"
+  | "opencode";
 
 export type AiModelSummary = {
   id: string;
@@ -15,12 +16,14 @@ const PREFIXES: Record<Exclude<AiProvider, "openrouter">, string> = {
   chatgpt: "chatgpt:",
   orcarouter: "orcarouter:",
   tokenrouter: "tokenrouter:",
+  opencode: "opencode:",
 };
 
 export const providerLabel = (provider: AiProvider) => {
   if (provider === "chatgpt") return "ChatGPT";
   if (provider === "orcarouter") return "OrcaRouter";
   if (provider === "tokenrouter") return "TokenRouter";
+  if (provider === "opencode") return "OpenCode";
   return "OpenRouter";
 };
 
@@ -42,6 +45,7 @@ export const providerForModel = (
   if (resolved.startsWith(PREFIXES.chatgpt)) return "chatgpt";
   if (resolved.startsWith(PREFIXES.orcarouter)) return "orcarouter";
   if (resolved.startsWith(PREFIXES.tokenrouter)) return "tokenrouter";
+  if (resolved.startsWith(PREFIXES.opencode)) return "opencode";
   return fallback;
 };
 
@@ -53,6 +57,9 @@ export const canonicalModelForProvider = (
     return modelId;
   if (Object.values(PREFIXES).some((prefix) => modelId.startsWith(prefix)))
     return modelId;
+  // "openrouter/free" and friends are already-qualified OpenRouter ids
+  // that have no colon prefix — keep them when switching providers.
+  if (modelId.startsWith("openrouter/")) return modelId;
   return `${PREFIXES[provider]}${modelId}`;
 };
 

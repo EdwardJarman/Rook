@@ -25,109 +25,149 @@ export function pickCliAssetForUserAgent(
 }
 
 /**
- * A POSIX installer deliberately uses only curl, tar, chmod, and mv, which are
- * present on supported macOS and Linux systems. It never invokes sudo and
- * installs beneath the current user's home directory.
+ * POSIX installer: builds the real Rook CLI from source (sparse checkout
+ * of cli/ + npm ci + build) and drops one `rook` executable into
+ * ~/.local/bin. Uses only sh/git/node/npm/mv/chmod — never sudo, never
+ * eval, user folder only. The same flow is verified end to end by
+ * cli/install.sh, which shares this logic for repo-local installs.
  */
 export function buildPosixCliInstaller(origin: string): string {
+  const page = origin.replace(/\/$/, "");
   return `#!/usr/bin/env sh
+# Rook CLI installer. Usage: curl -fsSL ${page}/api/download/cli/install.sh | sh
 set -eu
 
-BASE_URL="${origin.replace(/\/$/, "")}" 
-INSTALL_DIR="${"$"}{ROOK_INSTALL_DIR:-${"$"}HOME/.local/bin}"
-TEMP_DIR="$(mktemp -d "${"$"}{TMPDIR:-/tmp}/rook-cli.XXXXXX")"
-cleanup() { rm -rf "${"$"}TEMP_DIR"; }
-trap cleanup EXIT HUP INT TERM
+REPO="https://github.com/EdwardJarman/Rook.git"
+REF="\${ROOK_REF:-main}"
+BIN_DIR="\${ROOK_BIN_DIR:-\$HOME/.local/bin}"
 
 need() {
-  command -v "${"$"}1" >/dev/null 2>&1 || { echo "Rook installer needs ${"$"}1, but it was not found." >&2; exit 1; }
+  command -v "$1" >/dev/null 2>&1 || { echo "rook install: missing '$1' - please install it first." >&2; exit 1; }
 }
-need curl
-need tar
-need uname
+need git
+need node
+need npm
+node -e "process.exit(Number(process.versions.node.split('.')[0]) >= 20 ? 0 : 1)" || {
+  echo "rook install: node >= 20 required." >&2
+  exit 1
+}
 
-OS="$(uname -s)"
-ARCH="$(uname -m)"
-case "${"$"}OS/${"$"}ARCH" in
-  Darwin/arm64|Darwin/aarch64) TARGET="macArm64" ;;
-  Darwin/x86_64) TARGET="macIntel" ;;
-  Linux/x86_64|Linux/amd64) TARGET="linux" ;;
-  *)
-    echo "Rook CLI does not yet support ${"$"}OS/${"$"}ARCH." >&2
-    echo "Download Rook Node instead: ${"$"}BASE_URL/download" >&2
-    exit 1
-    ;;
-esac
+WORK=""
+cleanup() {
+  if [ -n "$WORK" ]; then rm -rf "$WORK"; fi
+}
+trap cleanup EXIT HUP INT TERM
 
-ARCHIVE="${"$"}TEMP_DIR/rook-cli.tar.gz"
-printf '%s\\n' "Downloading Rook CLI for ${"$"}OS/${"$"}ARCH…"
-curl --fail --location --silent --show-error --retry 2 --connect-timeout 10 \\
-  "${"$"}BASE_URL/api/download/cli?platform=${"$"}TARGET" -o "${"$"}ARCHIVE"
+if [ -f "./cli/package.json" ] && [ -d "./cli/src" ]; then
+  SRC="./cli"
+else
+  WORK="$(mktemp -d "\${TMPDIR:-/tmp}/rook-cli.XXXXXX")/rook-cli-install"
+  echo "rook install: fetching installer sources..."
+  git clone --quiet --depth 1 --branch "$REF" --filter=blob:none --sparse "$REPO" "$WORK"
+  git -C "$WORK" sparse-checkout set cli
+  SRC="$WORK/cli"
+fi
 
-tar -xzf "${"$"}ARCHIVE" -C "${"$"}TEMP_DIR"
-if [ ! -f "${"$"}TEMP_DIR/rook" ]; then
-  echo "Rook CLI archive was invalid: executable missing." >&2
+if [ ! -f "$SRC/package.json" ]; then
+  echo "rook install: Rook CLI sources not found (branch $REF has no cli/ yet)." >&2
+  echo "Push the Rook repo first, or run this script from a Rook checkout." >&2
   exit 1
 fi
 
-mkdir -p "${"$"}INSTALL_DIR"
-chmod 755 "${"$"}TEMP_DIR/rook"
-mv -f "${"$"}TEMP_DIR/rook" "${"$"}INSTALL_DIR/rook"
-if [ -d "${"$"}TEMP_DIR/chromium" ]; then
-  rm -rf "${"$"}INSTALL_DIR/chromium"
-  mv "${"$"}TEMP_DIR/chromium" "${"$"}INSTALL_DIR/chromium"
-fi
+echo "rook install: building..."
+npm --prefix "$SRC" ci --no-audit --no-fund || npm --prefix "$SRC" install --no-audit --no-fund
+npm --prefix "$SRC" run build
 
-"${"$"}INSTALL_DIR/rook" --version
-printf '%s\\n' "Rook CLI installed at ${"$"}INSTALL_DIR/rook"
-case ":${"$"}PATH:" in
-  *":${"$"}INSTALL_DIR:"*) ;;
+mkdir -p "$BIN_DIR"
+cp "$SRC/dist/rook.cjs" "$BIN_DIR/rook"
+chmod +x "$BIN_DIR/rook"
+
+case ":$PATH:" in
+  *":$BIN_DIR:"*) ;;
   *)
     printf '%s\\n' "Add this to your shell profile, then open a new terminal:"
-    printf '  export PATH="%s:${"$"}PATH"\\n' "${"$"}INSTALL_DIR"
+    printf '  export PATH="%s:$PATH"\\n' "$BIN_DIR"
     ;;
 esac
-printf '%s\\n' "Run: rook"
+
+if "$BIN_DIR/rook" version >/dev/null 2>&1; then
+  printf '%s\\n' "rook install: done - rook $($BIN_DIR/rook version) at $BIN_DIR/rook"
+  printf '%s\\n' "Next: rook login (or download Rook Node instead: ${page}/download)"
+else
+  echo "rook install: build ok, but $BIN_DIR/rook did not run - check node is on your PATH." >&2
+  exit 1
+fi
 `;
 }
 
-/** PowerShell equivalent for supported Windows systems. */
+/**
+ * PowerShell installer: same source-install flow for Windows. Strictly
+ * ASCII (Windows PowerShell 5.1 misdecodes UTF-8 without BOM), no
+ * elevation, no Start-Process/RunAs, user folder only.
+ */
 export function buildPowerShellCliInstaller(origin: string): string {
+  const page = origin.replace(/\/$/, "");
   return `$ErrorActionPreference = "Stop"
-$BaseUrl = "${origin.replace(/\/$/, "")}" 
-$InstallDir = if ($env:ROOK_INSTALL_DIR) { $env:ROOK_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA "Rook\\bin" }
-$TempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("rook-cli-" + [guid]::NewGuid().ToString("N"))
-$Archive = Join-Path $TempDir "rook-cli.zip"
+# Rook CLI installer. Usage: irm ${page}/api/download/cli/install.ps1 | iex
+$Repo = "https://github.com/EdwardJarman/Rook.git"
+$Ref = if ($env:ROOK_REF) { $env:ROOK_REF } else { "main" }
+$BinDir = if ($env:ROOK_BIN_DIR) { $env:ROOK_BIN_DIR } else { Join-Path $env:LOCALAPPDATA "Rook\\bin" }
 
-try {
-  New-Item -ItemType Directory -Force -Path $TempDir | Out-Null
-  Write-Host "Downloading Rook CLI for Windows…"
-  Invoke-WebRequest -Uri "$BaseUrl/api/download/cli?platform=windows" -OutFile $Archive -UseBasicParsing
-  Expand-Archive -LiteralPath $Archive -DestinationPath $TempDir -Force
-
-  $Cli = Join-Path $TempDir "rook.exe"
-  if (-not (Test-Path -LiteralPath $Cli)) { throw "Rook CLI archive was invalid: executable missing." }
-
-  New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-  Copy-Item -LiteralPath $Cli -Destination (Join-Path $InstallDir "rook.exe") -Force
-  $Chromium = Join-Path $TempDir "chromium"
-  if (Test-Path -LiteralPath $Chromium) {
-    $DestinationChromium = Join-Path $InstallDir "chromium"
-    Remove-Item -LiteralPath $DestinationChromium -Recurse -Force -ErrorAction SilentlyContinue
-    Move-Item -LiteralPath $Chromium -Destination $DestinationChromium -Force
+function Need($Name) {
+  if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
+    Write-Error "rook install: missing '$Name' - please install it first."
   }
+}
+
+Need "git"
+Need "node"
+Need "npm"
+$Major = (& node -e "console.log(process.versions.node.split('.')[0])").Trim()
+if ([int]$Major -lt 20) { Write-Error "rook install: node >= 20 required." }
+
+$Work = ""
+try {
+  if ((Test-Path "./cli/package.json") -and (Test-Path "./cli/src")) {
+    $Src = "./cli"
+  } else {
+    $Work = Join-Path ([System.IO.Path]::GetTempPath()) ("rook-cli-install-" + [System.Guid]::NewGuid().ToString("N"))
+    Write-Host "rook install: fetching installer sources..."
+    & git clone --quiet --depth 1 --branch $Ref --filter=blob:none --sparse $Repo $Work
+    if ($LASTEXITCODE -ne 0) { Write-Error "rook install: git clone failed." }
+    & git -C $Work sparse-checkout set cli
+    $Src = Join-Path $Work "cli"
+  }
+
+  if (-not (Test-Path -LiteralPath (Join-Path $Src "package.json"))) {
+    Write-Error "rook install: Rook CLI sources not found (branch $Ref has no cli/ yet). Push the Rook repo first, or run this script from a Rook checkout."
+  }
+
+  Write-Host "rook install: building..."
+  & npm --prefix $Src ci --no-audit --no-fund
+  if ($LASTEXITCODE -ne 0) { & npm --prefix $Src install --no-audit --no-fund }
+  if ($LASTEXITCODE -ne 0) { Write-Error "rook install: dependency install failed." }
+  & npm --prefix $Src run build
+  if ($LASTEXITCODE -ne 0) { Write-Error "rook install: build failed." }
+
+  New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
+  Copy-Item (Join-Path $Src "dist/rook.cjs") (Join-Path $BinDir "rook.cjs") -Force
+  Set-Content -Path (Join-Path $BinDir "rook.cmd") -Value '@node "%~dp0rook.cjs" %*' -NoNewline
 
   $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
-  if ((";" + $UserPath + ";").ToLowerInvariant().Contains((";" + $InstallDir + ";").ToLowerInvariant()) -eq $false) {
-    [Environment]::SetEnvironmentVariable("Path", (($UserPath.TrimEnd(";") + ";" + $InstallDir).TrimStart(";")), "User")
-    $env:Path = $env:Path + ";" + $InstallDir
+  if ($UserPath -notlike "*$BinDir*") {
+    [Environment]::SetEnvironmentVariable("Path", "$UserPath;$BinDir", "User")
+    Write-Host "rook install: added $BinDir to your user PATH (new terminals pick it up)."
   }
 
-  & (Join-Path $InstallDir "rook.exe") --version
-  Write-Host "Rook CLI installed at $InstallDir\\rook.exe"
-  Write-Host "Open a new PowerShell window and run: rook"
+  $Version = & (Join-Path $BinDir "rook.cmd") version 2>$null
+  if ($LASTEXITCODE -eq 0 -and $Version) {
+    Write-Host "rook install: done - rook $Version at $BinDir\\rook.cmd"
+    Write-Host "Next: rook login (or download Rook Node instead: ${page}/download)"
+  } else {
+    Write-Error "rook install: build ok, but rook did not run - check node is on your PATH."
+  }
 } finally {
-  Remove-Item -LiteralPath $TempDir -Recurse -Force -ErrorAction SilentlyContinue
+  if ($Work -and (Test-Path $Work)) { Remove-Item $Work -Recurse -Force -ErrorAction SilentlyContinue }
 }
 `;
 }

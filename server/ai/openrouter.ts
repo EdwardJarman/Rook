@@ -9,12 +9,13 @@ import {
   readJson,
   responseFormatFor,
 } from "./openai-compat";
+import { isReasoningRejectedError } from "./agent-reliability";
 
-const OPENROUTER_API_BASE = "https://openrouter.ai/api/v1";
+export const OPENROUTER_API_BASE = "https://openrouter.ai/api/v1";
 export const OPENROUTER_AUTO_MODEL = "openrouter/free";
 const CATALOG_TTL_MS = 10 * 60 * 1000;
 const STATUS_TTL_MS = 5 * 60 * 1000;
-const REQUEST_TIMEOUT_MS = 45_000;
+const REQUEST_TIMEOUT_MS = 90_000;
 const FREE_AUDIO_TRANSCRIPTION_MODEL = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free";
 
 export type RookAiModel = {
@@ -243,48 +244,110 @@ export async function openRouterStatus(options?: {
   return status;
 }
 
-const selectedModel = async (
-  requestedModel: string | undefined,
-  needsTools: boolean,
-) => {
-  const catalog = await listOpenRouterModels();
-  const requested = catalog.find((model) => model.id === requestedModel);
-  if (requested && (!needsTools || requested.supportsTools)) return requested.id;
-  if (requestedModel === OPENROUTER_AUTO_MODEL) {
-    return pickAutoModel(catalog, needsTools);
-  }
-  return OPENROUTER_AUTO_MODEL;
+export type ResolvedModel = {
+  requested: string | undefined;
+  resolved: string;
+  fellBack: boolean;
+  reason?: string;
 };
 
+const resolveModel = async (
+  requestedModel: string | undefined,
+  needsTools: boolean,
+): Promise<ResolvedModel> => {
+  const catalog = await listOpenRouterModels();
+  const requested = catalog.find((model) => model.id === requestedModel);
+  if (requested && (!needsTools || requested.supportsTools))
+    return { requested: requestedModel, resolved: requested.id, fellBack: false };
+  if (requestedModel === OPENROUTER_AUTO_MODEL || requestedModel === undefined) {
+    return {
+      requested: requestedModel,
+      resolved: pickAutoModel(catalog, needsTools),
+      fellBack: false,
+    };
+  }
+  // Unknown / paid / tool-incapable IDs never error the chat: fall back to
+  // the curated auto route — but report it honestly (see `fellBack`).
+  return {
+    requested: requestedModel,
+    resolved: pickAutoModel(catalog, needsTools),
+    fellBack: true,
+    reason: `“${requestedModel}” is not in Rook's free tool-capable catalog; used Auto instead.`,
+  };
+};
+
+export const resolveOpenRouterModelForTests = resolveModel;
+
+/** Production alias (same resolver; the `ForTests` name is historical). */
+export const resolveOpenRouterModel = resolveModel;
+
+export const openRouterHeaders = (includeJson = false) => headers(includeJson);
+
 /**
- * Quality ranking for the auto route. OpenRouter's free catalog mixes
- * excellent models with tiny safety-tuned ones that leak internal
- * scaffolding ("User Safety: safe …"), so "whatever is available" is not
- * good enough — prefer strong generalist families first, then fall back
- * to anything tool-capable.
+ * Quality ranking for the auto route, grounded in LIVE measurements
+ * (2026-09-12 probe of the actual free catalog: cohere/north returned
+ * coherent text + correct tool calls; laguna called tools but flaked;
+ * gemma/nemotron-ultra 429d/timed out; dots-studio returned EMPTY).
+ * The free catalog rotates monthly, so legacy strong families stay as
+ * fallback patterns below the measured ones — and anything matching
+ * WEAK_MODEL_PATTERN sinks to the bottom without being banned.
  */
 const AUTO_MODEL_PREFERENCES: RegExp[] = [
+  /cohere\//i,
+  /poolside\/laguna/i,
+  /nvidia\/nemotron-3-(nano|super|ultra)/i,
+  /google\/gemma-4/i,
+  /thinkingmachines\/inkling/i,
+  /nex-agi\/nex/i,
+  /inclusionai\/ling/i,
+  /liquid\/lfm/i,
   /gpt-oss/i,
-  /deepseek\/deepseek-(?:chat|v3|seek)/i,
-  /qwen\d?\/qwen3?(?:\.|-main|-coder)/i,
+  /deepseek\/deepseek-v4/i,
+  /deepseek\/deepseek-(?:chat|v3|seek|r1)/i,
+  /qwen.*qwen3\.8/i,
+  /qwen\d?\/qwen3?(?:\.|-max|-main|-coder|-instruct)/i,
+  /meta-llama\/llama-4/i,
   /meta-llama\/llama-3\.3-70b/i,
-  /google\/gemini-2\.\d/i,
-  /mistralai\/(?:mistral-small-3|mistral-nemo)/i,
-  /nvidia\/(?:nemotron-4|llama-3\.)/i,
+  /meta-llama\/llama-3\.1-405b/i,
+  /google\/gemini-3/i,
+  /google\/gemini-2\.[05]/i,
+  /mistralai\/(?:mistral-small-3|mistral-medium|mistral-nemo)/i,
+  /nvidia\/(?:nemotron|llama-3\.)/i,
+  /hy3/i,
+  /microsoft\/(?:phi|wizardlm)/i,
 ];
 
-export function pickAutoModel(catalog: RookAiModel[], needsTools: boolean): string {
+/** Families observed leaking classifier scaffolding — deprioritize, never ban. */
+const SCAFFOLD_PRONE_MODEL_PATTERN =
+  /guard|moderation|safety|shield|filter|classifier|detox|llamaguard/i;
+
+/** Families observed returning empty content — sink to the very bottom. */
+const WEAK_MODEL_PATTERN =
+  /dots-studio|note-preview|experimental|:\s*preview/i;
+
+export function pickAutoModel(
+  catalog: RookAiModel[],
+  needsTools: boolean,
+  excludeId?: string,
+): string {
   const eligible = catalog.filter(
-    (model) => model.automatic !== true && model.id !== OPENROUTER_AUTO_MODEL && (!needsTools || model.supportsTools),
+    (model) =>
+      model.automatic !== true &&
+      model.id !== OPENROUTER_AUTO_MODEL &&
+      model.id !== excludeId &&
+      (!needsTools || model.supportsTools),
   );
+  const ranked = [...eligible].sort((a, b) => {
+    const score = (id: string) =>
+      (SCAFFOLD_PRONE_MODEL_PATTERN.test(id) ? 1 : 0) +
+      (WEAK_MODEL_PATTERN.test(id) ? 2 : 0);
+    return score(a.id) - score(b.id);
+  });
   for (const pattern of AUTO_MODEL_PREFERENCES) {
-    const match = eligible
-      .filter((model) => pattern.test(model.id))
-      .sort((a, b) => b.contextLength - a.contextLength)[0];
+    const match = ranked.find((model) => pattern.test(model.id));
     if (match) return match.id;
   }
-  const fallback = eligible.sort((a, b) => b.contextLength - a.contextLength)[0];
-  return fallback?.id ?? OPENROUTER_AUTO_MODEL;
+  return ranked[0]?.id ?? OPENROUTER_AUTO_MODEL;
 }
 
 export async function invokeOpenRouter(
@@ -293,7 +356,10 @@ export async function invokeOpenRouter(
   if (!isOpenRouterConfigured())
     throw new Error("OpenRouter is not configured for this Rook deployment.");
 
-  const model = await selectedModel(params.model, Boolean(params.tools?.length));
+  const { resolved: model, fellBack: modelFellBack } = await resolveModel(
+    params.model,
+    Boolean(params.tools?.length),
+  );
   const fallbacks = model === OPENROUTER_AUTO_MODEL
     ? [OPENROUTER_AUTO_MODEL]
     : [model, OPENROUTER_AUTO_MODEL];
@@ -314,28 +380,77 @@ export async function invokeOpenRouter(
   if (params.thinking) payload.thinking = params.thinking;
 
   let response: Response | undefined;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    response = await fetch(`${OPENROUTER_API_BASE}/chat/completions`, {
-      method: "POST",
-      headers: headers(true),
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-    if (response.ok || ![429, 500, 502, 503, 504].includes(response.status) || attempt === 1)
+  let lastNetworkError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      response = await fetch(`${OPENROUTER_API_BASE}/chat/completions`, {
+        method: "POST",
+        headers: headers(true),
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+      lastNetworkError = undefined;
+    } catch (error) {
+      // AbortSignal.timeout throws + transient network blips: retry with
+      // jittered backoff instead of failing the whole chat turn (v1 threw).
+      lastNetworkError = error;
+      response = undefined;
+      const backoff = Math.min(500 * 2 ** attempt, 4000);
+      await new Promise((resolve) =>
+        setTimeout(resolve, backoff / 2 + Math.random() * (backoff / 2)),
+      );
+      continue;
+    }
+    if (response.ok || ![429, 500, 502, 503, 504].includes(response.status) || attempt === 2)
       break;
-    const retryAfter = Math.min(
-      Math.max(Number(response.headers.get("retry-after") || "0"), 0) * 1000,
-      2_000,
-    );
+    const rawRetryAfter = Number(response.headers.get("retry-after") || "0");
+    const retryAfter = Math.min(Math.max(Number.isFinite(rawRetryAfter) ? rawRetryAfter : 0, 0) * 1000, 8000);
     await response.body?.cancel().catch(() => undefined);
-    await new Promise((resolve) => setTimeout(resolve, Math.max(400, retryAfter)));
+    const backoff = Math.min(500 * 2 ** attempt, 4000);
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.max(backoff / 2 + Math.random() * (backoff / 2), Math.min(retryAfter, 8000))),
+    );
+  }
+
+  if (!response) {
+    throw new Error(
+      lastNetworkError instanceof Error && /timed out|timeout|abort/i.test(lastNetworkError.message)
+        ? "The AI request timed out before finishing. Please try again."
+        : "The AI network request failed before reaching OpenRouter. Please try again.",
+    );
   }
 
   if (!response?.ok) {
     const body = response
       ? await readJson<OpenRouterErrorBody>(response)
       : {};
-    throw new Error(errorMessage(response?.status ?? 503, body));
+    const failure = new Error(errorMessage(response?.status ?? 503, body));
+    // Some free models reject the reasoning/thinking params outright. One
+    // retry without them beats failing a turn the model could have answered.
+    if (
+      (payload.reasoning !== undefined || payload.thinking !== undefined) &&
+      isReasoningRejectedError(failure)
+    ) {
+      delete payload.reasoning;
+      delete payload.thinking;
+      const retry = await fetch(`${OPENROUTER_API_BASE}/chat/completions`, {
+        method: "POST",
+        headers: headers(true),
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      }).catch(() => undefined);
+      if (retry?.ok) {
+        response = retry;
+      } else {
+        if (retry) {
+          const retryBody = await readJson<OpenRouterErrorBody>(retry);
+          throw new Error(errorMessage(retry.status, retryBody));
+        }
+        throw failure;
+      }
+    } else {
+      throw failure;
+    }
   }
 
   const result = (await response.json()) as InvokeResult & {
@@ -345,6 +460,36 @@ export async function invokeOpenRouter(
   };
   if (!result.choices?.length)
     throw new Error("The selected free model did not return a response.");
+  const firstMessage = result.choices[0]?.message;
+  const firstContent =
+    typeof (firstMessage as { content?: unknown })?.content === "string"
+      ? ((firstMessage as { content?: string }).content ?? "").trim()
+      : "";
+  const firstCalls = (firstMessage as { tool_calls?: ToolCall[] } | undefined)?.tool_calls ?? [];
+  if (!firstContent && !firstCalls.length) {
+    // Empty shell response (observed live: weak free models answer `length`
+    // with no content). For auto-routed requests (explicit auto, or an
+    // unknown id already substituted once), one retry on a different model
+    // beats handing the user nothing. Explicitly-picked models throw
+    // instead — and the recursion always terminates because the retry
+    // carries a concrete model id.
+    const requestedAuto =
+      params.model === undefined ||
+      params.model === OPENROUTER_AUTO_MODEL ||
+      modelFellBack;
+    if (requestedAuto) {
+      const catalog = await listOpenRouterModels().catch(() => []);
+      const alternate = pickAutoModel(catalog, Boolean(params.tools?.length), model);
+      if (alternate && alternate !== model) {
+        console.warn("[OpenRouter] empty response, retrying on alternate model", {
+          from: model,
+          to: alternate,
+        });
+        return invokeOpenRouter({ ...params, model: alternate });
+      }
+    }
+    throw new Error("The selected free model returned an empty response.");
+  }
   return result as InvokeResult;
 }
 

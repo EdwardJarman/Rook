@@ -1,0 +1,221 @@
+/**
+ * Minimal Rook API client: tRPC batch calls (superjson envelope) plus the
+ * raw SSE agent stream. Mirrors lib/agent-stream.ts framing on purpose —
+ * same contract, no shared code (the CLI ships self-contained).
+ */
+
+import superjson from "superjson";
+
+import type { CliProfile } from "./config.js";
+
+export class ApiError extends Error {
+  status?: number;
+  code?: string;
+  constructor(message: string, status?: number, code?: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+const unreachable = (apiUrl: string): ApiError =>
+  new ApiError(
+    `Rook server is unreachable at ${apiUrl}. Start it (or point --api-url at a live one).`,
+  );
+
+async function authedFetch(
+  profile: CliProfile,
+  path: string,
+  init?: RequestInit,
+): Promise<Response> {
+  if (!profile.token) {
+    throw new ApiError("Not signed in. Run `rook login` first.", undefined, "UNAUTHORIZED");
+  }
+  let response: Response;
+  try {
+    response = await fetch(`${profile.apiUrl.replace(/\/+$/, "")}${path}`, {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        Authorization: `Bearer ${profile.token}`,
+        ...(init?.headers ?? {}),
+      },
+    });
+  } catch {
+    throw unreachable(profile.apiUrl);
+  }
+  return response;
+}
+
+type TrpcBatchItem =
+  | { result: { data: { json: unknown; meta?: unknown } } }
+  | { error: { message?: string; data?: { code?: string; httpStatus?: number } } };
+
+/**
+ * One tRPC call, batch-of-one. Queries ride GET (the server answers 405
+ * to POSTed queries); mutations must POST. Returns deserialized data.
+ */
+export async function trpc<T>(
+  profile: CliProfile,
+  procPath: string,
+  input?: unknown,
+  opts?: { method?: "GET" | "POST" },
+): Promise<T> {
+  const method = opts?.method ?? "GET";
+  const path =
+    method === "GET"
+      ? `/api/trpc/${procPath}?batch=1&input=${encodeURIComponent(
+          JSON.stringify({ "0": { json: input ?? null } }),
+        )}`
+      : `/api/trpc/${procPath}?batch=1`;
+  const response = await authedFetch(profile, path, {
+    method,
+    ...(method === "POST" ? { body: JSON.stringify({ "0": { json: input ?? null } }) } : {}),
+  });
+  if (response.status === 401 || response.status === 403) {
+    throw new ApiError(
+      "Sign-in expired or rejected. Run `rook login` again.",
+      response.status,
+      "UNAUTHORIZED",
+    );
+  }
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new ApiError(`Rook server answered oddly (HTTP ${response.status}).`);
+  }
+  const items = (Array.isArray(payload) ? payload : [payload]) as TrpcBatchItem[];
+  const item = items[0];
+  if (!item || "error" in item) {
+    const message =
+      (item && "error" in item && item.error.message) || `Request failed (HTTP ${response.status}).`;
+    const code = item && "error" in item ? item.error.data?.code : undefined;
+    if (code === "UNAUTHORIZED") {
+      throw new ApiError("Sign-in expired or rejected. Run `rook login` again.", response.status, code);
+    }
+    throw new ApiError(message, response.status, code);
+  }
+  // Envelope is superjson-shaped by construction (server transformer);
+  // the cast below only bridges its structural type to superjson's.
+  const envelope = item.result.data as Parameters<typeof superjson.deserialize>[0];
+  return superjson.deserialize(envelope) as T;
+}
+
+export type StreamTraceStep = {
+  kind: string;
+  title: string;
+  detail?: string;
+  url?: string;
+};
+
+export type StreamDone = {
+  text: string;
+  model?: string;
+  files?: Array<{ name: string; mimeType: string; content: string }>;
+  approvals?: unknown[];
+  computerProposals?: unknown[];
+  suggestedMemories?: unknown[];
+  trace?: StreamTraceStep[];
+};
+
+export type StreamCallbacks = {
+  onToken?: (delta: string) => void;
+  onTrace?: (step: StreamTraceStep) => void;
+  onToolActivity?: () => void;
+};
+
+/** POST /api/agent/stream, forwarding live events. Resolves on `done`. */
+export async function streamAgentRound(
+  profile: CliProfile,
+  body: Record<string, unknown>,
+  callbacks: StreamCallbacks = {},
+  signal?: AbortSignal,
+): Promise<StreamDone> {
+  const response = await authedFetch(
+    profile,
+    "/api/agent/stream",
+    { method: "POST", body: JSON.stringify(body), signal },
+  );
+  if (!response.ok || !response.body) {
+    if (response.status === 401 || response.status === 403) {
+      throw new ApiError("Sign-in expired or rejected. Run `rook login` again.", response.status);
+    }
+    throw new ApiError(`Live reply unavailable (HTTP ${response.status}).`);
+  }
+  const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const handlePart = (part: string): StreamDone | undefined => {
+    const data = part
+      .split("\n")
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice("data:".length).trim())
+      .join("\n")
+      .trim();
+    if (!data || data === "[DONE]") return undefined;
+    let event: Record<string, unknown>;
+    try {
+      event = JSON.parse(data) as Record<string, unknown>;
+    } catch {
+      return undefined;
+    }
+    switch (event.kind) {
+      case "token":
+        if (typeof event.delta === "string" && event.delta) callbacks.onToken?.(event.delta);
+        break;
+      case "trace": {
+        const step = event.step as StreamTraceStep | undefined;
+        if (step && typeof step.title === "string") {
+          callbacks.onTrace?.(step);
+          if (step.kind === "tool" || step.kind === "approval") callbacks.onToolActivity?.();
+        }
+        break;
+      }
+      case "approval":
+      case "proposal":
+        callbacks.onToolActivity?.();
+        break;
+      case "error":
+        throw new Error(
+          typeof event.message === "string" && event.message
+            ? event.message
+            : "The live reply failed.",
+        );
+      case "done": {
+        const result = event.result as StreamDone | undefined;
+        if (!result || typeof result.text !== "string") {
+          throw new Error("The live reply ended without a result.");
+        }
+        return result;
+      }
+      default:
+        break;
+    }
+    return undefined;
+  };
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (!done && value) buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split("\n\n");
+      // A stream can close with the last frame unterminated: flush the
+      // tail on close instead of dropping a perfectly good `done`.
+      buffer = done ? "" : (parts.pop() ?? "");
+      for (const part of parts) {
+        const result = handlePart(part);
+        if (result) return result;
+      }
+      if (done) break;
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      // Already closed.
+    }
+  }
+  throw new Error("The live reply ended before finishing.");
+}

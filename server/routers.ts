@@ -9,6 +9,9 @@ import {
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { systemRouter } from "./_core/systemRouter";
 import { getAiBackendStatus, listAiModels } from "./ai";
+import { listSkills } from "./ai/skills";
+import { mintCliToken } from "./cli-tokens";
+import { recentTurns, turnStats } from "./ai/telemetry";
 import { transcribeOpenRouterAudio } from "./ai/openrouter";
 import { deleteChatGPTSession } from "./ai/chatgpt";
 import * as db from "./db";
@@ -42,6 +45,13 @@ export const appRouter = router({
   auth: router({
     me: publicProcedure.query((opts) => opts.ctx.user),
     logout: publicProcedure.mutation(() => ({ success: true }) as const),
+    createCliToken: protectedProcedure
+      .input(
+        z.object({
+          label: z.string().min(1).max(80).optional(),
+        }).optional(),
+      )
+      .mutation(({ ctx, input }) => mintCliToken(ctx.user.openId, input?.label)),
   }),
   workroom: router({
     reply: protectedProcedure
@@ -59,6 +69,12 @@ export const appRouter = router({
             .array(z.enum(["microsoft-excel", "github"]))
             .max(4)
             .optional(),
+          skillIds: z
+            .array(z.string().min(1).max(64))
+            .max(6)
+            .optional(),
+          botMemory: z.string().max(4000).optional(),
+          reasoningEffort: z.enum(["low", "medium", "high"]).optional(),
           recentContext: z
             .array(
               z.object({
@@ -70,13 +86,50 @@ export const appRouter = router({
         }),
       )
       .mutation(async ({ ctx, input }) => {
-        const result = await runRookAgent({
-          userId: ctx.user.id,
-          request: ctx.req,
-          ...input,
-        });
+        let result: Awaited<ReturnType<typeof runRookAgent>>;
+        try {
+          result = await runRookAgent({
+            userId: ctx.user.id,
+            request: ctx.req,
+            ...input,
+          });
+        } catch (error) {
+          // Last-resort guard: the agent itself returns friendly text for
+          // provider failures, so reaching here means something structural
+          // (DB, pairing lookup). Never leak raw internals to chat.
+          const message =
+            error instanceof Error ? error.message : "Unknown error";
+          console.warn("[workroom.reply] agent turn threw", {
+            userId: ctx.user.id,
+            botId: input.botId,
+            errorName: error instanceof Error ? error.name : "UnknownError",
+            errorMessage: message.slice(0, 200),
+          });
+          result = {
+            text: "I hit a temporary snag on my side before I could answer. Please try again — your message is safe.",
+            model: input.model?.trim() || "openrouter/free",
+            requestedModel: input.model?.trim() || "openrouter/free",
+            fellBack: false,
+            attemptedProviders: [],
+            approvals: [],
+            usedTools: [],
+            trace: [{ kind: "context", title: "Read the room context" }],
+            excelConnected: false,
+            githubConnected: false,
+            computerPaired: false,
+            computerOnline: false,
+            computerProposals: [],
+            suggestedMemories: [],
+            webSearched: false,
+            codeTask: false,
+            latencyMs: 0,
+            requestId: "unavailable",
+          } as unknown as Awaited<ReturnType<typeof runRookAgent>>;
+        }
         const preferences = await db.getNotificationPreferences(ctx.user.id);
-        const needsApproval = result.approvals.length > 0;
+        const computerProposals = result.computerProposals ?? [];
+        const needsApproval =
+          result.approvals.length > 0 || computerProposals.length > 0;
         const notificationEnabled = needsApproval
           ? preferences?.approvalEnabled !== false
           : preferences?.completionEnabled !== false;
@@ -93,7 +146,9 @@ export const appRouter = router({
                 expoPushToken: device.expoPushToken,
                 kind: needsApproval ? "approval" : "completion",
                 title: needsApproval
-                  ? `${input.botName} prepared an Excel change`
+                  ? result.approvals.length
+                    ? `${input.botName} prepared an Excel change`
+                    : `${input.botName} proposed a computer task`
                   : `${input.botName} completed a task`,
                 body: result.text.slice(0, 170),
                 url: needsApproval ? "/activity" : "/",
@@ -115,7 +170,7 @@ export const appRouter = router({
       .input(
         z.object({
           provider: z
-            .enum(["openrouter", "orcarouter", "tokenrouter"])
+            .enum(["openrouter", "orcarouter", "tokenrouter", "opencode"])
             .default("openrouter"),
         }),
       )
@@ -124,6 +179,19 @@ export const appRouter = router({
       provider: "multi" as const,
       models: await listAiModels(ctx.req),
     })),
+    skills: protectedProcedure.query(async () => ({
+      skills: (await listSkills()).map((skill) => ({
+        id: skill.id,
+        name: skill.name,
+        description: skill.description,
+      })),
+    })),
+    turns: protectedProcedure
+      .input(z.object({ limit: z.number().int().min(1).max(50).optional() }).optional())
+      .query(({ input }) => ({
+        recent: recentTurns(input?.limit ?? 20),
+        stats: turnStats(),
+      })),
   }),
   voice: router({
     transcribe: protectedProcedure

@@ -7,15 +7,20 @@ const landingSource = readFileSync(
   resolve(process.cwd(), "app/index.tsx"),
   "utf8",
 );
+const installCommandsSource = readFileSync(
+  resolve(process.cwd(), "lib/cli-install.ts"),
+  "utf8",
+);
 
 describe("public landing downloads", () => {
   it("keeps the published, copyable CLI installer endpoints", () => {
-    expect(landingSource).toContain(
-      "https://www.rook.lighting/api/download/cli/install.sh | sh",
-    );
-    expect(landingSource).toContain(
-      "https://www.rook.lighting/api/download/cli/install.ps1 | iex",
-    );
+    // One-liners are composed per origin (prod strings in prod, localhost
+    // API in dev) via the shared helper — pin the wiring plus the exact
+    // command shapes where they are defined.
+    expect(landingSource).toContain("cliInstallCommands");
+    expect(landingSource).toContain("installApiBaseUrl");
+    expect(installCommandsSource).toContain("/api/download/cli/install.sh | sh");
+    expect(installCommandsSource).toContain("/api/download/cli/install.ps1 | iex");
   });
 
   it("keeps the dedicated Download Rook action alongside the CLI control", () => {

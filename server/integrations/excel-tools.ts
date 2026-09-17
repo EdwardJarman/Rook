@@ -89,7 +89,7 @@ export const EXCEL_TOOLS: Tool[] = [
     type: "function",
     function: {
       name: "excel_list_workbooks",
-      description: "List the user's Excel .xlsx workbooks in Microsoft OneDrive, including stable drive and item IDs. Use this before workbook-specific tools.",
+      description: "Use when the user asks about any workbook you have not listed yet. Lists the user's .xlsx workbooks in OneDrive with stable drive_id/item_id. Always call this before workbook-specific tools.",
       parameters: { type: "object", properties: { ...accountParameter }, additionalProperties: false },
     },
   },
@@ -97,7 +97,7 @@ export const EXCEL_TOOLS: Tool[] = [
     type: "function",
     function: {
       name: "excel_list_worksheets",
-      description: "List the worksheets in one Excel workbook.",
+      description: "Use when you have drive_id/item_id and need the worksheet names. Lists the worksheets in one Excel workbook.",
       parameters: { type: "object", properties: { ...workbookParameters, ...accountParameter }, required: ["drive_id", "item_id"], additionalProperties: false },
     },
   },
@@ -105,7 +105,7 @@ export const EXCEL_TOOLS: Tool[] = [
     type: "function",
     function: {
       name: "excel_list_tables",
-      description: "List the named Excel tables in one workbook.",
+      description: "Use when you need named-table targets before appending rows. Lists the named Excel tables in one workbook.",
       parameters: { type: "object", properties: { ...workbookParameters, ...accountParameter }, required: ["drive_id", "item_id"], additionalProperties: false },
     },
   },
@@ -113,7 +113,7 @@ export const EXCEL_TOOLS: Tool[] = [
     type: "function",
     function: {
       name: "excel_read_range",
-      description: "Read values, displayed text, and formulas from a worksheet range. Keep the requested range focused and below 2,500 cells.",
+      description: "Use to inspect exact cell data — never guess values or formulas. Reads values, displayed text, and formulas from one worksheet + A1 address (e.g. Sheet1!A1:F20). Keep requests focused and under 2,500 cells.",
       parameters: {
         type: "object",
         properties: {
@@ -131,7 +131,7 @@ export const EXCEL_TOOLS: Tool[] = [
     type: "function",
     function: {
       name: "excel_update_range",
-      description: "Prepare an approval-gated update to values or formulas in an exact worksheet range. This never executes without user approval.",
+      description: "Use to propose value or formula edits to one exact range. Prepares an approval-gated update — it never executes without the user's approval in Updates.",
       parameters: {
         type: "object",
         properties: {
@@ -152,7 +152,7 @@ export const EXCEL_TOOLS: Tool[] = [
     type: "function",
     function: {
       name: "excel_append_table_rows",
-      description: "Prepare approval-gated rows to append to a named Excel table. This never executes without user approval.",
+      description: "Use to propose new rows for a named table (call excel_list_tables first for the exact table_name). Approval-gated — never executes directly.",
       parameters: {
         type: "object",
         properties: { ...workbookParameters, ...accountParameter, workbook_name: { type: "string" }, table_name: { type: "string" }, values: matrixSchema },
@@ -165,7 +165,7 @@ export const EXCEL_TOOLS: Tool[] = [
     type: "function",
     function: {
       name: "excel_add_worksheet",
-      description: "Prepare an approval-gated addition of a worksheet to an existing workbook.",
+      description: "Use to propose adding one worksheet (name max 31 chars, no \\ / * ? : [ ]). Approval-gated — never executes directly.",
       parameters: {
         type: "object",
         properties: { ...workbookParameters, ...accountParameter, workbook_name: { type: "string" }, name: { type: "string" } },
@@ -178,7 +178,7 @@ export const EXCEL_TOOLS: Tool[] = [
     type: "function",
     function: {
       name: "excel_create_workbook",
-      description: "Prepare creation of a new .xlsx workbook in the user's OneDrive. Requires approval.",
+      description: "Use to propose a new .xlsx file in OneDrive (name max 120 chars, optional first worksheet). Approval-gated — never executes directly.",
       parameters: {
         type: "object",
         properties: { ...accountParameter, name: { type: "string" }, worksheet: { type: "string" } },

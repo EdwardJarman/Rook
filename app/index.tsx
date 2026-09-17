@@ -12,12 +12,8 @@ import {
 
 import { EarthGlobe } from "@/components/earth-globe";
 import { RookLogo } from "@/components/rook-logo";
+import { cliInstallCommands, installApiBaseUrl } from "@/lib/cli-install";
 import { tint, useRookTheme } from "@/lib/ui";
-
-const POSIX_INSTALL_COMMAND =
-  "curl -fsSL https://www.rook.lighting/api/download/cli/install.sh | sh";
-const POWERSHELL_INSTALL_COMMAND =
-  "irm https://www.rook.lighting/api/download/cli/install.ps1 | iex";
 
 type InstallShell = "posix" | "powershell";
 
@@ -39,8 +35,21 @@ export default function RookLandingPage() {
       : "posix",
   );
   const [copied, setCopied] = useState(false);
+  // Same one-liners everywhere: production origin in prod, the local API
+  // server in dev — so the copied command always installs from the Rook
+  // the visitor is looking at.
+  const installCommands =
+    Platform.OS === "web" && typeof window !== "undefined" && window.location
+      ? cliInstallCommands(
+          installApiBaseUrl({
+            protocol: window.location.protocol,
+            hostname: window.location.hostname,
+            port: window.location.port,
+          }),
+        )
+      : cliInstallCommands("https://www.rook.lighting");
   const installCommand =
-    shell === "posix" ? POSIX_INSTALL_COMMAND : POWERSHELL_INSTALL_COMMAND;
+    shell === "posix" ? installCommands.posix : installCommands.powershell;
 
   const copyInstaller = async () => {
     if (

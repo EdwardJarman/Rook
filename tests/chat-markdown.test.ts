@@ -22,4 +22,40 @@ describe("mobile chat Markdown rendering", () => {
       { text: " note" },
     ]);
   });
+
+  it("keeps fenced code byte-verbatim: underscores, stars, lists, numbers", () => {
+    const blocks = parseChatMarkdown(
+      "Here you go:\n```python\ndef __init__(self):\n    self.x = bird.radius * 2\n1. not a list\n- not a bullet\nif __name__ == \"__main__\":\n```\nDone.",
+    );
+    expect(blocks).toEqual([
+      { type: "paragraph", content: [{ text: "Here you go:" }] },
+      {
+        type: "code",
+        language: "python",
+        code: "def __init__(self):\n    self.x = bird.radius * 2\n1. not a list\n- not a bullet\nif __name__ == \"__main__\":",
+      },
+      { type: "paragraph", content: [{ text: "Done." }] },
+    ]);
+  });
+
+  it("still parses emphasis in prose around code fences", () => {
+    const blocks = parseChatMarkdown("A **bold** claim:\n```\n__init__ stays\n```\nBack to *italic*.");
+    expect(blocks[0]).toEqual({
+      type: "paragraph",
+      content: [{ text: "A " }, { text: "bold", bold: true }, { text: " claim:" }],
+    });
+    expect(blocks[1]).toEqual({ type: "code", code: "__init__ stays" });
+    expect(blocks[2]).toEqual({
+      type: "paragraph",
+      content: [{ text: "Back to " }, { text: "italic", bold: false }, { text: "." }],
+    });
+  });
+
+  it("treats an unclosed fence as code to the end without leaking markers", () => {
+    const blocks = parseChatMarkdown("Start:\n```js\nconst x = a * b;");
+    expect(blocks).toEqual([
+      { type: "paragraph", content: [{ text: "Start:" }] },
+      { type: "code", language: "js", code: "const x = a * b;" },
+    ]);
+  });
 });
