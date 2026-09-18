@@ -32,4 +32,13 @@ describe("cli device approval page", () => {
     expect(page).toContain("Copy token");
     expect(page).toContain("deliverCliApproval");
   });
+
+  it("serves current CLIs through an explicit device-code branch", () => {
+    // ?code= is the default path; ?port=&key= stays as the legacy lane.
+    expect(page).toContain("params.code");
+    expect(page).toContain("deviceApprove");
+    expect(page).toContain("deviceCode");
+    expect(page).toContain("Copy code");
+    expect(page).toContain("Check the code matches");
+  });
 });

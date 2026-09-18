@@ -165,7 +165,7 @@ try {
     Write-Host "rook install: this window is ready too - run rook login."
   }
 
-  $Version = & (Join-Path $BinDir "rook.cmd") version 2>$null
+  $Version = ((& (Join-Path $BinDir "rook.cmd") version 2>$null) | Out-String).Trim() -replace '\x1b\[[0-9;]*m', ''
   if ($LASTEXITCODE -eq 0 -and $Version) {
     Write-Host "rook install: done - rook $Version at $BinDir\\rook.cmd"
     Write-Host "Next: rook login (or download Rook Node instead: ${page}/download)"

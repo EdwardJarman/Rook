@@ -30,22 +30,35 @@ type Phase =
   | { name: "done" }
   | { name: "failed"; message: string; token?: string };
 
-/** Device approval for `rook login`: mints a CLI token and hands it to the waiting terminal. */
+/**
+ * Device approval for `rook login`.
+ *
+ * Two branches, split on the query string:
+ * - `?code=XXXX-XXXX` (current CLIs): the code is shown for verification
+ *   and approval attaches the token to the server-side challenge. The
+ *   terminal polls and picks it up — no localhost listener anywhere.
+ * - `?port=&key=` (legacy CLIs): the original localhost-callback delivery
+ *   with liveness probing and a manual-token fallback.
+ */
 export default function CliAuthScreen() {
   const { colors } = useRookTheme();
   const router = useRouter();
   const { isSignedIn } = useClerkAuth();
-  const params = useLocalSearchParams<{ port?: string; key?: string }>();
+  const params = useLocalSearchParams<{ port?: string; key?: string; code?: string }>();
   const [phase, setPhase] = useState<Phase>({ name: "review" });
   const [tokenCopied, setTokenCopied] = useState(false);
+  const [codeCopied, setCodeCopied] = useState(false);
   const createToken = trpc.auth.createCliToken.useMutation();
+  const approveDevice = trpc.auth.deviceApprove.useMutation();
 
-  const port = parseCallbackPort(params.port);
-  const key = typeof params.key === "string" && params.key ? params.key : null;
+  const rawCode = typeof params.code === "string" ? params.code.trim() : "";
+  const deviceCode = rawCode ? rawCode : null;
+  const port = deviceCode ? null : parseCallbackPort(params.port);
+  const key = !deviceCode && typeof params.key === "string" && params.key ? params.key : null;
   const apiUrl = getApiBaseUrl() || (typeof window !== "undefined" ? window.location.origin : "");
-  // Liveness: a terminal that already exited (timeout, closed window)
-  // cannot receive the approval — say so before the user approves
-  // into the void. Polls lightly while the decision is pending.
+  // Liveness (legacy branch only): a terminal that already exited
+  // (timeout, closed window) cannot receive the approval — say so before
+  // the user approves into the void. Polls lightly while pending.
   const [terminalGone, setTerminalGone] = useState(false);
   useEffect(() => {
     if (!port || phase.name !== "review") return;
@@ -65,7 +78,7 @@ export default function CliAuthScreen() {
     };
   }, [port, phase.name]);
 
-  const approve = async () => {
+  const approveLegacy = async () => {
     if (!port || !key || phase.name === "working") return;
     setPhase({ name: "working" });
     let token: string | undefined;
@@ -88,10 +101,52 @@ export default function CliAuthScreen() {
     }
   };
 
+  const approve = async () => {
+    if (phase.name === "working") return;
+    if (deviceCode) {
+      // Device branch: approval happens server-side on the challenge.
+      // There is no terminal listener to strand — a closed terminal
+      // simply stops polling, and an unknown/expired code fails here
+      // with a re-run hint instead of stranding anything.
+      setPhase({ name: "working" });
+      try {
+        await approveDevice.mutateAsync({
+          code: deviceCode,
+          label: `CLI (${Platform.OS})`,
+        });
+        setPhase({ name: "done" });
+      } catch (error) {
+        setPhase({
+          name: "failed",
+          message:
+            error instanceof Error && error.message
+              ? error.message
+              : "Rook could not approve that code right now. Please try again.",
+        });
+      }
+      return;
+    }
+    await approveLegacy();
+  };
+
   const copyToken = async (token: string) => {
     setTokenCopied(await copyText(token));
     setTimeout(() => setTokenCopied(false), 1800);
   };
+
+  const copyCode = async (code: string) => {
+    setCodeCopied(await copyText(code));
+    setTimeout(() => setCodeCopied(false), 1800);
+  };
+
+  const busy = phase.name === "working" || createToken.isPending || approveDevice.isPending;
+  const canApprove = deviceCode ? !!deviceCode && !busy : !!port && !!key && !busy;
+  const headline = deviceCode ? "Connect this device?" : "Connect the Rook CLI?";
+  const intro = deviceCode
+    ? "Your terminal asked to sign in with this account. Check the code matches, then approve — your terminal picks up the sign-in on its own."
+    : port && key
+      ? "Your terminal asked to sign in with this account. Approving mints a CLI token for that device only."
+      : "This page pairs a terminal running `rook login`. Start there first — it opens this page for you.";
 
   return (
     <ScreenContainer containerClassName="bg-background" className="flex-1">
@@ -109,13 +164,42 @@ export default function CliAuthScreen() {
       >
         <MaterialIcons name="terminal" size={30} color={colors.accent} />
         <Text style={{ color: colors.text, fontSize: 21, fontWeight: "700", textAlign: "center" }}>
-          Connect the Rook CLI?
+          {headline}
         </Text>
         <Text style={{ color: colors.textSoft, fontSize: 13.5, lineHeight: 19, textAlign: "center" }}>
-          {port && key
-            ? "Your terminal asked to sign in with this account. Approving mints a CLI token for that device only."
-            : "This page pairs a terminal running `rook login`. Start there first — it opens this page for you."}
+          {intro}
         </Text>
+        {deviceCode ? (
+          <View style={{ gap: 8, alignItems: "center" }}>
+            <Text selectable style={{ color: colors.text, fontSize: 26, fontWeight: "800", letterSpacing: 3, fontFamily: "monospace" }}>
+              {deviceCode.toUpperCase()}
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={codeCopied ? "Code copied" : "Copy code"}
+              onPress={() => void copyCode(deviceCode)}
+              style={({ pressed }) => ({
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 6,
+                paddingHorizontal: 14,
+                paddingVertical: 9,
+                borderRadius: 11,
+                backgroundColor: colors.surfaceAlt,
+                opacity: pressed ? 0.7 : 1,
+              })}
+            >
+              <MaterialIcons
+                name={codeCopied ? "check" : "content-copy"}
+                size={15}
+                color={codeCopied ? colors.mint : colors.textSoft}
+              />
+              <Text style={{ color: colors.textSoft, fontSize: 12.5, fontWeight: "700" }}>
+                {codeCopied ? "Copied" : "Copy code"}
+              </Text>
+            </Pressable>
+          </View>
+        ) : null}
         {terminalGone && port && key ? (
           <View style={{ flexDirection: "row", alignItems: "center", gap: 8, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 9, backgroundColor: colors.surfaceAlt }}>
             <MaterialIcons name="warning-amber" size={16} color={colors.amber} />
@@ -145,12 +229,12 @@ export default function CliAuthScreen() {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Approve this device"
-            disabled={!port || !key || phase.name === "working" || createToken.isPending}
+            disabled={!canApprove}
             onPress={() => void approve()}
-            style={{ minHeight: 46, borderRadius: 15, paddingHorizontal: 22, backgroundColor: colors.ink, alignItems: "center", justifyContent: "center", opacity: !port || !key ? 0.5 : 1 }}
+            style={{ minHeight: 46, borderRadius: 15, paddingHorizontal: 22, backgroundColor: colors.ink, alignItems: "center", justifyContent: "center", opacity: !canApprove ? 0.5 : 1 }}
           >
             <Text style={{ color: colors.onInk, fontSize: 14, fontWeight: "700" }}>
-              {phase.name === "working" || createToken.isPending ? "Approving…" : "Approve this device"}
+              {busy ? "Approving…" : "Approve this device"}
             </Text>
           </Pressable>
         )}

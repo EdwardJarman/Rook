@@ -12,6 +12,11 @@ import { systemRouter } from "./_core/systemRouter";
 import { getAiBackendStatus, listAiModels } from "./ai";
 import { listSkills } from "./ai/skills";
 import { mintCliToken } from "./cli-tokens";
+import {
+  approveDeviceChallenge,
+  pollDeviceChallenge,
+  requestDeviceChallenge,
+} from "./cli-device";
 import { recentTurns, turnStats } from "./ai/telemetry";
 import { transcribeOpenRouterAudio } from "./ai/openrouter";
 import { deleteChatGPTSession } from "./ai/chatgpt";
@@ -60,6 +65,13 @@ export const appRouter = router({
         }).optional(),
       )
       .mutation(({ ctx, input }) => mintCliToken(ctx.user.openId, input?.label)),
+    deviceChallenge: publicProcedure.mutation(() => requestDeviceChallenge()),
+    deviceApprove: protectedProcedure
+      .input(z.object({ code: z.string().min(4).max(16), label: z.string().min(1).max(80).optional() }))
+      .mutation(({ ctx, input }) => approveDeviceChallenge(input.code, ctx.user.openId, input.label)),
+    devicePoll: publicProcedure
+      .input(z.object({ code: z.string().min(4).max(16) }))
+      .query(({ input }) => pollDeviceChallenge(input.code)),
   }),
   workroom: router({
     reply: protectedProcedure

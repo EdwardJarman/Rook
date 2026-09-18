@@ -27,9 +27,9 @@ const unreachable = (apiUrl: string): ApiError =>
 async function authedFetch(
   profile: CliProfile,
   path: string,
-  init?: RequestInit,
+  init?: RequestInit & { anonymous?: boolean },
 ): Promise<Response> {
-  if (!profile.token) {
+  if (!profile.token && !init?.anonymous) {
     throw new ApiError("Not signed in. Run `rook login` first.", undefined, "UNAUTHORIZED");
   }
   let response: Response;
@@ -39,7 +39,7 @@ async function authedFetch(
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
-        Authorization: `Bearer ${profile.token}`,
+        ...(profile.token ? { Authorization: `Bearer ${profile.token}` } : {}),
         ...(init?.headers ?? {}),
       },
     });
@@ -64,7 +64,7 @@ export async function trpc<T>(
   profile: CliProfile,
   procPath: string,
   input?: unknown,
-  opts?: { method?: "GET" | "POST"; timeoutMs?: number; signal?: AbortSignal },
+  opts?: { method?: "GET" | "POST"; timeoutMs?: number; signal?: AbortSignal; anonymous?: boolean },
 ): Promise<T> {
   const method = opts?.method ?? "GET";
   const path =
@@ -89,6 +89,7 @@ export async function trpc<T>(
       method,
       ...(method === "POST" ? { body: JSON.stringify({ "0": { json: input ?? null } }) } : {}),
       ...(signal ? { signal } : {}),
+      ...(opts?.anonymous ? { anonymous: true as const } : {}),
     });
   } catch (error) {
     if (opts?.timeoutMs && error instanceof Error && error.name === "TimeoutError") {

@@ -11,7 +11,7 @@ import {
   currentProfile,
   defaultApiUrl,
   fetchMe,
-  loginWithBrowser,
+  loginWithDevice,
   loginWithToken,
   logout,
 } from "./auth.js";
@@ -116,13 +116,12 @@ async function main(): Promise<void> {
         }
         return;
       }
-      eprintln("Opening the browser to approve this device…");
-      const { me } = await loginWithBrowser(apiUrl, {
+      const { me } = await loginWithDevice(apiUrl, {
         webUrl: flags.webUrl,
-        onOpened: (manualUrl) =>
-          eprintln(
-            `If nothing opened, visit:\n  ${manualUrl}\nWaiting for approval in your browser (up to 10 minutes, Ctrl+C to cancel)…`,
-          ),
+        onCode: (code, manualUrl) => {
+          println(box({ title: "Device code", lines: [bold(code)] }));
+          eprintln(`Approve at:\n  ${manualUrl}\nWaiting for approval (up to 10 minutes, Ctrl+C to cancel)…`);
+        },
       });
       println(`${c("mint", "✓")} Signed in as ${bold(me.name ?? me.id)} ${c("dim", `(${apiUrl})`)}`);
       return;

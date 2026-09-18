@@ -6,8 +6,7 @@ import {
   cliAuthPageUrl,
   defaultApiUrl,
   fetchMe,
-  listenForCallback,
-  loginWithBrowser,
+  loginWithDevice,
   loginWithToken,
   logout,
   webUrlFor,
@@ -34,13 +33,33 @@ afterEach(async () => {
 const trpcOk = (data: unknown) =>
   JSON.stringify([{ result: { data: superjson.serialize(data) } }]);
 
-const stubApi = async (
-  me: unknown,
-): Promise<string> =>
+const trpcErr = (message: string, code: string) =>
+  JSON.stringify([{ error: { message, data: { code, httpStatus: 404 } } }]);
+
+/** Stub API that routes by procedure path; poll replies follow a script. */
+const stubDeviceApi = async (opts: {
+  me: unknown;
+  polls: unknown[];
+  challenge?: unknown;
+  challengeError?: { message: string; code: string };
+}): Promise<string> =>
   new Promise((resolve) => {
-    server = createServer((_req, res) => {
+    let pollCalls = 0;
+    server = createServer((req, res) => {
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(trpcOk(me));
+      if (req.url?.includes("auth.deviceChallenge")) {
+        res.end(
+          opts.challengeError
+            ? trpcErr(opts.challengeError.message, opts.challengeError.code)
+            : trpcOk(opts.challenge ?? { code: "ABCD-1234", expiresInSec: 600 }),
+        );
+      } else if (req.url?.includes("auth.devicePoll")) {
+        const reply = opts.polls[Math.min(pollCalls, opts.polls.length - 1)];
+        pollCalls += 1;
+        res.end(trpcOk(reply));
+      } else {
+        res.end(trpcOk(opts.me));
+      }
     }).listen(0, "127.0.0.1", () => {
       resolve(`http://127.0.0.1:${(server!.address() as { port: number }).port}`);
     });
@@ -54,74 +73,79 @@ describe("login plumbing", () => {
     expect(webUrlFor("https://api.example.com", "https://web.example.com/")).toBe(
       "https://web.example.com",
     );
-    expect(cliAuthPageUrl("http://localhost:8081/", 1234, "k e y")).toBe(
-      "http://localhost:8081/cli-auth?port=1234&key=k%20e%20y",
+    expect(cliAuthPageUrl("http://localhost:8081/", "AB CD")).toBe(
+      "http://localhost:8081/cli-auth?code=AB%20CD",
     );
     expect(defaultApiUrl("https://x.example.com")).toBe("https://x.example.com");
   });
 
-  it("accepts a well-formed callback and rejects impostors", async () => {
-    const listener = await listenForCallback(5_000);
-    try {
-      const good = fetch(listenerUrl(listener.port), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key: "k", token: "rook_x", apiUrl: "http://a" }),
-      }).then((r) => r.status);
-      const bad = fetch(listenerUrl(listener.port), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key: "k", token: "nope", apiUrl: "http://a" }),
-      }).then((r) => r.status);
-      expect(await good).toBe(200);
-      expect(await bad).toBe(400);
-      await expect(listener.wait).resolves.toEqual({ key: "k", token: "rook_x", apiUrl: "http://a" });
-    } finally {
-      listener.close();
-    }
-  });
-
   it("logs in with a token after verifying it", async () => {
-    const apiUrl = await stubApi({ id: "user-1", name: "Ada", email: null });
+    const apiUrl = await stubDeviceApi({ me: { id: "user-1", name: "Ada", email: null }, polls: [] });
     const { me, profile } = await loginWithToken(apiUrl, "rook_test");
     expect(me).toEqual({ id: "user-1", name: "Ada", email: null });
     expect(profile).toEqual({ apiUrl, token: "rook_test" });
   });
 
   it("refuses to save rejected tokens", async () => {
-    const apiUrl = await stubApi(null);
+    const apiUrl = await stubDeviceApi({ me: null, polls: [] });
     await expect(loginWithToken(apiUrl, "rook_bad")).rejects.toThrow(/rejected/);
   });
 
-  it("completes the browser flow end to end", async () => {
-    const apiUrl = await stubApi({ id: "user-9", name: null, email: "a@b.c" });
+  it("completes the device flow end to end", async () => {
+    const apiUrl = await stubDeviceApi({
+      me: { id: "user-9", name: null, email: "a@b.c" },
+      polls: [
+        { status: "pending" },
+        { status: "approved", token: "rook_device", expiresAt: new Date().toISOString() },
+      ],
+    });
     let opened = "";
-    const pending = loginWithBrowser(apiUrl, {
+    let reported: { code: string; url: string } | undefined;
+    const { me, profile, manualUrl } = await loginWithDevice(apiUrl, {
       webUrl: "http://web.invalid",
       open: (url) => {
         opened = url;
       },
-      key: "fixed-key",
+      onCode: (code, url) => {
+        reported = { code, url };
+      },
       timeoutMs: 10_000,
+      pollIntervalMs: 5,
     });
-    // Play the browser: wait for the open call, parse the manual URL,
-    // and POST the approval back.
-    for (let i = 0; i < 200 && !opened; i += 1) {
-      await new Promise((r) => setTimeout(r, 10));
-    }
-    expect(opened).toContain("/cli-auth?port=");
-    const manual = new URL(opened);
-    expect(manual.pathname).toBe("/cli-auth");
-    const port = Number(manual.searchParams.get("port"));
-    await fetch(`http://127.0.0.1:${port}/callback`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ key: "fixed-key", token: "rook_browser", apiUrl }),
-    });
-    const { me, profile } = await pending;
-    expect(opened.startsWith("http://web.invalid/cli-auth?port=")).toBe(true);
+    // The terminal shows a human code and opens the matching approval page.
+    expect(reported?.code).toBe("ABCD-1234");
+    expect(opened).toBe("http://web.invalid/cli-auth?code=ABCD-1234");
+    expect(manualUrl).toBe(opened);
+    expect(reported?.url).toBe(opened);
+    // Approval lands through polling; the token is verified before saving.
     expect(me?.id).toBe("user-9");
-    expect(profile.token).toBe("rook_browser");
+    expect(profile).toEqual({ apiUrl, token: "rook_device" });
+  });
+
+  it("rejects expired codes with a re-run hint", async () => {
+    const apiUrl = await stubDeviceApi({
+      me: { id: "user-9", name: null, email: null },
+      polls: [{ status: "expired" }],
+    });
+    await expect(
+      loginWithDevice(apiUrl, {
+        open: () => {},
+        timeoutMs: 10_000,
+        pollIntervalMs: 5,
+      }),
+    ).rejects.toThrow(/expired/);
+  });
+
+  it("blames an outdated server instead of the network", async () => {
+    const apiUrl = await stubDeviceApi({
+      me: null,
+      polls: [],
+      challengeError: {
+        message: 'No procedure found on path "auth.deviceChallenge"',
+        code: "NOT_FOUND",
+      },
+    });
+    await expect(loginWithDevice(apiUrl, { open: () => {} })).rejects.toThrow(/too old/);
   });
 
   it("fetchMe maps auth failure to signed-out", async () => {
@@ -132,5 +156,3 @@ describe("login plumbing", () => {
     logout();
   });
 });
-
-const listenerUrl = (port: number): string => `http://127.0.0.1:${port}/callback`;

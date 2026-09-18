@@ -27,6 +27,13 @@ From a Rook checkout you can also run the same scripts directly:
 .\cli\install.ps1           # Windows (PowerShell)
 ```
 
+Refreshing an install (new UI, same sign-in — credentials are kept):
+
+```sh
+./cli/reinstall.sh          # macOS / Linux
+.\cli\reinstall.ps1         # Windows (PowerShell)
+```
+
 Either way this builds the self-contained bundle (dependencies
 included) and puts a `rook` executable on your PATH (`~/.local/bin`,
 or `%LOCALAPPDATA%\Rook\bin` on Windows). Then:
@@ -35,8 +42,12 @@ or `%LOCALAPPDATA%\Rook\bin` on Windows). Then:
 rook login
 ```
 
-Approve the device in the browser that opens. Tokens live in the OS
-config dir (`~/.config/rook/config.json`, mode 0600); `ROOK_TOKEN` and
+The terminal shows a short device code and opens the approval page;
+approve there (check the code matches) and the terminal signs itself
+in — no localhost listener, so a closed terminal or a slow approver
+cannot strand either side. Codes expire after 10 minutes; just re-run
+`rook login` for a fresh one. Tokens live in the OS config dir
+(`~/.config/rook/config.json`, mode 0600); `ROOK_TOKEN` and
 `ROOK_API_URL` env vars always win (handy for CI).
 
 Default API is `http://localhost:3000`; point anywhere else with
@@ -84,6 +95,9 @@ revocation is not in v1 — `logout` clears the device copy.
 - `Not signed in` → `rook login`.
 - `Sign-in expired` → `rook login` again.
 - `unreachable at …` → the API server is down or `--api-url` is wrong.
-- Browser flow stuck → keep the terminal open (5-minute window), or
-  approve then paste manually: the approval page shows the token with a
+- `This Rook server is too old for device login` → restart the server
+  from current sources, then try again.
+- Code expired → re-run `rook login` for a fresh one.
+- Legacy CLIs (localhost-callback flow) still pair through the same
+  page's legacy branch, which shows the token with a
   `rook login --token` hint when the terminal is gone.
