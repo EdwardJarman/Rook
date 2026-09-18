@@ -4,14 +4,21 @@ import {
   banner,
   box,
   c,
+  centerBlock,
+  commandMenu,
   createSpinner,
+  footerRow,
+  launchScreen,
   md,
   rule,
+  statusBar,
   statusline,
   stripAnsi,
+  tipLine,
   toolRow,
   truncate,
   visibleWidth,
+  wordmark,
   wrapAnsi,
 } from "./ui.js";
 
@@ -70,6 +77,66 @@ describe("terminal styling core", () => {
     expect(text).toContain("Rook");
     expect(text).toContain("0.1.0");
     expect(text).toContain("opencode:big-pickle");
+  });
+});
+
+describe("tui chrome", () => {
+  it("draws a 5x23 pixel wordmark with a dim-to-bright gradient", () => {
+    const raw = wordmark();
+    const lines = stripAnsi(raw).split("\n");
+    expect(lines).toHaveLength(5);
+    expect(lines.every((line) => visibleWidth(line) === 23)).toBe(true);
+    expect(stripAnsi(raw)).toContain("█");
+    // Gradient: the first two letters ride a dim code, the rest do not.
+    expect(raw.startsWith("\x1b[2m")).toBe(true);
+  });
+
+  it("centers blocks and builds the launch screen deterministically", () => {
+    expect(stripAnsi(centerBlock("hi", 10))).toBe("    hi");
+    const screen = launchScreen({ version: "9.9.9", model: "OpenCode Big Pickle", tip: "stay curious", width: 40 });
+    const plain = stripAnsi(screen);
+    expect(plain).toContain("v9.9.9");
+    expect(plain).toContain("OpenCode Big Pickle");
+    expect(plain).toContain("stay curious");
+    expect(plain).toContain("Tip");
+    for (const line of plain.split("\n")) {
+      expect(visibleWidth(line)).toBeLessThanOrEqual(40);
+    }
+  });
+
+  it("lays the slash palette out with a straight hint rail", () => {
+    const menu = commandMenu(
+      [
+        { command: "/model <id>", description: "switch model" },
+        { command: "/exit", description: "leave", hint: "ctrl+d" },
+      ],
+      40,
+    );
+    const lines = menu.split("\n");
+    expect(lines).toHaveLength(2);
+    expect(new Set(lines.map(visibleWidth)).size).toBe(1);
+    expect(visibleWidth(lines[0]!)).toBe(40);
+    expect(stripAnsi(menu)).toContain("/model <id>");
+    expect(stripAnsi(menu)).toContain("ctrl+d");
+    expect(menu).toContain("\x1b[38;5;208m");
+  });
+
+  it("pins footer rows and the status bar to the terminal width", () => {
+    expect(stripAnsi(footerRow("ab", "cd", 10))).toBe("ab      cd");
+    expect(visibleWidth(footerRow("a-very-long-left-label-overflowing", "cd", 10))).toBe(10);
+    vi.stubEnv("HOME", "/home/dev");
+    const bar = stripAnsi(statusBar("/home/dev/proj", "0.1.0", 30));
+    expect(bar.startsWith("~/proj")).toBe(true);
+    expect(bar.endsWith("v0.1.0")).toBe(true);
+    expect(visibleWidth(bar)).toBe(30);
+    expect(stripAnsi(tipLine("drink water"))).toBe("● Tip drink water");
+  });
+
+  it("emits zero escapes under NO_COLOR", () => {
+    vi.stubEnv("NO_COLOR", "1");
+    const screen = launchScreen({ version: "1.0.0", model: "M", tip: "t", width: 40 });
+    // eslint-disable-next-line no-control-regex
+    expect(/\x1b\[/.test(screen + commandMenu([{ command: "/x", description: "y" }], 20))).toBe(false);
   });
 });
 

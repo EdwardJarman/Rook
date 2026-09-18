@@ -10,7 +10,7 @@ import type { CliProfile } from "../config.js";
 import { eprintln, println } from "../output.js";
 import { box, c, md, statusline, toolRow } from "../ui.js";
 import { saveTurnFiles, type TurnFile } from "./files.js";
-import { defaultModelId, listModels } from "./models.js";
+import { defaultModelId, listModels, modelDisplay } from "./models.js";
 
 export type HistoryTurn = { author: "user" | "bot" | "system"; body: string };
 
@@ -76,7 +76,7 @@ export async function runAsk(profile: CliProfile, opts: AskOptions): Promise<Ask
   const chrome = opts.chrome !== false;
   let text: string;
   let files: TurnFile[] | undefined;
-  if (chrome) println(`${c("mint", "●")} ${c("dim", model)}`);
+  if (chrome) println(`${c("mint", "●")} ${c("dim", modelDisplay(model))}`);
   if (opts.stream === false) {
     const result = await trpc<{ text: string; files?: TurnFile[] }>(profile, "workroom.reply", body, {
       method: "POST",
@@ -105,7 +105,7 @@ export async function runAsk(profile: CliProfile, opts: AskOptions): Promise<Ask
       const name = saved.split(/[\\/]/).pop() ?? saved;
       println(box({ title: `File · ${name}`, lines: [c("dim", saved)] }));
     }
-    eprintln(statusline([`model ${model}`, savedFiles.length ? `${savedFiles.length} file(s) saved` : undefined]));
+    eprintln(statusline([`model ${modelDisplay(model)}`, savedFiles.length ? `${savedFiles.length} file(s) saved` : undefined]));
   }
   return { text, model, savedFiles };
 }

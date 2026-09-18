@@ -76,6 +76,21 @@ export function renderModels(models: CatalogModel[], json: boolean): string {
     .join("\n\n");
 }
 
+/**
+ * TUI model indicator (`OpenCode Big Pickle`, Claude-style): provider
+ * label plus a humanized short id. Pure, unit-tested.
+ */
+export const modelDisplay = (id: string): string => {
+  const provider = providerForModelId(id);
+  const label = PROVIDER_LABELS[provider] ?? provider;
+  const pretty = shortModel(id)
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (ch) => ch.toUpperCase());
+  return pretty ? `${label} ${pretty}` : label;
+};
+
 /** Sensible default when -m is omitted: openrouter/free, else first. */
 export const defaultModelId = (models: CatalogModel[]): string | undefined =>
   models.find((model) => model.id === "openrouter/free")?.id ?? models[0]?.id;

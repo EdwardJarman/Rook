@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   defaultModelId,
   groupModels,
+  modelDisplay,
   providerForModelId,
   renderModels,
   type CatalogModel,
@@ -34,6 +35,12 @@ describe("model catalog", () => {
 
   it("renders json verbatim on request", () => {
     expect(JSON.parse(renderModels(catalog, true))).toHaveLength(3);
+  });
+
+  it("formats Claude-style model indicators", () => {
+    expect(modelDisplay("opencode:big-pickle")).toBe("OpenCode Big Pickle");
+    expect(modelDisplay("chatgpt:gpt-5.5")).toBe("ChatGPT Gpt 5.5");
+    expect(modelDisplay("openrouter:anthropic/claude-opus-4.1")).toBe("OpenRouter Claude Opus 4.1");
   });
 
   it("defaults to openrouter/free, else first", () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildRecentContext } from "./ask.js";
-import { CHAT_HELP, parseSlash } from "./chat.js";
+import { CHAT_COMMANDS, CHAT_HELP, CHAT_TIPS, parseSlash, pickTip } from "./chat.js";
 
 describe("chat helpers", () => {
   it("parses slash commands, defaulting to messages", () => {
@@ -20,6 +20,19 @@ describe("chat helpers", () => {
     for (const cmd of ["/model", "/models", "/new", "/help", "/exit"]) {
       expect(CHAT_HELP).toContain(cmd);
     }
+    expect(CHAT_COMMANDS.map((item) => item.command)).toEqual([
+      "/model <id>",
+      "/models",
+      "/new",
+      "/help",
+      "/exit",
+    ]);
+  });
+
+  it("rotates short tips", () => {
+    expect(CHAT_TIPS.length).toBeGreaterThan(0);
+    expect(CHAT_TIPS.every((tip) => tip.length > 0 && tip.length <= 80)).toBe(true);
+    expect(CHAT_TIPS).toContain(pickTip());
   });
 
   it("caps recent context like the web client", () => {

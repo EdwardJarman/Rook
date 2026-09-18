@@ -8,7 +8,7 @@
  * NO_COLOR or a pipe strips every escape code, leaving clean plain text.
  */
 
-export type ColorName = "mint" | "dim" | "text" | "amber" | "coral" | "cyan";
+export type ColorName = "mint" | "dim" | "text" | "amber" | "coral" | "cyan" | "orange";
 
 const CODES: Record<ColorName, string> = {
   mint: "\x1b[32m",
@@ -17,6 +17,7 @@ const CODES: Record<ColorName, string> = {
   amber: "\x1b[33m",
   coral: "\x1b[31m",
   cyan: "\x1b[36m",
+  orange: "\x1b[38;5;208m",
 };
 
 const RESET = "\x1b[0m";
@@ -210,6 +211,113 @@ const inline = (text: string): string =>
     .replace(/\*\*([^*]+)\*\*/g, (_, inner: string) => bold(inner))
     .replace(/`([^`]+)`/g, (_, inner: string) => c("cyan", inner))
     .replace(/(^|[\s(])\*([^*\s][^*]*)\*(?=[\s).,!?;:]|$)/g, (_, pre: string, inner: string) => `${pre}${bold(inner)}`);
+
+/**
+ * Pixel wordmark ("ROOK", 5x5 caps in the OpenCode poster style) with a
+ * gray-to-white gradient across the letters. Pure text: 23 columns wide,
+ * 5 rows tall, colorless under NO_COLOR / pipes.
+ */
+const WORDMARK_GLYPHS: Record<string, string[]> = {
+  R: ["████.", "█...█", "████.", "█..█.", "█...█"],
+  O: [".███.", "█...█", "█...█", "█...█", ".███."],
+  K: ["█...█", "█..█.", "███..", "█..█.", "█...█"],
+};
+
+const BLANK_GLYPH = [".....", ".....", ".....", ".....", "....."];
+
+export function wordmark(word = "ROOK"): string {
+  const glyphs = word
+    .toUpperCase()
+    .split("")
+    .map((ch) => (WORDMARK_GLYPHS[ch] ?? BLANK_GLYPH).map((row) => row.replace(/\./g, " ")));
+  const rows: string[] = [];
+  for (let r = 0; r < 5; r += 1) {
+    const line = glyphs.map((glyph) => glyph[r]).join(" ");
+    // Gradient: first two letters dim, the rest bright.
+    rows.push(`${c("dim", line.slice(0, 11))}${line.slice(11)}`);
+  }
+  return rows.join("\n");
+}
+
+/** Center every line in `width` (default: terminal). ANSI-aware. */
+export function centerBlock(text: string, width?: number): string {
+  const target = Math.max(1, width ?? termWidth());
+  return text
+    .split("\n")
+    .map((line) => {
+      const gap = Math.max(0, Math.floor((target - visibleWidth(line)) / 2));
+      return `${" ".repeat(gap)}${line}`;
+    })
+    .join("\n");
+}
+
+/** `● Tip …`: amber marker, amber label, dim body. */
+export const tipLine = (tip: string): string =>
+  `${c("amber", "●")} ${c("amber", "Tip")} ${c("dim", tip)}`;
+
+/**
+ * Launch screen: pixel wordmark, version chip, model line, one tip.
+ * Pass `width` in tests for deterministic centering.
+ */
+export function launchScreen(opts: {
+  version: string;
+  model?: string;
+  tip?: string;
+  width?: number;
+}): string {
+  const width = Math.max(30, opts.width ?? termWidth());
+  const parts = [
+    "",
+    centerBlock(wordmark(), width),
+    centerBlock(c("dim", `v${opts.version}`), width),
+  ];
+  if (opts.model) parts.push(centerBlock(c("dim", opts.model), width));
+  if (opts.tip) {
+    parts.push("", centerBlock(tipLine(opts.tip), width));
+  }
+  parts.push("");
+  return parts.join("\n");
+}
+
+export type CommandMenuItem = { command: string; description: string; hint?: string };
+
+/**
+ * Slash palette: orange `/command`, dim description, dim hint pinned to
+ * the right edge — the OpenCode `/` listing shape. Every row is exactly
+ * `width` wide so hints form a straight rail.
+ */
+export function commandMenu(items: CommandMenuItem[], width?: number): string {
+  const target = Math.max(20, width ?? termWidth());
+  const cmdWidth = Math.max(...items.map((item) => visibleWidth(item.command)), 1);
+  return items
+    .map((item) => {
+      const head = `  ${c("orange", item.command)}${" ".repeat(cmdWidth - visibleWidth(item.command))}  ${c("dim", item.description)}`;
+      const hint = item.hint ? c("dim", item.hint) : "";
+      const gap = " ".repeat(Math.max(1, target - visibleWidth(head) - visibleWidth(hint)));
+      return truncate(`${head}${gap}${hint}`, target);
+    })
+    .join("\n");
+}
+
+/**
+ * One footer row: dim left label, dim right label, space between.
+ * The statusline, input-box bottom row, and turn footer share it.
+ */
+export function footerRow(left: string, right: string, width?: number): string {
+  const target = Math.max(1, width ?? termWidth());
+  const leftText = c("dim", left);
+  const rightText = c("dim", right);
+  const room = target - visibleWidth(rightText);
+  if (room <= 0) return truncate(rightText, target);
+  return `${truncate(leftText, room)}${" ".repeat(Math.max(0, room - visibleWidth(truncate(leftText, room))))}${rightText}`;
+}
+
+/** Bottom bar: `~/dir` left, `v0.1.0` right — the persistent TUI strip. */
+export function statusBar(cwd: string, version: string, width?: number): string {
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  const short = home && cwd.startsWith(home) ? `~${cwd.slice(home.length)}` : cwd;
+  return footerRow(short, `v${version}`, width);
+}
 
 /** Braille spinner writing to a stream (default stderr). No-op-safe. */
 export function createSpinner(message: string, stream?: NodeJS.WriteStream): {
