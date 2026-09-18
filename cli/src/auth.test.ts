@@ -37,15 +37,25 @@ const trpcErr = (message: string, code: string) =>
   JSON.stringify([{ error: { message, data: { code, httpStatus: 404 } } }]);
 
 /** Stub API that routes by procedure path; poll replies follow a script. */
-const stubDeviceApi = async (opts: {
-  me: unknown;
-  polls: unknown[];
-  challenge?: unknown;
-  challengeError?: { message: string; code: string };
-}): Promise<string> =>
+const stubDeviceApi = async (
+  opts: {
+    me: unknown;
+    polls: unknown[];
+    challenge?: unknown;
+    challengeError?: { message: string; code: string };
+  },
+  seen?: Record<string, string>,
+): Promise<string> =>
   new Promise((resolve) => {
     let pollCalls = 0;
     server = createServer((req, res) => {
+      const proc = req.url?.includes("auth.deviceChallenge")
+        ? "challenge"
+        : req.url?.includes("auth.devicePoll")
+          ? "poll"
+          : "me";
+      if (seen) seen[proc] = req.method ?? "";
+      if (seen) seen[`${proc}:connection`] = String(req.headers.connection ?? "");
       res.writeHead(200, { "Content-Type": "application/json" });
       if (req.url?.includes("auth.deviceChallenge")) {
         res.end(
@@ -92,13 +102,17 @@ describe("login plumbing", () => {
   });
 
   it("completes the device flow end to end", async () => {
-    const apiUrl = await stubDeviceApi({
-      me: { id: "user-9", name: null, email: "a@b.c" },
-      polls: [
-        { status: "pending" },
-        { status: "approved", token: "rook_device", expiresAt: new Date().toISOString() },
-      ],
-    });
+    const seen: Record<string, string> = {};
+    const apiUrl = await stubDeviceApi(
+      {
+        me: { id: "user-9", name: null, email: "a@b.c" },
+        polls: [
+          { status: "pending" },
+          { status: "approved", token: "rook_device", expiresAt: new Date().toISOString() },
+        ],
+      },
+      seen,
+    );
     let opened = "";
     let reported: { code: string; url: string } | undefined;
     const { me, profile, manualUrl } = await loginWithDevice(apiUrl, {
@@ -120,6 +134,12 @@ describe("login plumbing", () => {
     // Approval lands through polling; the token is verified before saving.
     expect(me?.id).toBe("user-9");
     expect(profile).toEqual({ apiUrl, token: "rook_device" });
+    // Mutations POST; queries ride GET (the server 405s POSTed queries).
+    expect(seen.challenge).toBe("POST");
+    expect(seen.poll).toBe("GET");
+    // No keep-alive: pooled sockets crash force-exit on Windows.
+    expect(seen["challenge:connection"]).toBe("close");
+    expect(seen["poll:connection"]).toBe("close");
   });
 
   it("rejects expired codes with a re-run hint", async () => {

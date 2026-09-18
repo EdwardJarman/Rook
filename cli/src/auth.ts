@@ -61,11 +61,19 @@ type DevicePoll =
   | { status: "approved"; token: string; expiresAt: string }
   | { status: "expired" };
 
-/** Anonymous device calls (the terminal holds no token yet). */
-async function deviceCall<T>(apiUrl: string, procPath: string, input?: unknown): Promise<T> {
+/**
+ * Anonymous device calls (the terminal holds no token yet). Mutations
+ * POST; queries ride GET — the server answers 405 to POSTed queries.
+ */
+async function deviceCall<T>(
+  apiUrl: string,
+  procPath: string,
+  input?: unknown,
+  method: "GET" | "POST" = "POST",
+): Promise<T> {
   try {
     return await trpc<T>({ apiUrl, token: null }, procPath, input, {
-      method: "POST",
+      method,
       anonymous: true,
       timeoutMs: 30_000,
     });
@@ -131,7 +139,7 @@ export async function loginWithDevice(
       throw new Error("Approval timed out after 10 minutes. Re-run `rook login` when ready.");
     }
     await sleep(interval);
-    const poll = await deviceCall<DevicePoll>(apiUrl, "auth.devicePoll", { code: challenge.code });
+    const poll = await deviceCall<DevicePoll>(apiUrl, "auth.devicePoll", { code: challenge.code }, "GET");
     if (poll.status === "approved" && poll.token) {
       const profile: CliProfile = { apiUrl, token: poll.token };
       const me = await fetchMe(profile);

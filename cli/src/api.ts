@@ -39,6 +39,10 @@ async function authedFetch(
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
+        // No keep-alive pooling: force-exiting (fatal()) with pooled
+        // undici sockets trips a libuv assertion on Windows (Node 24).
+        // One connection per CLI call is plenty.
+        Connection: "close",
         ...(profile.token ? { Authorization: `Bearer ${profile.token}` } : {}),
         ...(init?.headers ?? {}),
       },
