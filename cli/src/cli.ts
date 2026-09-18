@@ -45,6 +45,8 @@ const HELP = [
   '  rook ask -m opencode:big-pickle "write fizzbuzz in python"',
   "  rook chat",
   "  rook models --json | jq .",
+  "",
+  "Bare `rook` opens the chat.",
 ];
 
 const printHelp = (): void => {
@@ -97,6 +99,14 @@ async function main(): Promise<void> {
 
   switch (command) {
     case undefined:
+      // opencode/Claude-style: bare `rook` on a terminal opens the chat.
+      // Piped (scripts/CI) keeps the classic help output.
+      if (process.stdin.isTTY && process.stdout.isTTY) {
+        await runChat({ ...currentProfile(), apiUrl }, { model: flags.model, outDir: flags.outDir });
+        return;
+      }
+      printHelp();
+      return;
     case "help":
       printHelp();
       return;
