@@ -16,36 +16,40 @@ import {
   logout,
 } from "./auth.js";
 import { loadProfile } from "./config.js";
-import { eprintln, fatal, println } from "./output.js";
+import { eprintln, fatal, println, ROOK_CLI_VERSION } from "./output.js";
 import { runAsk } from "./commands/ask.js";
 import { runChat } from "./commands/chat.js";
 import { listModels, renderModels } from "./commands/models.js";
 import { providerStatuses, renderStatus } from "./commands/status.js";
+import { bold, box, c, createSpinner } from "./ui.js";
 
-const VERSION = "0.1.0";
+const VERSION = ROOK_CLI_VERSION;
 
-const HELP = `rook ${VERSION} — Rook in your terminal. Same models as the web app.
+const HELP = [
+  "Same models as the web app, in your terminal.",
+  "",
+  "  rook login [--api-url URL] [--web-url URL] [--token TOKEN]",
+  "  rook logout",
+  "  rook whoami",
+  "  rook models [--json]",
+  "  rook status [--json]",
+  "  rook ask [-m MODEL] [--no-stream] <message...>",
+  "  rook chat [-m MODEL]",
+  "  rook help | rook version",
+  "",
+  "login opens the browser once; approve the device and the terminal",
+  "signs itself in. Tokens live in the OS config dir; ROOK_TOKEN and",
+  "ROOK_API_URL env vars always win (handy for CI).",
+  "",
+  '  rook ask "why is the sky blue"',
+  '  rook ask -m opencode:big-pickle "write fizzbuzz in python"',
+  "  rook chat",
+  "  rook models --json | jq .",
+];
 
-Usage:
-  rook login [--api-url URL] [--web-url URL] [--token TOKEN]
-  rook logout
-  rook whoami
-  rook models [--json]
-  rook status [--json]
-  rook ask [-m MODEL] [--no-stream] <message...>
-  rook chat [-m MODEL]
-  rook help | rook version
-
-Auth:
-  login opens the browser once; approve the device and the terminal
-  signs itself in. Tokens live in the OS config dir; ROOK_TOKEN and
-  ROOK_API_URL env vars always win (handy for CI).
-
-Examples:
-  rook ask "why is the sky blue"
-  rook ask -m opencode:big-pickle "write fizzbuzz in python"
-  rook chat
-  rook models --json | jq .`;
+const printHelp = (): void => {
+  println(box({ title: `rook ${VERSION}`, lines: HELP }));
+};
 
 type GlobalFlags = {
   apiUrl?: string;
@@ -94,15 +98,22 @@ async function main(): Promise<void> {
   switch (command) {
     case undefined:
     case "help":
-      println(HELP);
+      printHelp();
       return;
     case "version":
-      println(VERSION);
+      println(`${c("mint", bold("◈ rook"))} ${c("dim", `v${VERSION}`)}`);
       return;
     case "login": {
       if (flags.token) {
-        const { me } = await loginWithToken(apiUrl, flags.token);
-        println(`Signed in as ${me.name ?? me.id} (${apiUrl}).`);
+        const spinner = createSpinner("Verifying token…");
+        spinner.start();
+        try {
+          const { me } = await loginWithToken(apiUrl, flags.token);
+          spinner.stop(`${c("mint", "✓")} Signed in as ${bold(me.name ?? me.id)} ${c("dim", `(${apiUrl})`)}`);
+        } catch (error) {
+          spinner.stop();
+          throw error;
+        }
         return;
       }
       eprintln("Opening the browser to approve this device…");
@@ -110,15 +121,15 @@ async function main(): Promise<void> {
         webUrl: flags.webUrl,
         onOpened: (manualUrl) =>
           eprintln(
-            `If nothing opened, visit:\n  ${manualUrl}\nWaiting for approval in your browser (up to 5 minutes, Ctrl+C to cancel)…`,
+            `If nothing opened, visit:\n  ${manualUrl}\nWaiting for approval in your browser (up to 10 minutes, Ctrl+C to cancel)…`,
           ),
       });
-      println(`Signed in as ${me.name ?? me.id} (${apiUrl}).`);
+      println(`${c("mint", "✓")} Signed in as ${bold(me.name ?? me.id)} ${c("dim", `(${apiUrl})`)}`);
       return;
     }
     case "logout":
       logout();
-      println("Signed out on this device.");
+      println(c("dim", "Signed out on this device."));
       return;
     case "whoami": {
       const me = await fetchMe(loadProfile());
@@ -126,17 +137,38 @@ async function main(): Promise<void> {
         println("Not signed in. Run `rook login`.");
         return;
       }
-      println(`${me.name ?? me.id}${me.email ? ` <${me.email}>` : ""}`);
+      println(`${bold(me.name ?? me.id)}${me.email ? ` ${c("dim", `<${me.email}>`)}` : ""} ${c("dim", `· ${apiUrl}`)}`);
       return;
     }
-    case "models":
-      println(renderModels(await listModels({ ...currentProfile(), apiUrl }), flags.json === true));
+    case "models": {
+      const spinner = createSpinner("Loading models…");
+      spinner.start();
+      try {
+        const text = renderModels(await listModels({ ...currentProfile(), apiUrl }), flags.json === true);
+        spinner.stop();
+        println(text);
+      } catch (error) {
+        spinner.stop();
+        throw error;
+      }
       return;
-    case "status":
-      println(
-        renderStatus(await providerStatuses({ ...currentProfile(), apiUrl }), flags.json === true),
-      );
+    }
+    case "status": {
+      const spinner = createSpinner("Checking providers…");
+      spinner.start();
+      try {
+        const text = renderStatus(
+          await providerStatuses({ ...currentProfile(), apiUrl }),
+          flags.json === true,
+        );
+        spinner.stop();
+        println(text);
+      } catch (error) {
+        spinner.stop();
+        throw error;
+      }
       return;
+    }
     case "ask": {
       const message = positionals.join(" ").trim();
       if (!message) fatal('Nothing to ask. Usage: rook ask "your question"');

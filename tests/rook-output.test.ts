@@ -49,6 +49,10 @@ const textRound = (text: string, finish: "stop" | "length" = "stop") => ({
 beforeEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  // Hermetic turns: keep capability probes off the network (see
+  // server/ai/skills.test.ts). Targeted spy so the createExcelPendingAction
+  // spy below keeps working on the real module.
+  vi.spyOn(db, "listRookNodesForUser").mockResolvedValue([]);
 });
 
 describe("output budgets favor complete answers", () => {

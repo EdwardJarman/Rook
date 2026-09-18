@@ -1,7 +1,15 @@
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { cliCallbackUrl, parseCallbackPort, postCliCallback } from "./cli-auth";
+import {
+  cliCallbackUrl,
+  deliverCliApproval,
+  isTerminalAlive,
+  parseCallbackPort,
+  postCliCallback,
+  TerminalGoneError,
+  TerminalRefusedError,
+} from "./cli-auth";
 
 let server: Server | undefined;
 
@@ -54,6 +62,63 @@ describe("cli device-login handshake", () => {
     });
     await postCliCallback(port, { key: "csrf-1", token: "rook_x", apiUrl: "http://x:3000" });
     expect(JSON.parse(received)).toEqual({ key: "csrf-1", token: "rook_x", apiUrl: "http://x:3000" });
+  });
+
+  it("types gone vs refused terminals distinctly", async () => {
+    const refusing = await listen(() => ({ status: 400, response: "{}" }));
+    await expect(postCliCallback(refusing, { key: "k", token: "t", apiUrl: "u" })).rejects.toBeInstanceOf(
+      TerminalRefusedError,
+    );
+  });
+
+  it("retries a starting terminal, then delivers", async () => {
+    let calls = 0;
+    const post = async () => {
+      calls += 1;
+      if (calls < 3) throw new TerminalGoneError("gone");
+    };
+    await deliverCliApproval(1, { key: "k", token: "t", apiUrl: "u" }, { post, delayMs: 5 });
+    expect(calls).toBe(3);
+  });
+
+  it("gives up after its attempts and never retries refusals", async () => {
+    let gone = 0;
+    await expect(
+      deliverCliApproval(
+        1,
+        { key: "k", token: "t", apiUrl: "u" },
+        {
+          attempts: 2,
+          delayMs: 5,
+          post: async () => {
+            gone += 1;
+            throw new TerminalGoneError("gone");
+          },
+        },
+      ),
+    ).rejects.toBeInstanceOf(TerminalGoneError);
+    expect(gone).toBe(2);
+
+    let refused = 0;
+    await expect(
+      deliverCliApproval(
+        1,
+        { key: "k", token: "t", apiUrl: "u" },
+        {
+          post: async () => {
+            refused += 1;
+            throw new TerminalRefusedError("no");
+          },
+        },
+      ),
+    ).rejects.toBeInstanceOf(TerminalRefusedError);
+    expect(refused).toBe(1);
+  });
+
+  it("senses terminal liveness without caring about status", async () => {
+    const alive = await listen(() => ({ status: 404, response: "{}" }));
+    await expect(isTerminalAlive(alive)).resolves.toBe(true);
+    await expect(isTerminalAlive(1, 300)).resolves.toBe(false);
   });
 
   it("explains refusal and disappearance honestly", async () => {

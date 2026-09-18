@@ -3,6 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// Hermetic turns: capability probes must never touch the network from
+// unit tests (a hanging DB call once ate the whole 5s test budget under
+// parallel load). The subjects here are skills wiring, not probing.
+vi.mock("../db", () => ({
+  listRookNodesForUser: vi.fn(async () => []),
+}));
+
 import {
   __resetSkillsForTests,
   attachedSkillBlock,

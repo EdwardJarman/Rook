@@ -54,8 +54,10 @@ export function openBrowser(url: string): void {
 
 export type CallbackPayload = { key: string; token: string; apiUrl: string };
 
+export const LOGIN_WAIT_MS = 10 * 60 * 1_000;
+
 /** Localhost listener for the approval POST. Caller must close(). */
-export async function listenForCallback(timeoutMs = 5 * 60 * 1_000): Promise<{
+export async function listenForCallback(timeoutMs = LOGIN_WAIT_MS): Promise<{
   port: number;
   wait: Promise<CallbackPayload>;
   close: () => void;
@@ -109,7 +111,7 @@ export async function listenForCallback(timeoutMs = 5 * 60 * 1_000): Promise<{
         // Already closed.
       }
       reject(
-        new Error("Approval timed out after 5 minutes. Re-run `rook login` when ready."),
+        new Error("Approval timed out after 10 minutes. Re-run `rook login` when ready."),
       );
     }, timeoutMs);
     unrefTimer();

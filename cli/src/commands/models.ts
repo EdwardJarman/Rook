@@ -5,7 +5,8 @@
 
 import { trpc } from "../api.js";
 import type { CliProfile } from "../config.js";
-import { renderTable, shortModel } from "../output.js";
+import { shortModel } from "../output.js";
+import { bold, box, c } from "../ui.js";
 
 export type CatalogModel = {
   id: string;
@@ -61,20 +62,18 @@ export function renderModels(models: CatalogModel[], json: boolean): string {
   if (json) return JSON.stringify(models, null, 2);
   const groups = groupModels(models);
   if (!groups.length) return "No models available. Check the Rook server connection.";
-  const lines: string[] = [];
-  for (const group of groups) {
-    lines.push(`${group.label.toUpperCase()} (${group.models.length})`);
-    lines.push(
-      renderTable(
-        group.models.map((model) => [
-          `  ${model.automatic ? "Auto" : shortModel(model.id)}`,
-          model.automatic ? "Best available" : (model.name || model.id),
-        ]),
-      ),
-    );
-    lines.push("");
-  }
-  return lines.join("\n").trimEnd();
+  return groups
+    .map((group) =>
+      box({
+        title: `${group.label.toUpperCase()} (${group.models.length})`,
+        lines: group.models.map((model) => {
+          const id = model.automatic ? "Auto" : shortModel(model.id);
+          const name = model.automatic ? "Best available" : model.name || model.id;
+          return `${bold(id.padEnd(28))}  ${c("dim", name)}`;
+        }),
+      }),
+    )
+    .join("\n\n");
 }
 
 /** Sensible default when -m is omitted: openrouter/free, else first. */

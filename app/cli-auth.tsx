@@ -1,14 +1,28 @@
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import { useAuth as useClerkAuth } from "@clerk/expo";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Platform, Pressable, Text, View } from "react-native";
 
 import { ScreenContainer } from "@/components/screen-container";
 import { getApiBaseUrl } from "@/constants/oauth";
-import { parseCallbackPort, postCliCallback } from "@/lib/cli-auth";
+import { deliverCliApproval, isTerminalAlive, parseCallbackPort } from "@/lib/cli-auth";
 import { trpc } from "@/lib/trpc";
 import { useRookTheme } from "@/lib/ui";
+
+async function copyText(value: string): Promise<boolean> {
+  try {
+    if (typeof navigator !== "undefined" && navigator.clipboard) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+    const Clipboard = await import("expo-clipboard");
+    await Clipboard.setStringAsync(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 type Phase =
   | { name: "review" }
@@ -23,33 +37,60 @@ export default function CliAuthScreen() {
   const { isSignedIn } = useClerkAuth();
   const params = useLocalSearchParams<{ port?: string; key?: string }>();
   const [phase, setPhase] = useState<Phase>({ name: "review" });
+  const [tokenCopied, setTokenCopied] = useState(false);
   const createToken = trpc.auth.createCliToken.useMutation();
 
   const port = parseCallbackPort(params.port);
   const key = typeof params.key === "string" && params.key ? params.key : null;
   const apiUrl = getApiBaseUrl() || (typeof window !== "undefined" ? window.location.origin : "");
+  // Liveness: a terminal that already exited (timeout, closed window)
+  // cannot receive the approval — say so before the user approves
+  // into the void. Polls lightly while the decision is pending.
+  const [terminalGone, setTerminalGone] = useState(false);
+  useEffect(() => {
+    if (!port || phase.name !== "review") return;
+    let cancelled = false;
+    const check = async () => {
+      try {
+        if (!(await isTerminalAlive(port)) && !cancelled) setTerminalGone(true);
+      } catch {
+        // A failed probe must never break the page; approving still mints.
+      }
+    };
+    void check();
+    const timer = setInterval(() => void check(), 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [port, phase.name]);
 
   const approve = async () => {
     if (!port || !key || phase.name === "working") return;
     setPhase({ name: "working" });
+    let token: string | undefined;
     try {
-      const { token } = await createToken.mutateAsync({
+      ({ token } = await createToken.mutateAsync({
         label: `CLI (${Platform.OS})`,
-      });
-      try {
-        await postCliCallback(port, { key, token, apiUrl });
-        setPhase({ name: "done" });
-      } catch {
-        // Terminal gone (closed tab, timeout): hand the token over
-        // manually instead of failing the whole approval.
-        setPhase({ name: "failed", message: "The terminal stopped listening.", token });
-      }
+      }));
+      // The terminal may be starting up or briefly unreachable: retry
+      // before falling back to a manual paste.
+      await deliverCliApproval(port, { key, token, apiUrl });
+      setPhase({ name: "done" });
     } catch {
-      setPhase({
-        name: "failed",
-        message: "Rook could not mint a CLI token right now. Please try again.",
-      });
+      // Terminal gone (closed tab, timeout): hand the token over
+      // manually instead of failing the whole approval.
+      setPhase(
+        token
+          ? { name: "failed", message: "The terminal stopped listening.", token }
+          : { name: "failed", message: "Rook could not mint a CLI token right now. Please try again." },
+      );
     }
+  };
+
+  const copyToken = async (token: string) => {
+    setTokenCopied(await copyText(token));
+    setTimeout(() => setTokenCopied(false), 1800);
   };
 
   return (
@@ -75,6 +116,14 @@ export default function CliAuthScreen() {
             ? "Your terminal asked to sign in with this account. Approving mints a CLI token for that device only."
             : "This page pairs a terminal running `rook login`. Start there first — it opens this page for you."}
         </Text>
+        {terminalGone && port && key ? (
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 9, backgroundColor: colors.surfaceAlt }}>
+            <MaterialIcons name="warning-amber" size={16} color={colors.amber} />
+            <Text style={{ color: colors.textSoft, fontSize: 12, lineHeight: 17, flex: 1 }}>
+              That terminal looks closed — approving cannot reach it. Re-run `rook login` for a fresh code, or approve below and paste the token manually.
+            </Text>
+          </View>
+        ) : null}
 
         {!isSignedIn ? (
           <Pressable
@@ -115,6 +164,32 @@ export default function CliAuthScreen() {
               <Text selectable style={{ color: colors.text, fontSize: 12, fontFamily: "monospace" }}>
                 {phase.token}
               </Text>
+            ) : null}
+            {phase.token ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={tokenCopied ? "Token copied" : "Copy token"}
+                onPress={() => void copyToken(phase.token as string)}
+                style={({ pressed }) => ({
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 6,
+                  paddingHorizontal: 14,
+                  paddingVertical: 9,
+                  borderRadius: 11,
+                  backgroundColor: colors.surfaceAlt,
+                  opacity: pressed ? 0.7 : 1,
+                })}
+              >
+                <MaterialIcons
+                  name={tokenCopied ? "check" : "content-copy"}
+                  size={15}
+                  color={tokenCopied ? colors.mint : colors.textSoft}
+                />
+                <Text style={{ color: colors.textSoft, fontSize: 12.5, fontWeight: "700" }}>
+                  {tokenCopied ? "Copied" : "Copy token"}
+                </Text>
+              </Pressable>
             ) : null}
             {phase.token ? (
               <Text style={{ color: colors.textFaint, fontSize: 11.5, textAlign: "center" }}>

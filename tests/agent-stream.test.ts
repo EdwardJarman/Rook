@@ -9,6 +9,13 @@ vi.mock("../server/ai/openai-stream", async (importOriginal) => {
   };
 });
 
+// Hermetic turns: capability probes must never touch the network from
+// unit tests (a hanging DB call once ate the whole 5s test budget under
+// parallel load).
+vi.mock("../server/db", () => ({
+  listRookNodesForUser: vi.fn(async () => []),
+}));
+
 import { invokeAiStream } from "../server/ai/openai-stream";
 import { runRookAgentStream } from "../server/ai/agent-stream";
 

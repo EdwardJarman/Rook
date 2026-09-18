@@ -8,6 +8,12 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// Per this file's contract ("without any network, DB, or keys"):
+// capability probes stay off the network.
+vi.mock("../server/db", () => ({
+  listRookNodesForUser: vi.fn(async () => []),
+}));
+
 vi.mock("../server/ai/fallback-router", async (importOriginal) => {
   const original =
     await importOriginal<typeof import("../server/ai/fallback-router")>();

@@ -25,6 +25,11 @@ export const parseCallbackPort = (value: string | string[] | undefined | null): 
   return port >= 1 && port <= 65535 ? port : null;
 };
 
+/** The terminal is gone (closed tab, timeout): retrying may still catch a slow starter. */
+export class TerminalGoneError extends Error {}
+/** The terminal answered but rejected the payload: mint a fresh code instead. */
+export class TerminalRefusedError extends Error {}
+
 /** POSTs the approved token to the waiting CLI. Throws honest errors. */
 export async function postCliCallback(
   port: number,
@@ -43,13 +48,64 @@ export async function postCliCallback(
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch {
-    throw new Error(
+    throw new TerminalGoneError(
       "Rook CLI is not listening anymore. Keep the terminal open and try `rook login` again.",
     );
   }
   if (!response.ok) {
-    throw new Error(
+    throw new TerminalRefusedError(
       "Rook CLI refused the delivery. Re-run `rook login` for a fresh code and try again.",
     );
   }
+}
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * True when something answers on the CLI callback port. Any HTTP status
+ * counts (the listener 404s GETs) — only a refused connection means gone.
+ * Lets the approval page say the terminal vanished BEFORE the user
+ * approves into the void.
+ */
+export async function isTerminalAlive(port: number, timeoutMs = 3_000): Promise<boolean> {
+  try {
+    await fetch(cliCallbackUrl(port), {
+      method: "GET",
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Delivers with retries across transient listener gaps (a terminal that
+ * just started, a port in flux). Only network absence retries — refusals
+ * and validation errors surface immediately.
+ */
+export async function deliverCliApproval(
+  port: number,
+  payload: CliCallbackPayload,
+  opts?: {
+    attempts?: number;
+    delayMs?: number;
+    post?: typeof postCliCallback;
+  },
+): Promise<void> {
+  const attempts = Math.max(1, opts?.attempts ?? 3);
+  const delayMs = opts?.delayMs ?? 2_000;
+  const post = opts?.post ?? postCliCallback;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await post(port, payload);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!(error instanceof TerminalGoneError) || attempt === attempts) throw error;
+      await sleep(delayMs);
+    }
+  }
+  throw lastError;
 }

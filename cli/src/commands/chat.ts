@@ -3,10 +3,12 @@
  * as recentContext (same caps as web). Slash commands manage the session.
  */
 
+import { basename } from "node:path";
 import { createInterface } from "node:readline/promises";
 
 import type { CliProfile } from "../config.js";
-import { eprintln, println, shortModel } from "../output.js";
+import { eprintln, println, ROOK_CLI_VERSION, shortModel } from "../output.js";
+import { banner, bold, box, c, statusline } from "../ui.js";
 import { buildRecentContext, resolveAskModel, runAsk, type HistoryTurn } from "./ask.js";
 import { listModels, renderModels } from "./models.js";
 
@@ -56,7 +58,11 @@ export async function runChat(
   opts?: { model?: string; outDir?: string },
 ): Promise<void> {
   let model = await resolveAskModel(profile, opts?.model);
-  eprintln(`Model: ${model} — /help for commands, /exit to leave.`);
+  println(banner(ROOK_CLI_VERSION, model));
+  eprintln(statusline([basename(process.cwd()), "type /help"]) + "\n");
+  const showStatus = (): void => {
+    eprintln(statusline([`model ${model}`, basename(process.cwd())]));
+  };
   const history: HistoryTurn[] = [];
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const onSigint = (): void => {
@@ -69,7 +75,7 @@ export async function runChat(
     for (;;) {
       let line: string | null;
       try {
-        line = await rl.question(`rook(${shortModel(model)})> `);
+        line = await rl.question(`${c("mint", bold("❯"))} `);
       } catch {
         break;
       }
@@ -77,16 +83,16 @@ export async function runChat(
       const parsed = parseSlash(line);
       if (parsed.cmd === "exit") break;
       if (parsed.cmd === "unknown") {
-        eprintln(`Unknown command /${parsed.arg}. /help lists them.`);
+        eprintln(c("coral", `✗ Unknown command /${parsed.arg}. /help lists them.`));
         continue;
       }
       if (parsed.cmd === "help") {
-        println(CHAT_HELP);
+        println(box({ title: "Chat commands", lines: CHAT_HELP.split("\n") }));
         continue;
       }
       if (parsed.cmd === "new") {
         history.length = 0;
-        eprintln("Forgot this conversation. Fresh start.");
+        eprintln(c("dim", "Forgot this conversation. Fresh start."));
         continue;
       }
       if (parsed.cmd === "models") {
@@ -99,21 +105,26 @@ export async function runChat(
           continue;
         }
         model = parsed.arg;
-        eprintln(`Model: ${model}`);
+        showStatus();
         continue;
       }
       if (!parsed.text) continue;
       history.push({ author: "user", body: parsed.text });
+      println(`${c("mint", "●")} ${c("dim", shortModel(model))}`);
       try {
         const result = await runAsk(profile, {
           message: parsed.text,
           model,
           outDir: opts?.outDir,
           recentContext: buildRecentContext(history.slice(0, -1)),
+          onToken: (delta) => process.stdout.write(delta),
+          chrome: false,
         });
+        println();
+        eprintln(statusline([`model ${model}`, result.savedFiles.length ? `${result.savedFiles.length} file(s)` : undefined]));
         history.push({ author: "bot", body: result.text });
       } catch (error) {
-        eprintln(error instanceof Error ? error.message : String(error));
+        eprintln(c("coral", `✗ ${error instanceof Error ? error.message : String(error)}`));
         history.pop();
       }
     }

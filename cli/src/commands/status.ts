@@ -2,7 +2,7 @@
 
 import { trpc } from "../api.js";
 import type { CliProfile } from "../config.js";
-import { renderTable } from "../output.js";
+import { box, c } from "../ui.js";
 
 const PROVIDERS = ["opencode", "openrouter", "orcarouter", "tokenrouter"] as const;
 
@@ -40,13 +40,18 @@ export async function providerStatuses(profile: CliProfile): Promise<ProviderSta
 
 export function renderStatus(statuses: ProviderStatus[], json: boolean): string {
   if (json) return JSON.stringify(statuses, null, 2);
-  return renderTable([
-    ["PROVIDER", "STATE", "MODELS", "NOTE"],
-    ...statuses.map((status) => [
-      status.provider,
-      status.operational ? "Online" : status.configured ? "Attention" : "Setup",
-      String(status.freeModels),
-      status.message.slice(0, 72),
-    ]),
-  ]);
+  if (!statuses.length) return "No provider status. Check the Rook server connection.";
+  return box({
+    title: "Providers",
+    lines: statuses.map((status) => {
+      const state = status.operational
+        ? c("mint", "● Online   ")
+        : status.configured
+          ? c("amber", "● Attention")
+          : c("dim", "○ Setup    ");
+      const models =
+        status.freeModels > 0 ? c("dim", `${status.freeModels} models`) : c("dim", "no models");
+      return `${state}  ${status.provider.padEnd(11)} ${models}`;
+    }),
+  });
 }
