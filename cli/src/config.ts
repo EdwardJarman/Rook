@@ -13,7 +13,7 @@ export type CliProfile = {
   token: string | null;
 };
 
-export const DEFAULT_API_URL = "http://localhost:3000";
+export const DEFAULT_API_URL = "https://www.rook.lighting";
 
 export function configDir(): string {
   const override = process.env.ROOK_CONFIG_DIR?.trim();

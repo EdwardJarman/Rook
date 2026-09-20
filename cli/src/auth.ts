@@ -35,8 +35,14 @@ export function webUrlFor(apiUrl: string, explicit?: string): string {
   return apiUrl.replace(/\/+$/, "");
 }
 
-export const cliAuthPageUrl = (webUrl: string, code: string): string =>
-  `${webUrl.replace(/\/+$/, "")}/cli-auth?code=${encodeURIComponent(code)}`;
+/**
+ * Approval page URL. The page is a static, dependency-light HTML document the
+ * API itself serves at /api/cli-auth (see server/cli-auth-page.ts) — not the
+ * Expo SPA's /cli-auth route, which forces a multi-megabyte bundle download
+ * before a single approve button renders.
+ */
+export const cliAuthPageUrl = (baseUrl: string, code: string): string =>
+  `${baseUrl.replace(/\/+$/, "")}/api/cli-auth?code=${encodeURIComponent(code)}`;
 
 export function openBrowser(url: string): void {
   const command =
@@ -128,8 +134,10 @@ export async function loginWithDevice(
   },
 ): Promise<{ profile: CliProfile; me: Exclude<Me, null>; manualUrl: string }> {
   const challenge = await deviceCall<DeviceChallenge>(apiUrl, "auth.deviceChallenge");
-  const webUrl = webUrlFor(apiUrl, opts?.webUrl);
-  const manualUrl = cliAuthPageUrl(webUrl, challenge.code);
+  // The approval page is served by the API itself (/api/cli-auth), so the
+  // browser opens the API origin — same origin as the tRPC calls, no Metro.
+  const baseUrl = opts?.webUrl?.trim() ? webUrlFor(apiUrl, opts.webUrl) : apiUrl.replace(/\/+$/, "");
+  const manualUrl = cliAuthPageUrl(baseUrl, challenge.code);
   (opts?.open ?? openBrowser)(manualUrl);
   opts?.onCode?.(challenge.code, manualUrl);
   const deadline = Date.now() + (opts?.timeoutMs ?? LOGIN_WAIT_MS);

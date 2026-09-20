@@ -83,8 +83,10 @@ describe("login plumbing", () => {
     expect(webUrlFor("https://api.example.com", "https://web.example.com/")).toBe(
       "https://web.example.com",
     );
-    expect(cliAuthPageUrl("http://localhost:8081/", "AB CD")).toBe(
-      "http://localhost:8081/cli-auth?code=AB%20CD",
+    // The approval page lives on the API origin (/api/cli-auth), same origin
+    // as the tRPC calls — not the Expo SPA's /cli-auth route.
+    expect(cliAuthPageUrl("http://localhost:3000/", "AB CD")).toBe(
+      "http://localhost:3000/api/cli-auth?code=AB%20CD",
     );
     expect(defaultApiUrl("https://x.example.com")).toBe("https://x.example.com");
   });
@@ -128,7 +130,7 @@ describe("login plumbing", () => {
     });
     // The terminal shows a human code and opens the matching approval page.
     expect(reported?.code).toBe("ABCD-1234");
-    expect(opened).toBe("http://web.invalid/cli-auth?code=ABCD-1234");
+    expect(opened).toBe("http://web.invalid/api/cli-auth?code=ABCD-1234");
     expect(manualUrl).toBe(opened);
     expect(reported?.url).toBe(opened);
     // Approval lands through polling; the token is verified before saving.

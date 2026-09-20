@@ -42,16 +42,19 @@ or `%LOCALAPPDATA%\Rook\bin` on Windows). Then:
 rook login
 ```
 
-The terminal shows a short device code and opens the approval page;
-approve there (check the code matches) and the terminal signs itself
-in — no localhost listener, so a closed terminal or a slow approver
+The terminal shows a short device code and opens the approval page — a
+static, dependency-light HTML document the API itself serves at
+`/api/cli-auth`, so it paints instantly instead of waiting for the full
+app bundle. Approve there (check the code matches) and the terminal signs
+itself in — no localhost listener, so a closed terminal or a slow approver
 cannot strand either side. Codes expire after 10 minutes; just re-run
 `rook login` for a fresh one. Tokens live in the OS config dir
 (`~/.config/rook/config.json`, mode 0600); `ROOK_TOKEN` and
 `ROOK_API_URL` env vars always win (handy for CI).
 
-Default API is `http://localhost:3000`; point anywhere else with
-`--api-url` (every command accepts it).
+Default API is `https://www.rook.lighting` (production); point anywhere
+else with `--api-url` (every command accepts it). For local development
+against your own server, use `--api-url http://localhost:3000`.
 
 ## Commands
 
