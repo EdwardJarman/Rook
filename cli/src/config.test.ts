@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,6 +28,15 @@ describe("cli config", () => {
     saveProfile({ apiUrl: "https://api.example.com/", token: "rook_abc" });
     expect(loadProfile()).toEqual({ apiUrl: "https://api.example.com", token: "rook_abc" });
     expect(configPath().startsWith(dir)).toBe(true);
+  });
+
+  it("never pins the default apiUrl, so default changes migrate profiles", () => {
+    // The localhost:3000 trap: profiles saved against the old default kept
+    // dialing a dead dev server after the default moved to production.
+    saveProfile({ apiUrl: DEFAULT_API_URL, token: "rook_abc" });
+    const stored = JSON.parse(readFileSync(configPath(), "utf8")) as { apiUrl?: string };
+    expect(stored.apiUrl).toBeUndefined();
+    expect(loadProfile()).toEqual({ apiUrl: DEFAULT_API_URL, token: "rook_abc" });
   });
 
   it("lets env override file, and clears cleanly", () => {

@@ -1,4 +1,4 @@
-import { createServer, type Server } from "node:http";
+﻿import { createServer, type Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import superjson from "superjson";
 
@@ -9,8 +9,10 @@ import {
   loginWithDevice,
   loginWithToken,
   logout,
+  resolveServerUrl,
   webUrlFor,
 } from "./auth.js";
+import { DEFAULT_API_URL } from "./config.js";
 
 let server: Server | undefined;
 
@@ -84,7 +86,7 @@ describe("login plumbing", () => {
       "https://web.example.com",
     );
     // The approval page lives on the API origin (/api/cli-auth), same origin
-    // as the tRPC calls — not the Expo SPA's /cli-auth route.
+    // as the tRPC calls â€” not the Expo SPA's /cli-auth route.
     expect(cliAuthPageUrl("http://localhost:3000/", "AB CD")).toBe(
       "http://localhost:3000/api/cli-auth?code=AB%20CD",
     );
@@ -176,5 +178,33 @@ describe("login plumbing", () => {
 
   it("logout only touches local state", () => {
     logout();
+  });
+
+  describe("resolveServerUrl â€” the dead-localhost-pin recovery", () => {
+    const probeOf = (ok: boolean): (() => Promise<boolean>) => async () => ok;
+
+    it("falls back to production when a pinned localhost is unreachable", async () => {
+      await expect(resolveServerUrl("http://localhost:3000", { probe: probeOf(false) })).resolves.toEqual({
+        apiUrl: DEFAULT_API_URL,
+        fellBackFrom: "http://localhost:3000",
+      });
+      await expect(resolveServerUrl("http://127.0.0.1:3000", { probe: probeOf(false) })).resolves.toEqual({
+        apiUrl: DEFAULT_API_URL,
+        fellBackFrom: "http://127.0.0.1:3000",
+      });
+    });
+
+    it("keeps a live localhost and never questions explicit or remote targets", async () => {
+      await expect(resolveServerUrl("http://localhost:3000", { probe: probeOf(true) })).resolves.toEqual({
+        apiUrl: "http://localhost:3000",
+      });
+      // Explicit flags and ROOK_API_URL are honored without a probe.
+      await expect(
+        resolveServerUrl("http://localhost:9999", { explicit: true, probe: probeOf(false) }),
+      ).resolves.toEqual({ apiUrl: "http://localhost:9999" });
+      await expect(resolveServerUrl("https://api.example.com", { probe: probeOf(false) })).resolves.toEqual({
+        apiUrl: "https://api.example.com",
+      });
+    });
   });
 });

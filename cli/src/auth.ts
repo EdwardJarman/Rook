@@ -171,3 +171,39 @@ export function currentProfile(): CliProfile {
 
 export const defaultApiUrl = (explicit?: string): string =>
   explicit?.trim() || loadProfile().apiUrl || DEFAULT_API_URL;
+
+const isLocalhostUrl = (apiUrl: string): boolean =>
+  /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?/i.test(apiUrl);
+
+/** Cheap liveness probe: any HTTP answer counts, only a dead dial fails. */
+export async function probeApi(apiUrl: string, timeoutMs = 2_500): Promise<boolean> {
+  try {
+    const response = await fetch(`${apiUrl.replace(/\/+$/, "")}/api/health`, {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    return response.status < 600;
+  } catch {
+    return false;
+  }
+}
+
+export type ResolvedApi = { apiUrl: string; fellBackFrom?: string };
+
+/**
+ * A stored localhost pin whose dev server is no longer running used to
+ * strand every command behind "unreachable" (the default used to be
+ * localhost:3000, so every early profile carries that pin). Login and the
+ * other network commands now probe a localhost target first and fall back
+ * to production — loudly — unless the pin came from an explicit flag or
+ * ROOK_API_URL. Non-localhost targets are taken at face value.
+ */
+export async function resolveServerUrl(
+  apiUrl: string,
+  opts?: { explicit?: boolean; probe?: typeof probeApi },
+): Promise<ResolvedApi> {
+  if (opts?.explicit || process.env.ROOK_API_URL?.trim()) return { apiUrl };
+  if (!isLocalhostUrl(apiUrl)) return { apiUrl };
+  const probe = opts?.probe ?? probeApi;
+  if (await probe(apiUrl)) return { apiUrl };
+  return { apiUrl: DEFAULT_API_URL, fellBackFrom: apiUrl };
+}

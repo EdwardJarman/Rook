@@ -7,6 +7,7 @@
 import superjson from "superjson";
 
 import type { CliProfile } from "./config.js";
+import { DEFAULT_API_URL } from "./config.js";
 
 export class ApiError extends Error {
   status?: number;
@@ -19,10 +20,19 @@ export class ApiError extends Error {
   }
 }
 
-const unreachable = (apiUrl: string): ApiError =>
-  new ApiError(
-    `Rook server is unreachable at ${apiUrl}. Start it (or point --api-url at a live one).`,
-  );
+/**
+ * Unreachable means actionable: the message names the exact server that
+ * failed and the exact way out — a dead localhost pin (the classic trap:
+ * a profile saved against a dev server that is no longer running) points
+ * at production; anything else points at --api-url.
+ */
+const unreachable = (apiUrl: string): ApiError => {
+  const local = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?/i.test(apiUrl);
+  const remedy = local
+    ? `Start your dev server, or sign in against production: rook login --api-url ${DEFAULT_API_URL}`
+    : "Check the URL, or pass --api-url to point at a live server.";
+  return new ApiError(`Rook server is unreachable at ${apiUrl}. ${remedy}`);
+};
 
 async function authedFetch(
   profile: CliProfile,

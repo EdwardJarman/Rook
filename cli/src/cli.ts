@@ -14,8 +14,9 @@ import {
   loginWithDevice,
   loginWithToken,
   logout,
+  resolveServerUrl,
 } from "./auth.js";
-import { loadProfile } from "./config.js";
+import type { CliProfile } from "./config.js";
 import { eprintln, fatal, println, ROOK_CLI_VERSION } from "./output.js";
 import { runAsk } from "./commands/ask.js";
 import { runChat } from "./commands/chat.js";
@@ -95,7 +96,25 @@ const parseArgs = (argv: string[]): { command?: string; positionals: string[]; f
 
 async function main(): Promise<void> {
   const { command, positionals, flags } = parseArgs(process.argv.slice(2));
-  const apiUrl = defaultApiUrl(flags.apiUrl);
+  let apiUrl = defaultApiUrl(flags.apiUrl);
+  // A stored localhost pin whose dev server died used to strand every
+  // command ("unreachable at localhost:3000"). Network commands recover to
+  // production — loudly. Explicit --api-url and ROOK_API_URL are taken at
+  // face value; offline commands skip the probe entirely.
+  const networked = command === undefined || !["help", "version", "logout"].includes(command);
+  if (networked) {
+    const resolved = await resolveServerUrl(apiUrl, { explicit: flags.apiUrl !== undefined });
+    if (resolved.fellBackFrom) {
+      eprintln(
+        c(
+          "amber",
+          `${resolved.fellBackFrom} is unreachable — using ${resolved.apiUrl} instead. ` +
+            "Start your dev server, or pass --api-url to override.",
+        ),
+      );
+    }
+    apiUrl = resolved.apiUrl;
+  }
 
   switch (command) {
     case undefined:
@@ -141,7 +160,7 @@ async function main(): Promise<void> {
       println(c("dim", "Signed out on this device."));
       return;
     case "whoami": {
-      const me = await fetchMe(loadProfile());
+      const me = await fetchMe({ ...currentProfile(), apiUrl });
       if (!me) {
         println("Not signed in. Run `rook login`.");
         return;

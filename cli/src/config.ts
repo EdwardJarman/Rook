@@ -53,7 +53,15 @@ export function loadProfile(): CliProfile {
 
 export function saveProfile(profile: CliProfile): void {
   mkdirSync(configDir(), { recursive: true });
-  writeFileSync(configPath(), `${JSON.stringify({ apiUrl: profile.apiUrl, token: profile.token }, null, 2)}\n`);
+  // The default API URL is never persisted: a stored pin would survive
+  // future default changes and strand the CLI on a dead server (the
+  // localhost:3000 trap). Omitted apiUrl resolves to DEFAULT_API_URL on
+  // load, so upgrading the default migrates everyone automatically.
+  const apiUrl = profile.apiUrl === DEFAULT_API_URL ? undefined : profile.apiUrl;
+  writeFileSync(
+    configPath(),
+    `${JSON.stringify({ ...(apiUrl ? { apiUrl } : {}), token: profile.token }, null, 2)}\n`,
+  );
   try {
     chmodSync(configPath(), 0o600);
   } catch {
