@@ -23,7 +23,7 @@ import {
   type CommandMenuItem,
 } from "../ui.js";
 import { buildRecentContext, resolveAskModel, runAsk, type HistoryTurn } from "./ask.js";
-import { askInput, type Agent } from "./input.js";
+import { askInput, isModelArg, MODEL_ARG_HINT, type Agent } from "./input.js";
 import { listModels, modelDisplay, renderModels, type CatalogModel } from "./models.js";
 
 export type SlashCommand =
@@ -59,7 +59,7 @@ export const parseSlash = (line: string): SlashCommand => {
 };
 
 export const CHAT_COMMANDS: CommandMenuItem[] = [
-  { command: "/model <id>", description: "switch model for this session" },
+  { command: "/model", hint: MODEL_ARG_HINT, description: "switch model for this session" },
   { command: "/models", description: "list every model" },
   { command: "/new", description: "forget this conversation" },
   { command: "/help", description: "show this palette" },
@@ -67,14 +67,14 @@ export const CHAT_COMMANDS: CommandMenuItem[] = [
 ];
 
 export const CHAT_HELP = CHAT_COMMANDS.map(
-  (item) => `${item.command}  ${item.description}`,
+  (item) => `${item.command}${item.hint ? ` ${item.hint}` : ""}  ${item.description}`,
 ).join("\n");
 
 export const CHAT_TIPS = [
   "pipe answers out: rook ask … > notes.md",
   "hit / to see the slash palette while typing",
   "ctrl+n opens the model picker",
-  "switch models mid-chat with /model <id>",
+  "switch models mid-chat with /model — pick with arrows",
   "/new forgets the thread — history never leaves your machine",
 ];
 
@@ -169,10 +169,12 @@ export async function runChat(
       const interactive = process.stdin.isTTY && process.stdout.isTTY;
       let line: string | null = null;
       if (interactive) {
+        // The live input owns its own footer; chat prints one only on the
+        // readline path (finish() already flushed the live prompt + footer).
         const input = await askInput({
           model: display(),
           agent: DEFAULT_AGENTS[0],
-          commands: CHAT_COMMANDS.map((i) => ({ command: i.command, description: i.description })),
+          commands: CHAT_COMMANDS.map((i) => ({ command: i.command, hint: i.hint, description: i.description })),
           history: history.map((h) => h.body),
           pickModel:
             hasPicker && catalog
@@ -188,9 +190,6 @@ export async function runChat(
         });
         if (input === "exit") break;
         if (input !== null) line = input;
-        if (input !== null) {
-          println(footerRow("enter send", display()));
-        }
       }
       if (line === null) {
         try {
@@ -198,6 +197,7 @@ export async function runChat(
         } catch {
           break;
         }
+        println(footerRow("enter send", display()));
       }
       if (!line.trim()) continue;
       const parsed = parseSlash(line);
@@ -220,7 +220,16 @@ export async function runChat(
         continue;
       }
       if (parsed.cmd === "model") {
-        if (!parsed.arg) {
+        // A bare command or a copied palette hint never counts as a model id.
+        if (!parsed.arg || isModelArg(parsed.arg)) {
+          if (hasPicker && catalog) {
+            const picked = await pickModel(catalog, model);
+            if (picked) {
+              model = picked;
+              eprintln(footerRow(`model ${display()}`, `v${ROOK_CLI_VERSION}`));
+            }
+            continue;
+          }
           eprintln(`Current model: ${display()}`);
           continue;
         }

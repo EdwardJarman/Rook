@@ -312,6 +312,35 @@ export function footerRow(left: string, right: string, width?: number): string {
   return `${truncate(leftText, room)}${" ".repeat(Math.max(0, room - visibleWidth(truncate(leftText, room))))}${rightText}`;
 }
 
+/** Frames double as sync rows; keep the cursor math beside the renderer. */
+export const rowsBackToStart = (drawn: number): number => Math.max(0, drawn);
+
+/**
+ * Shared redraw primitive: move to the start of the live input block, draw
+ * every row, remember the block size for the next sync.
+ */
+export function drawRows(
+  stdout: NodeJS.WriteStream,
+  state: { drawn: number },
+  rows: string[],
+): void {
+  if (state.drawn > 0) stdout.write(`\x1b[${rowsBackToStart(state.drawn)}A`);
+  for (const row of rows) stdout.write("\r\x1b[2K" + row + "\n");
+  state.drawn = rows.length;
+}
+
+/**
+ * Fully erase the live input block so stale palette rows never linger when
+ * the list shrinks, then reset the cursor for the next render.
+ */
+export function clearRows(stdout: NodeJS.WriteStream, state: { drawn: number }): void {
+  if (state.drawn > 0) stdout.write(`\x1b[${rowsBackToStart(state.drawn)}A`);
+  for (let i = 0; i < state.drawn; i += 1) stdout.write("\r\x1b[2K\n");
+  stdout.write(`\x1b[${state.drawn}A`);
+  stdout.write("\r");
+  state.drawn = 0;
+}
+
 /** Bottom bar: `~/dir` left, `v0.1.0` right — the persistent TUI strip. */
 export function statusBar(cwd: string, version: string, width?: number): string {
   const home = process.env.HOME || process.env.USERPROFILE || "";

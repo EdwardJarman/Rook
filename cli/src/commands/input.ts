@@ -13,9 +13,16 @@
 
 import { emitKeypressEvents } from "node:readline";
 
-import { c, footerRow, rule } from "../ui.js";
+import { c, clearRows, drawRows, footerRow } from "../ui.js";
 
-export type Suggestion = { command: string; description: string };
+export type Suggestion = { command: string; description: string; hint?: string };
+
+/** A `/model` command never ships a literal placeholder to the parser. */
+export const MODEL_ARG_HINT = "<id>";
+
+export const isModelArg = (value: string | undefined): boolean =>
+  (value ?? "").trim().toLowerCase() === MODEL_ARG_HINT;
+
 export type Agent = { name: string; label?: string };
 
 export const slashMatches = (commands: Suggestion[], text: string): Suggestion[] =>
@@ -40,7 +47,8 @@ export function paletteRows(items: Suggestion[], selected: number, windowSize = 
   );
   return items.slice(start, start + windowSize).map((item, i) => {
     const picked = start + i === selected;
-    const text = `${item.command}  ${item.description}`;
+    const head = item.command === "/model" && item.hint ? `${item.command} ${item.hint}` : item.command;
+    const text = `${head}  ${item.description}`;
     return picked ? `${c("orange", "›")} ${text}` : c("dim", `  ${text}`);
   });
 }
@@ -177,11 +185,12 @@ export function handleInput(
 }
 
 /**
- * Screen rows for a frame: the input rule, live palette rows (if any),
- * the `❯` prompt with ghost text, and the prompt footer (agent/model).
+ * Screen rows for a frame: palette rows above the `❯` prompt (if any), the
+ * prompt with ghost text, and the prompt footer (agent/model). No repeated
+ * per-keystroke rules — render/sync fully owns the fixed input block.
  */
 export function layoutFrame(frame: InputFrame): string[] {
-  const rows: string[] = [rule("ask")];
+  const rows: string[] = [];
   if (frame.palette.length) rows.push(...paletteRows(frame.palette, frame.palSel));
   const ghost =
     frame.buffer.startsWith("/") && frame.palette.length
@@ -221,16 +230,14 @@ export async function askInput(opts: AskInputOptions): Promise<string | "exit" |
   let drawn = 0;
   const render = (): void => {
     const rows = layoutFrame(frame);
-    if (drawn > 0) stdout.write(`\x1b[${drawn - 1}A`);
-    for (const row of rows) stdout.write("\r\x1b[2K" + row + "\n");
-    drawn = rows.length;
+    const state = { drawn };
+    drawRows(stdout, state, rows);
+    drawn = state.drawn;
   };
   const unrender = (): void => {
-    if (drawn > 0) stdout.write(`\x1b[${drawn - 1}A`);
-    for (let i = 0; i < drawn; i += 1) stdout.write("\r\x1b[2K\n");
-    stdout.write(`\x1b[${drawn}A`);
-    stdout.write("\r");
-    drawn = 0;
+    const state = { drawn };
+    clearRows(stdout, state);
+    drawn = state.drawn;
   };
   return new Promise((resolve) => {
     const finish = (line: string | "exit"): void => {
@@ -280,3 +287,7 @@ export async function askInput(opts: AskInputOptions): Promise<string | "exit" |
     render();
   });
 }
+
+// Re-exported at the module edge so tests pin the shared sync primitive,
+// while input.ts keeps a single canonical import site.
+export { clearRows, drawRows, rowsBackToStart } from "../ui.js";

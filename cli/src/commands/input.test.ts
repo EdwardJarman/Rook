@@ -1,16 +1,20 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  clearRows,
+  drawRows,
   handleInput,
   initialFrame,
+  isModelArg,
   layoutFrame,
   modelMatches,
   paletteRows,
   slashMatches,
 } from "./input.js";
+import { clearRows as clearSyncRows, drawRows as drawSyncRows, rowsBackToStart } from "../ui.js";
 
 const CMDS = [
-  { command: "/model <id>", description: "switch model for this session" },
+  { command: "/model", hint: "<id>", description: "switch model for this session" },
   { command: "/models", description: "list every model" },
   { command: "/new", description: "forget this conversation" },
   { command: "/help", description: "show this palette" },
@@ -28,7 +32,7 @@ describe("chat input engine", () => {
     expect(slashMatches(CMDS, "")).toEqual([]);
     expect(slashMatches(CMDS, "hello")).toEqual([]);
     expect(slashMatches(CMDS, "/")).toHaveLength(CMDS.length);
-    expect(slashMatches(CMDS, "/m").map((s) => s.command)).toEqual(["/model <id>", "/models"]);
+    expect(slashMatches(CMDS, "/m").map((s) => s.command)).toEqual(["/model", "/models"]);
     expect(slashMatches(CMDS, "/MODELS")).toEqual([{ command: "/models", description: "list every model" }]);
     expect(slashMatches(CMDS, "/nope")).toEqual([]);
   });
@@ -73,7 +77,11 @@ describe("chat input engine", () => {
     frame = handleInput(frame, "/") as typeof frame;
     expect(frame.palette).toHaveLength(CMDS.length);
     frame = handleInput(frame, "m") as typeof frame;
-    expect(frame.palette.map((s) => s.command)).toEqual(["/model <id>", "/models"]);
+    expect(frame.palette.map((s) => s.command)).toEqual(["/model", "/models"]);
+    // Palette display keeps the <id> hint; the committed buffer never does.
+    expect(paletteRows(frame.palette, 0)).toEqual(
+      expect.arrayContaining([expect.stringContaining("<id>")]),
+    );
     // Down selects /models; enter commits it to the buffer for args.
     frame = handleInput(frame, undefined, { name: "down" }) as typeof frame;
     frame = handleInput(frame, undefined, { name: "return" }) as typeof frame;
@@ -90,6 +98,13 @@ describe("chat input engine", () => {
     f2 = handleInput(f2, "n") as typeof f2;
     f2 = handleInput(f2, undefined, { name: "tab" }) as typeof f2;
     expect(f2.buffer).toBe("/new ");
+    // Typing bare /model and entering submits the command token only.
+    let f3 = initialFrame({ model: "M", commands: CMDS });
+    for (const ch of "/model") f3 = handleInput(f3, ch) as typeof f3;
+    const modelCmd = handleInput(f3, undefined, { name: "return" });
+    expect(modelCmd).toBe("/model");
+    expect(isModelArg("<id>")).toBe(true);
+    expect(isModelArg("opencode:big-pickle")).toBe(false);
   });
 
   it("returns exit on ctrl+d and pick on ctrl+n", () => {
@@ -111,15 +126,15 @@ describe("chat input engine", () => {
     expect(frame.buffer).toBe("x"); // the draft comes back
   });
 
-  it("lays out rule, prompt, ghost, palette, and footer rows", () => {
+  it("lays out prompt, ghost, palette, and footer rows without rules", () => {
     let frame = initialFrame({
       model: "OpenCode Big Pickle",
       agent: { name: "build", label: "Build" },
       commands: CMDS,
     });
     const idle = layoutFrame(frame);
-    expect(idle[0]).toContain("─"); // rule
-    expect(idle.some((r) => r.includes("❯"))).toBe(true);
+    expect(idle[0]).toContain("❯"); // prompt first — rules never redraw
+    expect(idle.some((r) => r.includes("─"))).toBe(false);
     expect(idle[idle.length - 1]).toContain("enter send");
     expect(idle[idle.length - 1]).toContain("Build · OpenCode Big Pickle");
     frame = handleInput(frame, "/") as typeof frame;
@@ -128,5 +143,19 @@ describe("chat input engine", () => {
     expect(live.some((r) => r.includes("/help") && r.includes("show this palette"))).toBe(true);
     // Ghost shows the remainder of the selected command.
     expect(live.some((r) => r.includes("/h") && r.includes("elp"))).toBe(true);
+  });
+
+  it("syncs a fixed input block without leaving stray rows", () => {
+    expect(rowsBackToStart(0)).toBe(0);
+    expect(rowsBackToStart(6)).toBe(6);
+    const writes: string[] = [];
+    const stdout = { write: (s: string) => writes.push(s) } as unknown as NodeJS.WriteStream;
+    const state = { drawn: 0 };
+    drawSyncRows(stdout, state, ["a", "b", "c"]);
+    expect(state.drawn).toBe(3);
+    clearSyncRows(stdout, state);
+    expect(state.drawn).toBe(0);
+    // Every palette line got a full-line clear when the block was erased.
+    expect(writes.filter((w) => w === "\r\x1b[2K\n")).toHaveLength(3);
   });
 });

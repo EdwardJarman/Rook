@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { buildRecentContext } from "./ask.js";
 import { CHAT_COMMANDS, CHAT_HELP, CHAT_TIPS, parseSlash, pickTip } from "./chat.js";
+import { isModelArg } from "./input.js";
 
 describe("chat helpers", () => {
   it("parses slash commands, defaulting to messages", () => {
@@ -21,12 +22,15 @@ describe("chat helpers", () => {
       expect(CHAT_HELP).toContain(cmd);
     }
     expect(CHAT_COMMANDS.map((item) => item.command)).toEqual([
-      "/model <id>",
+      "/model",
       "/models",
       "/new",
       "/help",
       "/exit",
     ]);
+    // The <id> renders as a display hint, never a committed model value.
+    expect(CHAT_COMMANDS[0]?.hint).toBe("<id>");
+    expect(isModelArg(CHAT_COMMANDS[0]?.hint)).toBe(true);
   });
 
   it("rotates short tips", () => {
