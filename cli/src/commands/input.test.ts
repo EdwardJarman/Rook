@@ -1,0 +1,132 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  handleInput,
+  initialFrame,
+  layoutFrame,
+  modelMatches,
+  paletteRows,
+  slashMatches,
+} from "./input.js";
+
+const CMDS = [
+  { command: "/model <id>", description: "switch model for this session" },
+  { command: "/models", description: "list every model" },
+  { command: "/new", description: "forget this conversation" },
+  { command: "/help", description: "show this palette" },
+  { command: "/exit", description: "leave" },
+];
+
+const MODELS = [
+  { command: "openrouter/free", description: "Auto · Best available" },
+  { command: "opencode:big-pickle", description: "Big Pickle" },
+  { command: "chatgpt:gpt-5.5", description: "GPT 5.5" },
+];
+
+describe("chat input engine", () => {
+  it("matches slash commands only when the buffer starts with /", () => {
+    expect(slashMatches(CMDS, "")).toEqual([]);
+    expect(slashMatches(CMDS, "hello")).toEqual([]);
+    expect(slashMatches(CMDS, "/")).toHaveLength(CMDS.length);
+    expect(slashMatches(CMDS, "/m").map((s) => s.command)).toEqual(["/model <id>", "/models"]);
+    expect(slashMatches(CMDS, "/MODELS")).toEqual([{ command: "/models", description: "list every model" }]);
+    expect(slashMatches(CMDS, "/nope")).toEqual([]);
+  });
+
+  it("filters models by id or name with an empty query listing all", () => {
+    expect(modelMatches(MODELS, "")).toEqual(MODELS);
+    expect(modelMatches(MODELS, "pickle")).toEqual([
+      { command: "opencode:big-pickle", description: "Big Pickle" },
+    ]);
+    expect(modelMatches(MODELS, "GPT")).toEqual([
+      { command: "chatgpt:gpt-5.5", description: "GPT 5.5" },
+    ]);
+  });
+
+  it("marks the palette selection and windows long lists", () => {
+    const rows = paletteRows(CMDS, 1, 5);
+    expect(rows).toHaveLength(5);
+    expect(rows[1]).toContain("›");
+    expect(rows[0]).not.toContain("›");
+    const clamped = paletteRows(CMDS, 4, 5);
+    expect(clamped[4]).toContain("/exit");
+  });
+
+  it("types characters, edits with backspace and word ops", () => {
+    let frame = initialFrame({ model: "OpenCode Big Pickle", commands: CMDS });
+    frame = handleInput(frame, "h") as typeof frame;
+    frame = handleInput(frame, "i") as typeof frame;
+    expect(frame.buffer).toBe("hi");
+    frame = handleInput(frame, undefined, { name: "backspace" }) as typeof frame;
+    expect(frame.buffer).toBe("h");
+    frame = handleInput(frame, undefined, { ctrl: true, name: "u" }) as typeof frame;
+    expect(frame.buffer).toBe("");
+    frame = handleInput(frame, "a") as typeof frame;
+    frame = handleInput(frame, " ") as typeof frame;
+    frame = handleInput(frame, "b") as typeof frame;
+    frame = handleInput(frame, undefined, { ctrl: true, name: "w" }) as typeof frame;
+    expect(frame.buffer).toBe("a ");
+  });
+
+  it("opens the palette as you type and commits with enter or tab", () => {
+    let frame = initialFrame({ model: "M", commands: CMDS });
+    frame = handleInput(frame, "/") as typeof frame;
+    expect(frame.palette).toHaveLength(CMDS.length);
+    frame = handleInput(frame, "m") as typeof frame;
+    expect(frame.palette.map((s) => s.command)).toEqual(["/model <id>", "/models"]);
+    // Down selects /models; enter commits it to the buffer for args.
+    frame = handleInput(frame, undefined, { name: "down" }) as typeof frame;
+    frame = handleInput(frame, undefined, { name: "return" }) as typeof frame;
+    expect(frame.buffer).toBe("/models ");
+    // Exact match + enter submits; esc clears the line entirely.
+    frame = handleInput(frame, undefined, { name: "backspace" }) as typeof frame;
+    const done = handleInput(frame, undefined, { name: "return" });
+    expect(done).toBe("/models");
+    const wiped = handleInput(frame, undefined, { name: "escape" }) as typeof frame;
+    expect(wiped.buffer).toBe("");
+    // Tab completes the first match in one go.
+    let f2 = initialFrame({ model: "M", commands: CMDS });
+    f2 = handleInput(f2, "/") as typeof f2;
+    f2 = handleInput(f2, "n") as typeof f2;
+    f2 = handleInput(f2, undefined, { name: "tab" }) as typeof f2;
+    expect(f2.buffer).toBe("/new ");
+  });
+
+  it("returns exit on ctrl+d and pick on ctrl+n", () => {
+    const frame = initialFrame({ model: "M", commands: CMDS });
+    expect(handleInput(frame, undefined, { ctrl: true, name: "d" })).toEqual({ type: "exit" });
+    expect(handleInput(frame, undefined, { ctrl: true, name: "n" })).toEqual({ type: "pick" });
+  });
+
+  it("walks history with arrows and keeps the in-flight draft", () => {
+    let frame = initialFrame({ model: "M", commands: CMDS, history: ["first", "second"] });
+    frame = handleInput(frame, "x") as typeof frame;
+    frame = handleInput(frame, undefined, { name: "up" }) as typeof frame;
+    expect(frame.buffer).toBe("second");
+    frame = handleInput(frame, undefined, { name: "up" }) as typeof frame;
+    expect(frame.buffer).toBe("first");
+    frame = handleInput(frame, undefined, { name: "down" }) as typeof frame;
+    expect(frame.buffer).toBe("second");
+    frame = handleInput(frame, undefined, { name: "down" }) as typeof frame;
+    expect(frame.buffer).toBe("x"); // the draft comes back
+  });
+
+  it("lays out rule, prompt, ghost, palette, and footer rows", () => {
+    let frame = initialFrame({
+      model: "OpenCode Big Pickle",
+      agent: { name: "build", label: "Build" },
+      commands: CMDS,
+    });
+    const idle = layoutFrame(frame);
+    expect(idle[0]).toContain("─"); // rule
+    expect(idle.some((r) => r.includes("❯"))).toBe(true);
+    expect(idle[idle.length - 1]).toContain("enter send");
+    expect(idle[idle.length - 1]).toContain("Build · OpenCode Big Pickle");
+    frame = handleInput(frame, "/") as typeof frame;
+    frame = handleInput(frame, "h") as typeof frame;
+    const live = layoutFrame(frame);
+    expect(live.some((r) => r.includes("/help") && r.includes("show this palette"))).toBe(true);
+    // Ghost shows the remainder of the selected command.
+    expect(live.some((r) => r.includes("/h") && r.includes("elp"))).toBe(true);
+  });
+});

@@ -14,6 +14,7 @@ export type CatalogModel = {
   provider: string;
   automatic?: boolean;
   usageLabel?: string;
+  default?: boolean;
 };
 
 export type ProviderGroup = { provider: string; label: string; models: CatalogModel[] };

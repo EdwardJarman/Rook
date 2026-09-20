@@ -246,5 +246,12 @@ export async function streamAgentRound(
       // Already closed.
     }
   }
+  // User interruption wins over stream endings: the REPL shows its own
+  // cancelled message, not a misleading "ended before finishing".
+  if (signal?.aborted) {
+    const abort = new Error("The operation was aborted", { cause: "signal" });
+    abort.name = "AbortError";
+    throw abort;
+  }
   throw new Error("The live reply ended before finishing.");
 }
