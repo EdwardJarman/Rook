@@ -93,6 +93,19 @@ Fallback chain when unset: `INTEGRATION_ENCRYPTION_KEY`, then
 rotating the secret invalidates all of them. Per-token server
 revocation is not in v1 — `logout` clears the device copy.
 
+## Configuration precedence
+
+The API URL resolves in a fixed order (pinned by `cli/src/auth.test.ts`):
+
+1. `--api-url` flag (explicit — always wins)
+2. `ROOK_API_URL` env var
+3. Stored profile (`config.json`)
+4. Built-in default (`https://www.rook.lighting`)
+
+A stored `localhost` pin whose dev server is gone falls back to production
+— loudly — unless the URL came from the flag or the env var, which are
+taken at face value and never probed.
+
 ## Troubleshooting
 
 - `Not signed in` → `rook login`.

@@ -39,6 +39,7 @@ import {
   type ReasoningEffort,
 } from "../ai/agent-reliability";
 import { buildCheckpointLedger } from "../ai/compaction";
+import { resolveRequestedModel } from "../ai/turn-context";
 import { githubConnectionStatus, isGithubConfigured } from "./github";
 import { GITHUB_TOOLS } from "./github-tools";
 import { EXCEL_TOOLS } from "./excel-tools";
@@ -186,13 +187,9 @@ export async function prepareAgentTurn(
   requestId: string,
 ): Promise<PreparedAgentTurn> {
   // "auto" (what bots default to) must resolve to the curated free-model
-  // picker; only a real catalog id may bypass it.
-  const requested = input.model?.trim().toLowerCase() || "";
-  const requestedModel =
-    !requested ||
-    ["auto", "openrouter/auto", "openrouter/free"].includes(requested)
-      ? "openrouter/free"
-      : input.model!.trim();
+  // picker; only a real catalog id may bypass it. Pure + pinned in
+  // server/ai/turn-context.ts so both agent paths resolve identically.
+  const requestedModel = resolveRequestedModel(input.model);
   const clock = agentClockContext(new Date(), input.userTimeZone);
 
   // Parallelize the three capability probes so the slowest integration

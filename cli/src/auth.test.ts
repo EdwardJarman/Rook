@@ -207,4 +207,15 @@ describe("login plumbing", () => {
       });
     });
   });
+
+  describe("defaultApiUrl — configuration precedence", () => {
+    it("pins --api-url > ROOK_API_URL > stored file > default", () => {
+      // Explicit flag beats everything (even a set env var).
+      vi.stubEnv("ROOK_API_URL", "https://env.example.com");
+      expect(defaultApiUrl("https://flag.example.com")).toBe("https://flag.example.com");
+      // Env beats the stored file and the default.
+      expect(defaultApiUrl("  ")).toBe("https://env.example.com");
+      expect(defaultApiUrl()).toBe("https://env.example.com");
+    });
+  });
 });

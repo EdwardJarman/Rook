@@ -146,3 +146,56 @@ export function buildMemoryBlock(botMemory: string | undefined): string {
   if (!lines.length) return "";
   return `What you remember about this user (from earlier chats with this Bot — apply it without being asked, and never claim you remember things that are not listed here):\n${lines.map((line) => `- ${line}`).join("\n")}`;
 }
+
+/**
+ * Grok memory-flush gates port (adapted, still $0 — no model call, no vectors).
+ *
+ * `should_flush` lite: soft threshold ⇒ suggest a flush to the caller;
+ * hard threshold ⇒ auto-append + journal. Thresholds count turns and chars
+ * (no new infra). Flush suggestions ride the existing `suggestedMemories`
+ * path; the caller owns persistence.
+ */
+
+export const MEMORY_SOFT_TURN_THRESHOLD = 10;
+export const MEMORY_SOFT_CHAR_THRESHOLD = 4000;
+export const MEMORY_HARD_TURN_THRESHOLD = 25;
+export const MEMORY_HARD_CHAR_THRESHOLD = 12000;
+
+export type FlushGate = "none" | "suggest" | "auto";
+
+export function flushGateFor(turnCount: number, charCount: number): FlushGate {
+  const turns = Number.isFinite(turnCount) ? turnCount : 0;
+  const chars = Number.isFinite(charCount) ? charCount : 0;
+  if (turns >= MEMORY_HARD_TURN_THRESHOLD || chars >= MEMORY_HARD_CHAR_THRESHOLD) return "auto";
+  if (turns >= MEMORY_SOFT_TURN_THRESHOLD || chars >= MEMORY_SOFT_CHAR_THRESHOLD) return "suggest";
+  return "none";
+}
+
+/**
+ * Sanitization trio (grok validation port): reject empty/noreply-shaped
+ * values, require a key-like shape, truncate to cap. Runs AFTER the SECRETY
+ * filter in `extractMemoryCandidates` (secrets never reach here as values,
+ * but belt-and-braces: values matching SECRETY are rejected too).
+ */
+export function sanitizeMemoryCandidate(candidate: MemoryCandidate): MemoryCandidate | null {
+  const key = candidate.key.trim().toLowerCase();
+  const value = clean(candidate.value);
+  if (!key || !value) return null;
+  if (/^(no.?reply|n\/a|none|unknown|not sure|cannot|cant|error)\b/i.test(value)) return null;
+  if (!/^[a-z][a-z0-9 _-]{1,40}$/.test(key)) return null;
+  if (SECRETY.test(value)) return null;
+  if (value.length > 160) return { key, value: value.slice(0, 160).trim() };
+  return { key, value };
+}
+
+/** Gate + sanitize a turn's extracted candidates in one pass. Pure. */
+export function gateMemoryCandidates(
+  message: string,
+  turnCount: number,
+): { gate: FlushGate; candidates: MemoryCandidate[] } {
+  const raw = extractMemoryCandidates(message);
+  const candidates = raw
+    .map(sanitizeMemoryCandidate)
+    .filter((entry): entry is MemoryCandidate => entry !== null);
+  return { gate: flushGateFor(turnCount, message.length), candidates };
+}

@@ -60,6 +60,8 @@ import {
   type SkillToolName,
 } from "../ai/skills";
 import { makeExcelActionId } from "./microsoft-excel";
+import { checkToolPolicy, loadToolPolicyFromEnv, sniffPolicyHints } from "./tool-policy";
+import { runPreToolUse } from "../ai/hooks";
 
 const EXCEL_TOOL_SET = new Set(EXCEL_TOOLS.map((tool) => tool.function.name));
 
@@ -93,6 +95,92 @@ export const TOOL_RISK = {
 } as const satisfies Record<string, "read-only" | "approval-gated">;
 
 export type ToolRisk = (typeof TOOL_RISK)[keyof typeof TOOL_RISK];
+
+export type ToolFamily = "excel" | "github" | "computer" | "cloud" | "skill";
+
+/**
+ * Grok `ToolRegistry` port (adapted): every offered tool resolves to one
+ * entry carrying its family, risk, and in-turn execution timeout. Timeouts
+ * used to be hardcoded literals at each dispatch branch (20s/10s); they now
+ * live here so a new tool family appends one row + one branch instead of
+ * touching dispatch. Approval-gated tools never execute in-turn (they only
+ * propose), so they carry no `timeoutMs`. The annotation test below fails if
+ * any offered tool lacks an entry — same discipline as `TOOL_RISK`.
+ */
+const FAMILY_TIMEOUT_MS: Record<ToolFamily, number> = {
+  excel: 20_000,
+  github: 20_000,
+  cloud: 20_000,
+  computer: 10_000,
+  skill: 10_000,
+};
+
+const familyOfTool = (name: string): ToolFamily => {
+  if (EXCEL_TOOL_SET.has(name)) return "excel";
+  if (GITHUB_TOOL_NAMES.has(name)) return "github";
+  if (COMPUTER_TOOL_NAMES.has(name)) return "computer";
+  if (CLOUD_TOOL_NAMES.has(name)) return "cloud";
+  return "skill";
+};
+
+export type ToolRegistryEntry = {
+  family: ToolFamily;
+  risk: ToolRisk;
+  /** In-turn execution timeout. Absent when the tool only proposes (approval-gated). */
+  timeoutMs?: number;
+};
+
+const registryEntryFor = (name: string): ToolRegistryEntry => {
+  const risk = TOOL_RISK[name as keyof typeof TOOL_RISK];
+  const family = familyOfTool(name);
+  return risk === "read-only"
+    ? { family, risk, timeoutMs: FAMILY_TIMEOUT_MS[family] }
+    : { family, risk };
+};
+
+export const TOOL_REGISTRY: Record<string, ToolRegistryEntry> = Object.fromEntries(
+  allOfferedToolNames().map((name) => [name, registryEntryFor(name)]),
+);
+
+/** Execution timeout for a tool, or undefined when it only proposes. */
+export function timeoutForTool(name: string): number | undefined {
+  return TOOL_REGISTRY[name]?.timeoutMs;
+}
+
+/**
+ * Grok `ToolErrorWire` port (adapted): every tool failure carries a
+ * machine-readable `code` plus a `retryable` flag alongside the existing
+ * human `status`/`message` (additive — display readers ignore the new
+ * fields). The retry policy reads codes, not strings.
+ */
+export const TOOL_ERROR_CODES = [
+  "POLICY_DENIED",
+  "HOOK_DENIED",
+  "TIMEOUT",
+  "WORKSPACE_UNAVAILABLE",
+  "NOT_PREPARED",
+  "APPROVAL_REQUIRED",
+  "UNKNOWN_TOOL",
+  "FAILED",
+] as const;
+
+export type ToolErrorCode = (typeof TOOL_ERROR_CODES)[number];
+
+/** Only transient failures are worth retrying; denials, caps, and unknown tools must surface. */
+export function retryableForCode(code: ToolErrorCode): boolean {
+  return code === "TIMEOUT" || code === "WORKSPACE_UNAVAILABLE";
+}
+
+/** Timeout errors carry their code so catchers can route without parsing messages. */
+export function toolTimeoutError(label: string): Error & { code: "TIMEOUT"; retryable: true } {
+  const error = new Error(`${label} timed out`) as Error & {
+    code: "TIMEOUT";
+    retryable: true;
+  };
+  error.code = "TIMEOUT";
+  error.retryable = true;
+  return error;
+}
 
 /** Every tool the agent can be offered, derived from the same registries. */
 export function allOfferedToolNames(): string[] {
@@ -174,7 +262,7 @@ async function withToolTimeout<T>(promise: Promise<T>, ms: number, label: string
     return await Promise.race([
       promise,
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} timed out`)), ms);
+        timer = setTimeout(() => reject(toolTimeoutError(label)), ms);
       }),
     ]);
   } finally {
@@ -202,7 +290,51 @@ export async function executeAgentTool(input: {
   approvals: ExcelAgentApproval[];
   computerProposals: ComputerProposal[];
 }): Promise<AgentToolExecution> {
-  const { userId, botId, taskId, name, rawArgs } = input;
+  const { userId, botId, taskId, name } = input;
+  let rawArgs = input.rawArgs;
+
+  // Static deny layer (grok compiled-deny port): evaluated before any family
+  // branch, so deny wins over modes and grants. Empty by default (no-op).
+  const verdict = checkToolPolicy(sniffPolicyHints(rawArgs), loadToolPolicyFromEnv());
+  if (!verdict.allowed) {
+    return {
+      traceStep: { kind: "tool", title: "Blocked by policy" },
+      resultPayload: {
+        status: "denied",
+        code: verdict.code,
+        retryable: false,
+        message: verdict.reason,
+      },
+    };
+  }
+
+  // PreToolUse hooks (grok exit-code-2 port): first deny wins, rewrites merge
+  // silently, crashes fail open. Empty registry by default (pass-through).
+  try {
+    const parsed = JSON.parse(rawArgs || "{}") as unknown;
+    const hookArgs =
+      parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : {};
+    const pre = await runPreToolUse({ event: "PreToolUse", toolName: name, args: hookArgs });
+    if (pre.verdict.decision === "deny") {
+      return {
+        traceStep: { kind: "tool", title: "Blocked by hook" },
+        resultPayload: {
+          status: "denied",
+          code: "HOOK_DENIED",
+          retryable: false,
+          message:
+            pre.verdict.decision === "deny" && "reason" in pre.verdict && pre.verdict.reason
+              ? pre.verdict.reason
+              : "Blocked by a PreToolUse hook.",
+        },
+      };
+    }
+    if (pre.updatedArgs) rawArgs = JSON.stringify(pre.updatedArgs);
+  } catch {
+    // Fail open: hooks never break dispatch. Falls through to family branches.
+  }
 
   if (GITHUB_TOOL_NAMES.has(name)) {
     const githubTool = name as GithubToolName;
@@ -216,7 +348,7 @@ export async function executeAgentTool(input: {
         status: "completed",
         result: await withToolTimeout(
           executeGithubReadTool(userId, githubTool, args),
-          20_000,
+          timeoutForTool(githubTool) ?? 20_000,
           `GitHub tool ${githubTool}`,
         ),
       },
@@ -233,7 +365,7 @@ export async function executeAgentTool(input: {
           status: "completed",
           result: await withToolTimeout(
             executeComputerReadTool(userId, computerTool, args),
-            10_000,
+            timeoutForTool(computerTool) ?? 10_000,
             "Computer tool computer_status",
           ),
         },
@@ -244,6 +376,8 @@ export async function executeAgentTool(input: {
         traceStep: step(computerToolTraceTitle(computerTool)),
         resultPayload: {
           status: "not_prepared",
+          code: "NOT_PREPARED",
+          retryable: false,
           message:
             "Two computer tasks are already proposed this turn. Present those first instead of proposing more.",
         },
@@ -279,6 +413,8 @@ export async function executeAgentTool(input: {
           traceStep: { kind: "tool", title: "Prepared an Excel update for approval" },
           resultPayload: {
             status: "not_prepared",
+            code: "NOT_PREPARED",
+            retryable: false,
             message:
               "One Excel change is already waiting for approval. Do not propose another write in this turn.",
           },
@@ -320,7 +456,7 @@ export async function executeAgentTool(input: {
         status: "completed",
         result: await withToolTimeout(
           executeExcelReadTool(userId, excelTool, args),
-          20_000,
+          timeoutForTool(excelTool) ?? 20_000,
           `Excel tool ${excelTool}`,
         ),
       },
@@ -337,6 +473,8 @@ export async function executeAgentTool(input: {
           traceStep: step(cloudTraceTitle(cloudTool, argRecord)),
           resultPayload: {
             status: "not_prepared",
+            code: "NOT_PREPARED",
+            retryable: false,
             message:
               "One computer action is already waiting for approval in this turn. Wait for the user to approve it before proposing another.",
           },
@@ -377,7 +515,7 @@ export async function executeAgentTool(input: {
             name: cloudTool as "computer_read_file" | "computer_list_files",
             args: argRecord,
           }),
-          20_000,
+          timeoutForTool(cloudTool) ?? 20_000,
           `Cloud tool ${cloudTool}`,
         ),
       },
@@ -391,7 +529,7 @@ export async function executeAgentTool(input: {
       traceStep: step(skillToolTraceTitle(skillTool), args.skill),
       resultPayload: await withToolTimeout(
         executeSkillReadTool(skillTool, args),
-        10_000,
+        timeoutForTool(skillTool) ?? 10_000,
         "Skill tool read_skill",
       ),
     };
@@ -404,6 +542,8 @@ export async function executeAgentTool(input: {
     },
     resultPayload: {
       status: "error",
+      code: "UNKNOWN_TOOL",
+      retryable: false,
       message: `Unknown tool “${name}”. Available tools are Excel (${input.excelConnected ? "connected" : "not connected"}), GitHub (${input.githubConnected ? "connected" : "not connected"}), the computer tools (computer_status, computer_propose_task), and read_skill for Rook skill procedures. Do not retry this call.`,
     },
   };

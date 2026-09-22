@@ -22,6 +22,17 @@ export type RookSkill = {
   name: string;
   description: string;
   body: string;
+  /**
+   * Grok `user-invocable` port: whether the skill appears as a slash command.
+   * Defaults to true (absent flag); explicit `user-invocable: false` hides it.
+   */
+  userInvocable: boolean;
+  /**
+   * Grok `disable-model-invocation` port: when true, only an explicit slash
+   * command runs the skill — the model never invokes it on its own.
+   * Defaults to false (absent flag).
+   */
+  disableModelInvocation: boolean;
 };
 
 const SKILL_ID = /^[a-z0-9-]{1,64}$/;
@@ -53,7 +64,20 @@ export const parseSkillFile = (
   const name = field("name") ?? id;
   const description = field("description");
   if (!description || !body) return null;
-  return { name, description, body: body.slice(0, MAX_BODY_CHARS) };
+  const flag = (key: string, fallback: boolean): boolean => {
+    const raw = field(key);
+    if (raw === undefined) return fallback;
+    if (/^(true|yes|1|on)$/i.test(raw)) return true;
+    if (/^(false|no|0|off)$/i.test(raw)) return false;
+    return fallback;
+  };
+  return {
+    name,
+    description,
+    body: body.slice(0, MAX_BODY_CHARS),
+    userInvocable: flag("user-invocable", true),
+    disableModelInvocation: flag("disable-model-invocation", false),
+  };
 };
 
 let cache: { value: RookSkill[]; expiresAt: number } | undefined;
@@ -197,4 +221,53 @@ export async function executeSkillReadTool(
     status: "completed",
     result: { id: skill.id, name: skill.name, procedure: skill.body },
   };
+}
+
+/**
+ * Skills-as-slash-commands (Grok collision-namespacing port, adapted).
+ *
+ * Rook's library is a single scope today (`library`), so every skill resolves
+ * against the host's built-in command names (passed in — the server never
+ * imports the CLI): a skill whose id collides with a built-in keeps working
+ * under its qualified `library:id` form while the built-in keeps the bare
+ * `/id`. Non-invocable skills (`user-invocable: false`) never appear.
+ */
+
+export type SlashNameResolution = {
+  /** What to type: `/commit`, or `/library:commit` on collision. */
+  invocableAs: string;
+  /** The contested bare name, when colliding. */
+  collidesWith?: string;
+};
+
+/** Resolve one skill id to its slash form. Pure. */
+export function resolveSlashName(skillId: string, builtins: readonly string[]): SlashNameResolution {
+  const normalized = skillId.trim().toLowerCase();
+  const clash = builtins.some((entry) => entry.trim().toLowerCase() === normalized);
+  return clash
+    ? { invocableAs: `library:${normalized}`, collidesWith: normalized }
+    : { invocableAs: normalized };
+}
+
+export type SlashCommandRow = {
+  id: string;
+  invocableAs: string;
+  collidesWith?: string;
+  description: string;
+  scope: "library";
+};
+
+/** Palette rows for invocable skills, with collision badges. Pure. */
+export function invocableSlashCommands(
+  skills: readonly Pick<RookSkill, "id" | "description" | "userInvocable">[],
+  builtins: readonly string[],
+): SlashCommandRow[] {
+  return skills
+    .filter((skill) => skill.userInvocable)
+    .map((skill) => ({
+      id: skill.id,
+      ...resolveSlashName(skill.id, builtins),
+      description: skill.description,
+      scope: "library" as const,
+    }));
 }

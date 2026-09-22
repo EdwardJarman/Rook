@@ -328,3 +328,106 @@ export function isReasoningRejectedError(error: unknown): boolean {
     /unsupported|unknown|invalid|not supported|not allowed|unrecognized/i.test(message)
   );
 }
+
+/**
+ * Grok Build sampler guards, ported as pure helpers (no behavior change to
+ * existing callers — additive only).
+ *
+ * Mirrors `xai-grok-sampler/src/retry.rs::classify_error` decision order and
+ * `doom_loop.rs` repetition guard, adapted to Rook's message-shaped errors:
+ * - auth/config → surface honestly (`emit`), never retry or fall back blindly
+ * - 413 / byte-size overflow / image-processing → `image-strip` (retry once
+ *   with images removed, not a blind retry)
+ * - 429 / rate-limit → `rate-limit` (honor Retry-After via `parseRetryAfterMs`)
+ * - other transient (see `isTransientAgentError`) → `retry`
+ * - everything else (incl. max-tokens overflow) → `fatal`
+ *
+ * Doom-loop: the turn already computes `toolCallFingerprint` per call — when
+ * the last N fingerprints are identical the loop is spinning, so abort with
+ * an honest one-liner instead of burning rounds.
+ */
+export type RetryDecisionKind =
+  | "emit"
+  | "image-strip"
+  | "rate-limit"
+  | "retry"
+  | "fatal";
+
+/** Auth/config errors: surface, never retry. Mirrors retry.rs auth + encrypted-content arms. */
+export function isAuthAgentError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /401|403|unauthorized|forbidden|api key|apikey|invalid key|oauth|sign.?in|credential|needs attention|not configured|could not decrypt|encrypted_content/i.test(
+    message,
+  );
+}
+
+/** 429 / capacity errors. Mirrors retry.rs rate-limit arm (Retry-After honored by the caller). */
+export function isRateLimitedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /429|rate.?limit|capacity.*full|temporarily.*(full|unavailable)|too many requests/i.test(
+    message,
+  );
+}
+
+/** 413 / byte-size overflow codes. Mirrors retry.rs payload-too-large + byte-coded arms. */
+export function isPayloadTooLargeError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /413|payload_too_large|payload too large|request_too_large|request too large|exceed.*(byte|size).*limit|response too large/i.test(
+    message,
+  );
+}
+
+/** Image-processing failures: retry with images stripped, not blindly. Mirrors retry.rs image arms. */
+export function isImageProcessingError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /could not process image|invalid.*image|image.*(decode|dimension|format|base64)|base64.*image|at least one of the image dimensions/i.test(
+    message,
+  );
+}
+
+/** Stalled-stream errors: abort the turn, do not retry the same stream. Mirrors SamplerActor idle-timeout. */
+export function isIdleTimeoutError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /model stopped responding|idle.?timeout|stalled|no (token|chunk|data|response).{0,30}(for|in) \d+\s?s/i.test(
+    message,
+  );
+}
+
+/**
+ * Doom-loop guard over per-round `toolCallFingerprint`s: true when the last
+ * `threshold` fingerprints are identical (default 3, matching the port spec).
+ * Empty fingerprints never count — an empty history is not a loop.
+ */
+export function hasDoomLoop(
+  fingerprints: string[],
+  threshold = 3,
+): boolean {
+  if (threshold < 2 || fingerprints.length < threshold) return false;
+  const tail = fingerprints.slice(-threshold);
+  if (tail.some((entry) => !entry)) return false;
+  return tail.every((entry) => entry === tail[0]);
+}
+
+/** One-line honest state for an aborted spinning turn. */
+export const DOOM_LOOP_ABORT_MESSAGE =
+  "I noticed I was repeating the same step, so I stopped instead of looping — tell me what to change and I'll continue.";
+
+/** One-line honest state for a stalled stream. */
+export const IDLE_TIMEOUT_MESSAGE =
+  "The AI stopped responding mid-turn. Please try again — shorter messages succeed fastest.";
+
+/**
+ * Classify an agent error into the grok-style decision. Pure — the caller
+ * owns backoff/fallback presentation. Order mirrors retry.rs: auth first,
+ * then image-strip, then rate-limit, then generic retry, else fatal.
+ * `max_tokens` overflow is always fatal (never burns the retry budget).
+ */
+export function classifyRetryDecision(error: unknown): RetryDecisionKind {
+  if (isAuthAgentError(error)) return "emit";
+  if (isPayloadTooLargeError(error) || isImageProcessingError(error))
+    return "image-strip";
+  if (isRateLimitedError(error)) return "rate-limit";
+  if (isMaxTokensError(error) || isIdleTimeoutError(error)) return "fatal";
+  if (isTransientAgentError(error)) return "retry";
+  return "fatal";
+}

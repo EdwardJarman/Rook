@@ -58,6 +58,18 @@ export type AgentStreamEvent =
   | { type: "approval"; approval: ExcelAgentApproval }
   | { type: "proposal"; proposal: ComputerProposal };
 
+/**
+ * Grok ACP-parity discipline (adapted): the stream contract is versioned.
+ * Bump `STREAM_CONTRACT_VERSION` on any breaking change to event kinds or
+ * shapes; `AGENT_STREAM_EVENT_TYPES` is the runtime source of truth pinned
+ * by `tests/stream-contract.test.ts`.
+ */
+export const STREAM_CONTRACT_VERSION = 1;
+
+export const AGENT_STREAM_EVENT_TYPES = ["trace", "token", "approval", "proposal"] as const;
+
+export type AgentStreamEventType = (typeof AGENT_STREAM_EVENT_TYPES)[number];
+
 export type AgentStreamEmit = (event: AgentStreamEvent) => void;
 
 /** Thrown when a stream dies after tokens already went out. */

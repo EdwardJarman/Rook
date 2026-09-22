@@ -78,6 +78,8 @@ describe("parseSkillFile", () => {
       name: "Alpha Skill",
       description: "Does alpha things on demand",
       body: "# Alpha\n\nAlways start with the letter A. Verify by reading twice.",
+      userInvocable: true,
+      disableModelInvocation: false,
     });
   });
 
