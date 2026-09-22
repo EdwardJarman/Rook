@@ -3,13 +3,19 @@ import { describe, expect, it } from "vitest";
 import {
   clearRows,
   drawRows,
+  feedPasteKey,
   handleInput,
   initialFrame,
+  initialPasteState,
+  insertText,
   isModelArg,
   layoutFrame,
   modelMatches,
   paletteRows,
+  PASTE_END,
+  PASTE_START,
   slashMatches,
+  type InputFrame,
 } from "./input.js";
 import { clearRows as clearSyncRows, drawRows as drawSyncRows, rowsBackToStart } from "../ui.js";
 
@@ -157,5 +163,59 @@ describe("chat input engine", () => {
     expect(state.drawn).toBe(0);
     // Every palette line got a full-line clear when the block was erased.
     expect(writes.filter((w) => w === "\r\x1b[2K\n")).toHaveLength(3);
+  });
+});
+
+describe("multiline + bracketed paste", () => {
+  const blank = () =>
+    initialFrame({ model: "M", agent: { name: "build", label: "Build" }, commands: CMDS });
+
+  it("ctrl+j inserts a newline while enter still sends", () => {
+    let frame = handleInput(blank(), "a") as InputFrame;
+    frame = handleInput(frame, undefined, { name: "enter" }) as InputFrame;
+    frame = handleInput(frame, "b") as InputFrame;
+    expect(frame.buffer).toBe("a\nb");
+    expect(frame.palette).toEqual([]);
+    const submitted = handleInput(frame, undefined, { name: "return" });
+    expect(submitted).toBe("a\nb");
+  });
+
+  it("insertText splices at the cursor and hides the palette when multiline", () => {
+    let frame = handleInput(blank(), "/") as InputFrame;
+    expect(frame.palette.length).toBeGreaterThan(0);
+    frame = insertText(frame, "pasted\nblock");
+    expect(frame.buffer).toBe("/pasted\nblock");
+    expect(frame.palette).toEqual([]);
+  });
+
+  it("renders continuation lines and keeps ghost single-line", () => {
+    const frame = { ...blank(), buffer: "line one\nline two", cursor: 16 };
+    const rows = layoutFrame(frame);
+    expect(rows[0]).toContain("line one");
+    expect(rows[1]).toContain("line two");
+    expect(rows[rows.length - 1]).toContain("ctrl+j");
+  });
+
+  it("accumulates a bracketed paste across keypresses into one edit", () => {
+    let paste = initialPasteState();
+    let fed = feedPasteKey(paste, `${PASTE_START}hello`);
+    paste = fed.state;
+    expect(fed).toMatchObject({ consumed: true });
+    expect(fed.text).toBeUndefined();
+    fed = feedPasteKey(paste, " world");
+    paste = fed.state;
+    expect(fed.consumed).toBe(true);
+    fed = feedPasteKey(paste, `!\nsecond line${PASTE_END}`);
+    expect(fed).toMatchObject({ consumed: true, text: "hello world!\nsecond line" });
+    expect(fed.state.active).toBe(false);
+    const frame = insertText(blank(), fed.text ?? "");
+    expect(frame.buffer).toBe("hello world!\nsecond line");
+  });
+
+  it("handles a single-event paste and ignores ordinary keys", () => {
+    const fed = feedPasteKey(initialPasteState(), `${PASTE_START}abc${PASTE_END}`);
+    expect(fed).toMatchObject({ consumed: true, text: "abc" });
+    expect(feedPasteKey(initialPasteState(), "a")).toMatchObject({ consumed: false });
+    expect(feedPasteKey(initialPasteState(), undefined)).toMatchObject({ consumed: false });
   });
 });

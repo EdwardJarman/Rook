@@ -8,12 +8,14 @@
  * - Tab completes the first palette entry (or `shift+tab` cycles models).
  * - Arrow keys move through the palette and input history.
  * - Ctrl+N opens the model picker (arrow keys + enter or esc).
+ * - Ctrl+J inserts a newline (multiline); Enter always sends.
+ * - Bracketed paste inserts as one edit — pasting never submits mid-paste.
  * - Ctrl+D exits; Esc clears input; Ctrl+U/W strip input.
  */
 
 import { emitKeypressEvents } from "node:readline";
 
-import { c, clearRows, drawRows, footerRow } from "../ui.js";
+import { c, clearRows, drawRows, footerRow, promptGlyph, selectGlyph } from "../ui.js";
 
 export type Suggestion = { command: string; description: string; hint?: string };
 
@@ -49,7 +51,7 @@ export function paletteRows(items: Suggestion[], selected: number, windowSize = 
     const picked = start + i === selected;
     const head = item.command === "/model" && item.hint ? `${item.command} ${item.hint}` : item.command;
     const text = `${head}  ${item.description}`;
-    return picked ? `${c("orange", "›")} ${text}` : c("dim", `  ${text}`);
+    return picked ? `${c("orange", selectGlyph())} ${text}` : c("dim", `  ${text}`);
   });
 }
 
@@ -65,6 +67,55 @@ export type InputFrame = {
   histIndex: number;
   draft: string;
 };
+
+/** Insert arbitrary text at the cursor (single chars and paste blocks share it). */
+export function insertText(frame: InputFrame, text: string): InputFrame {
+  const f = { ...frame };
+  f.buffer = f.buffer.slice(0, f.cursor) + text + f.buffer.slice(f.cursor);
+  f.cursor += text.length;
+  // The slash palette is a single-line affair; multiline buffers hide it.
+  f.palette = f.buffer.includes("\n") ? [] : slashMatches(f.commands, f.buffer);
+  f.palSel = 0;
+  return f;
+}
+
+/** Bracketed-paste markers. Terminals that lack support never send them. */
+export const PASTE_START = "[200~";
+export const PASTE_END = "[201~";
+
+export type PasteState = { active: boolean; buffer: string };
+
+export const initialPasteState = (): PasteState => ({ active: false, buffer: "" });
+
+/**
+ * Pure bracketed-paste reducer over keypress `sequence` strings. Consumed
+ * bytes must never reach handleInput (a pasted Enter must not submit).
+ * Prefix bytes before a mid-event START marker are dropped and documented —
+ * terminals deliver markers as discrete events in practice.
+ */
+export function feedPasteKey(
+  state: PasteState,
+  sequence: string | undefined,
+): { state: PasteState; consumed: boolean; text?: string } {
+  if (sequence === undefined) return { state, consumed: false };
+  if (!state.active) {
+    const start = sequence.indexOf(PASTE_START);
+    if (start === -1) return { state, consumed: false };
+    const after = sequence.slice(start + PASTE_START.length);
+    const end = after.indexOf(PASTE_END);
+    if (end !== -1) return { state, consumed: true, text: after.slice(0, end) };
+    return { state: { active: true, buffer: after }, consumed: true };
+  }
+  const end = sequence.indexOf(PASTE_END);
+  if (end === -1) {
+    return { state: { active: true, buffer: state.buffer + sequence }, consumed: true };
+  }
+  return {
+    state: { active: false, buffer: "" },
+    consumed: true,
+    text: state.buffer + sequence.slice(0, end),
+  };
+}
 
 export const initialFrame = (opts: {
   agent?: Agent;
@@ -113,6 +164,10 @@ export function handleInput(
   if (name === "return") {
     if (f.palette.length && f.buffer.startsWith("/")) return paletteCommit(true);
     return f.buffer.trim();
+  };
+  // Ctrl+J arrives as LF ("enter"); CR ("return") above always sends.
+  if (name === "enter") {
+    return insertText(f, "\n");
   }
   if (name === "tab") {
     if (f.palette.length && f.buffer.startsWith("/")) return paletteCommit(false);
@@ -175,11 +230,7 @@ export function handleInput(
     return f;
   }
   if (!key.ctrl && !key.meta && ch && ch.length === 1) {
-    f.buffer = f.buffer.slice(0, f.cursor) + ch + f.buffer.slice(f.cursor);
-    f.cursor += ch.length;
-    f.palette = slashMatches(f.commands, f.buffer);
-    f.palSel = 0;
-    return f;
+    return insertText(f, ch);
   }
   return f;
 }
@@ -192,12 +243,14 @@ export function handleInput(
 export function layoutFrame(frame: InputFrame): string[] {
   const rows: string[] = [];
   if (frame.palette.length) rows.push(...paletteRows(frame.palette, frame.palSel));
+  const promptLines = frame.buffer.split("\n");
   const ghost =
-    frame.buffer.startsWith("/") && frame.palette.length
+    promptLines.length === 1 && frame.buffer.startsWith("/") && frame.palette.length
       ? frame.palette[frame.palSel]!.command.slice(frame.buffer.length)
       : "";
-  rows.push(`${c("mint", "❯")} ${frame.buffer}${ghost ? c("dim", ghost) : ""}`);
-  rows.push(footerRow("enter send", `${frame.agent.label ?? frame.agent.name} · ${frame.model}`));
+  rows.push(`${c("mint", promptGlyph())} ${promptLines[0]}${ghost ? c("dim", ghost) : ""}`);
+  for (const continuation of promptLines.slice(1)) rows.push(`  ${continuation}`);
+  rows.push(footerRow("enter send · ctrl+j newline", `${frame.agent.label ?? frame.agent.name} · ${frame.model}`));
   return rows;
 }
 
@@ -240,13 +293,19 @@ export async function askInput(opts: AskInputOptions): Promise<string | "exit" |
     drawn = state.drawn;
   };
   return new Promise((resolve) => {
+    let paste = initialPasteState();
     const finish = (line: string | "exit"): void => {
       stdin.removeListener("keypress", onKeyWrap);
       stdin.setRawMode(false);
       stdin.pause();
+      try {
+        stdout.write("[?2004l");
+      } catch {
+        // Terminals without bracketed paste ignore the reset too.
+      }
       unrender();
       if (line !== "exit") {
-        stdout.write(`${c("mint", "❯")} ${line}\n`);
+        stdout.write(`${c("mint", promptGlyph())} ${line}\n`);
         stdout.write(footerRow("enter send", `${frame.agent.label ?? frame.agent.name} · ${frame.model}`) + "\n");
       }
       resolve(line);
@@ -278,12 +337,26 @@ export async function askInput(opts: AskInputOptions): Promise<string | "exit" |
       render();
     };
     const onKeyWrap = (ch: string | undefined, key: { name?: string; ctrl?: boolean; meta?: boolean; sequence?: string }): void => {
+      // Bracketed paste wins over every binding: pasted bytes (including
+      // Enter) accumulate until the end marker, then insert as one edit.
+      const fed = feedPasteKey(paste, key.sequence);
+      paste = fed.state;
+      if (fed.consumed) {
+        if (fed.text) Object.assign(frame, insertText(frame, fed.text));
+        render();
+        return;
+      }
       void onKey(ch, key);
     };
     stdin.setRawMode(true);
     stdin.resume();
     emitKeypressEvents(stdin);
     stdin.on("keypress", onKeyWrap);
+    try {
+      stdout.write("[?2004h");
+    } catch {
+      // Terminals without bracketed paste ignore the mode set.
+    }
     render();
   });
 }

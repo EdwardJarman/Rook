@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { saveTurnFiles } from "./files.js";
+import { saveAnswerText, saveTurnFiles } from "./files.js";
 
 describe("turn file saving", () => {
   it("writes files and never clobbers", () => {
@@ -27,5 +27,23 @@ describe("turn file saving", () => {
     const dir = mkdtempSync(join(tmpdir(), "rook-files-"));
     expect(saveTurnFiles(undefined, dir)).toEqual([]);
     expect(saveTurnFiles([], dir)).toEqual([]);
+  });
+});
+
+describe("answer saving (/save)", () => {
+  it("writes rook-answer.md and bumps collisions", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rook-save-"));
+    const first = saveAnswerText("# Answer", dir);
+    expect(first).toContain("rook-answer.md");
+    expect(readFileSync(first, "utf8")).toBe("# Answer");
+    const second = saveAnswerText("# Answer", dir);
+    expect(second).toContain("rook-answer (1).md");
+  });
+
+  it("sanitizes explicit names", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rook-save-"));
+    const saved = saveAnswerText("x", dir, "../../evil");
+    expect(saved).toContain("evil.md");
+    expect(saved).not.toContain("..");
   });
 });

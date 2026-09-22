@@ -15,22 +15,30 @@ import type { CliProfile } from "../config.js";
 import { eprintln, println, ROOK_CLI_VERSION } from "../output.js";
 import {
   bold,
+  box,
   c,
   commandMenu,
   footerRow,
   launchScreen,
+  pickerHint,
+  promptGlyph,
+  selectGlyph,
   statusBar,
   type CommandMenuItem,
 } from "../ui.js";
-import { buildRecentContext, resolveAskModel, runAsk, type HistoryTurn } from "./ask.js";
+import { buildRecentContext, runAsk, type HistoryTurn } from "./ask.js";
+import { saveAnswerText } from "./files.js";
 import { askInput, isModelArg, MODEL_ARG_HINT, type Agent } from "./input.js";
-import { listModels, modelDisplay, renderModels, type CatalogModel } from "./models.js";
+import { listModels, modelDisplay, renderModels, defaultModelId, type CatalogModel } from "./models.js";
 
 export type SlashCommand =
   | { cmd: "message"; text: string }
   | { cmd: "model"; arg: string }
   | { cmd: "models" }
   | { cmd: "new" }
+  | { cmd: "copy" }
+  | { cmd: "retry" }
+  | { cmd: "save"; arg: string }
   | { cmd: "help" }
   | { cmd: "exit" }
   | { cmd: "unknown"; arg: string };
@@ -48,6 +56,12 @@ export const parseSlash = (line: string): SlashCommand => {
       return { cmd: "models" };
     case "new":
       return { cmd: "new" };
+    case "copy":
+      return { cmd: "copy" };
+    case "retry":
+      return { cmd: "retry" };
+    case "save":
+      return { cmd: "save", arg };
     case "help":
       return { cmd: "help" };
     case "exit":
@@ -61,6 +75,9 @@ export const parseSlash = (line: string): SlashCommand => {
 export const CHAT_COMMANDS: CommandMenuItem[] = [
   { command: "/model", hint: MODEL_ARG_HINT, description: "switch model for this session" },
   { command: "/models", description: "list every model" },
+  { command: "/retry", description: "re-run the last prompt" },
+  { command: "/copy", description: "copy the last answer to the clipboard" },
+  { command: "/save", hint: "[file]", description: "save the last answer to a file" },
   { command: "/new", description: "forget this conversation" },
   { command: "/help", description: "show this palette" },
   { command: "/exit", description: "leave", hint: "ctrl+d" },
@@ -75,11 +92,20 @@ export const CHAT_TIPS = [
   "hit / to see the slash palette while typing",
   "ctrl+n opens the model picker",
   "switch models mid-chat with /model — pick with arrows",
+  "copy the last answer with /copy, save it with /save",
   "/new forgets the thread — history never leaves your machine",
 ];
 
 export const pickTip = (): string =>
   CHAT_TIPS[Math.floor(Math.random() * CHAT_TIPS.length)] ?? CHAT_TIPS[0]!;
+
+/**
+ * OSC 52 clipboard write (works over SSH in modern terminals). The caller
+ * writes the escape to stdout; terminals that ignore it change nothing.
+ * Pure and unit-tested.
+ */
+export const osc52Copy = (text: string): string =>
+  `\x1b]52;c;${Buffer.from(text, "utf8").toString("base64")}\x07`;
 
 /**
  * Interactive model picker: up/down over the live catalog, Enter picks,
@@ -96,8 +122,8 @@ export async function pickModel(models: CatalogModel[], current: string): Promis
   const render = (count: number): void => {
     if (count > 0) stdout.write(`\x1b[${count}A`);
     const out: string[] = [c("dim", `─ model ─`)];
-    out.push(...rows.map((r, i) => (i === sel ? `${c("orange", "›")} ${r.label}` : c("dim", `  ${r.label}`))));
-    out.push(c("dim", "↑↓ move · enter pick · esc cancel"));
+    out.push(...rows.map((r, i) => (i === sel ? `${c("orange", selectGlyph())} ${r.label}` : c("dim", `  ${r.label}`))));
+    out.push(c("dim", pickerHint()));
     for (const line of out) stdout.write("\r\x1b[2K" + line + "\n");
   };
   const clear = (count: number): void => {
@@ -140,18 +166,31 @@ export async function runChat(
   profile: CliProfile,
   opts?: { model?: string; outDir?: string },
 ): Promise<void> {
-  let model = await resolveAskModel(profile, opts?.model);
-  const display = (): string => modelDisplay(model);
+  // One catalog fetch shared by the default-model pick and the picker —
+  // the old code listed twice serially (resolveAskModel, then listModels).
   let catalog: CatalogModel[] | undefined;
   try {
     catalog = await listModels(profile);
   } catch {
     catalog = undefined;
   }
+  let model: string;
+  if (opts?.model?.trim()) {
+    model = opts.model.trim();
+  } else {
+    const fallback = defaultModelId(catalog ?? []);
+    if (!fallback) {
+      throw new Error("No models available. Check the Rook server connection (`rook status`).");
+    }
+    model = fallback;
+  }
+  const display = (): string => modelDisplay(model);
   const hasPicker = Boolean(catalog && process.stdin.isTTY && process.stdout.isTTY);
   println(launchScreen({ version: ROOK_CLI_VERSION, model: display(), tip: pickTip() }));
-  eprintln(statusBar(process.cwd(), ROOK_CLI_VERSION));
+  eprintln(statusBar(process.cwd(), ROOK_CLI_VERSION, undefined, `model ${display()}`));
   const history: HistoryTurn[] = [];
+  let lastAnswer: string | undefined;
+  let turn = 0;
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   let busy: AbortController | undefined;
   const onSigint = (): void => {
@@ -193,14 +232,15 @@ export async function runChat(
       }
       if (line === null) {
         try {
-          line = await rl.question(`${c("mint", bold("❯"))} `);
+          line = await rl.question(`${c("mint", bold(promptGlyph()))} `);
         } catch {
           break;
         }
         println(footerRow("enter send", display()));
       }
       if (!line.trim()) continue;
-      const parsed = parseSlash(line);
+      let parsed = parseSlash(line);
+      let retrying = false;
       if (parsed.cmd === "exit") break;
       if (parsed.cmd === "unknown") {
         eprintln(c("coral", `✗ Unknown command /${parsed.arg}. /help lists them.`));
@@ -212,8 +252,38 @@ export async function runChat(
       }
       if (parsed.cmd === "new") {
         history.length = 0;
+        lastAnswer = undefined;
         eprintln(c("dim", "Forgot this conversation. Fresh start."));
         continue;
+      }
+      if (parsed.cmd === "copy") {
+        if (!lastAnswer) {
+          eprintln(c("dim", "Nothing to copy yet — ask something first."));
+          continue;
+        }
+        process.stdout.write(osc52Copy(lastAnswer));
+        eprintln(c("dim", `Copied ${lastAnswer.length} chars (or /save to write a file).`));
+        continue;
+      }
+      if (parsed.cmd === "save") {
+        if (!lastAnswer) {
+          eprintln(c("dim", "Nothing to save yet — ask something first."));
+          continue;
+        }
+        const saved = saveAnswerText(lastAnswer, process.cwd(), parsed.arg || undefined);
+        const name = saved.split(/[\\/]/).pop() ?? saved;
+        println(box({ title: `File · ${name}`, lines: [c("dim", saved)] }));
+        continue;
+      }
+      if (parsed.cmd === "retry") {
+        const lastUser = [...history].reverse().find((turn) => turn.author === "user");
+        if (!lastUser) {
+          eprintln(c("dim", "Nothing to retry yet — ask something first."));
+          continue;
+        }
+        // Re-run without duplicating the user turn in history.
+        parsed = { cmd: "message", text: lastUser.body };
+        retrying = true;
       }
       if (parsed.cmd === "models") {
         println(renderModels(catalog && catalog.length ? catalog : await listModels(profile), false));
@@ -238,7 +308,7 @@ export async function runChat(
         continue;
       }
       if (!parsed.text) continue;
-      history.push({ author: "user", body: parsed.text });
+      if (!retrying) history.push({ author: "user", body: parsed.text });
       busy = new AbortController();
       try {
         const result = await runAsk(profile, {
@@ -251,13 +321,15 @@ export async function runChat(
           signal: busy.signal,
         });
         println();
+        turn += 1;
         eprintln(
           footerRow(
             `model ${display()}${result.savedFiles.length ? ` · ${result.savedFiles.length} file(s)` : ""}`,
-            `v${ROOK_CLI_VERSION}`,
+            `turn ${turn} · v${ROOK_CLI_VERSION}`,
           ),
         );
         history.push({ author: "bot", body: result.text });
+        lastAnswer = result.text;
       } catch (error) {
         if (isAbortError(error)) {
           eprintln(c("dim", "Interrupted — pick up where you left off, or /exit to leave."));

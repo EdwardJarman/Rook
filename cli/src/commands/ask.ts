@@ -30,6 +30,11 @@ export type AskOptions = {
   onToken?: (delta: string) => void;
   signal?: AbortSignal;
   /**
+   * Scriptable envelope: print `{text, model, files}` JSON to stdout instead
+   * of streamed markdown. Traces still go to stderr; chrome is forced off.
+   */
+  json?: boolean;
+  /**
    * False when an interactive host (chat REPL) owns the chrome: skips the
    * header, file panels, and footer — files are still saved and returned.
    * Traces still stream to stderr either way.
@@ -74,17 +79,20 @@ export async function runAsk(profile: CliProfile, opts: AskOptions): Promise<Ask
     recentContext: buildRecentContext(opts.recentContext ?? []),
   };
   const chrome = opts.chrome !== false;
+  const asJson = opts.json === true;
   let text: string;
   let files: TurnFile[] | undefined;
-  if (chrome) println(`${c("mint", "●")} ${c("dim", modelDisplay(model))}`);
-  if (opts.stream === false) {
+  if (chrome && !asJson) println(`${c("mint", "●")} ${c("dim", modelDisplay(model))}`);
+  if (opts.stream === false || asJson) {
     const result = await trpc<{ text: string; files?: TurnFile[] }>(profile, "workroom.reply", body, {
       method: "POST",
     });
     text = result.text;
     files = result.files;
-    emit(md(text));
-    println();
+    if (!asJson) {
+      emit(md(text));
+      println();
+    }
   } else {
     const done = await streamAgentRound(
       profile,
@@ -100,6 +108,10 @@ export async function runAsk(profile: CliProfile, opts: AskOptions): Promise<Ask
     files = done.files;
   }
   const savedFiles = saveTurnFiles(files, opts.outDir ?? process.cwd());
+  if (asJson) {
+    println(JSON.stringify({ text, model, files: savedFiles }));
+    return { text, model, savedFiles };
+  }
   if (chrome) {
     for (const saved of savedFiles) {
       const name = saved.split(/[\\/]/).pop() ?? saved;

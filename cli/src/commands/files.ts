@@ -34,3 +34,20 @@ export function saveTurnFiles(files: TurnFile[] | undefined, dir: string): strin
   }
   return saved;
 }
+
+/**
+ * `/save` target: the last answer as one markdown file. Explicit names are
+ * sanitized like turn files; collisions bump ` (1)` instead of clobbering.
+ */
+export function saveAnswerText(text: string, dir: string, name?: string): string {
+  mkdirSync(dir, { recursive: true });
+  const raw = name?.trim() ? safeName(name.trim()) : "rook-answer.md";
+  const base = raw.includes(".") ? raw : `${raw}.md`;
+  let target = join(dir, base);
+  for (let i = 1; existsSync(target) && i < 100; i += 1) {
+    const dot = base.lastIndexOf(".");
+    target = join(dir, `${base.slice(0, dot)} (${i})${base.slice(dot)}`);
+  }
+  writeFileSync(target, text, "utf8");
+  return target;
+}

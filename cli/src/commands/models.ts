@@ -59,10 +59,15 @@ export function groupModels(models: CatalogModel[]): ProviderGroup[] {
   return groups;
 }
 
-export function renderModels(models: CatalogModel[], json: boolean): string {
-  if (json) return JSON.stringify(models, null, 2);
-  const groups = groupModels(models);
-  if (!groups.length) return "No models available. Check the Rook server connection.";
+export function renderModels(models: CatalogModel[], json: boolean, query?: string): string {
+  const filtered = filterModels(models, query);
+  if (json) return JSON.stringify(filtered, null, 2);
+  const groups = groupModels(filtered);
+  if (!groups.length) {
+    return query?.trim()
+      ? `No models match "${query.trim()}". Try: rook models`
+      : "No models available. Check the Rook server connection.";
+  }
   return groups
     .map((group) =>
       box({
@@ -95,3 +100,18 @@ export const modelDisplay = (id: string): string => {
 /** Sensible default when -m is omitted: openrouter/free, else first. */
 export const defaultModelId = (models: CatalogModel[]): string | undefined =>
   models.find((model) => model.id === "openrouter/free")?.id ?? models[0]?.id;
+
+/**
+ * Substring filter over id, name, and provider (case-insensitive).
+ * Empty query returns everything. Pure — powers `rook models <query>`.
+ */
+export function filterModels(models: CatalogModel[], query: string | undefined): CatalogModel[] {
+  const q = (query ?? "").trim().toLowerCase();
+  if (!q) return models;
+  return models.filter(
+    (model) =>
+      model.id.toLowerCase().includes(q) ||
+      (model.name ?? "").toLowerCase().includes(q) ||
+      model.provider.toLowerCase().includes(q),
+  );
+}

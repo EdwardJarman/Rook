@@ -29,6 +29,19 @@ export const colorsEnabled = (): boolean => {
   return Boolean(process.stdout.isTTY);
 };
 
+/**
+ * ASCII fallback for legacy consoles (Windows conhost without Unicode
+ * fonts renders the box glyphs as boxes). `ROOK_ASCII=1` swaps every
+ * decorative glyph; layout math is unchanged (all swaps stay one column).
+ */
+export const asciiMode = (): boolean => process.env.ROOK_ASCII === "1";
+
+/** Prompt + selection glyphs shared by the input engine and pickers. */
+export const promptGlyph = (): string => (asciiMode() ? ">" : "❯");
+export const selectGlyph = (): string => (asciiMode() ? ">" : "›");
+export const pickerHint = (): string =>
+  asciiMode() ? "up/down move · enter pick · esc cancel" : "↑↓ move · enter pick · esc cancel";
+
 export const c = (color: ColorName, text: string): string =>
   colorsEnabled() && color !== "text" ? `${CODES[color]}${text}${RESET}` : text;
 
@@ -45,7 +58,8 @@ export const visibleWidth = (text: string): number => stripAnsi(text).length;
 export const truncate = (text: string, width: number): string => {
   if (visibleWidth(text) <= width) return text;
   const plain = stripAnsi(text);
-  return `${plain.slice(0, Math.max(0, width - 1))}…`;
+  const marker = asciiMode() ? "..." : "…";
+  return `${plain.slice(0, Math.max(0, width - marker.length))}${marker}`;
 };
 
 const termWidth = (): number => {
@@ -80,15 +94,18 @@ export function box(opts: {
     1,
   );
   const contentWidth = Math.min(inner, maxWidth);
+  const edge = asciiMode()
+    ? { tl: "+", tr: "+", bl: "+", br: "+", h: "-", v: "|" }
+    : { tl: "╭", tr: "╮", bl: "╰", br: "╯", h: "─", v: "│" };
   const top =
     opts.title && opts.title
-      ? `╭─ ${opts.title} ${"─".repeat(Math.max(0, contentWidth - visibleWidth(opts.title) - 1))}╮`
-      : `╭${"─".repeat(contentWidth + padding * 2)}╮`;
-  const bottom = `╰${"─".repeat(contentWidth + padding * 2)}╯`;
+      ? `${edge.tl}${edge.h} ${opts.title} ${edge.h.repeat(Math.max(0, contentWidth - visibleWidth(opts.title) - 1))}${edge.tr}`
+      : `${edge.tl}${edge.h.repeat(contentWidth + padding * 2)}${edge.tr}`;
+  const bottom = `${edge.bl}${edge.h.repeat(contentWidth + padding * 2)}${edge.br}`;
   const pad = " ".repeat(padding);
   const body = wrapped.map((line) => {
     const gap = " ".repeat(Math.max(0, contentWidth - visibleWidth(line)));
-    return `│${pad}${line}${gap}${pad}│`;
+    return `${edge.v}${pad}${line}${gap}${pad}${edge.v}`;
   });
   return [top, ...body, bottom].join("\n");
 }
@@ -129,10 +146,11 @@ export function wrapAnsi(line: string, maxWidth: number): string[] {
 /** Faint divider, optional centered label. */
 export const rule = (label = ""): string => {
   const width = termWidth();
-  if (!label) return c("dim", "─".repeat(width));
+  const bar = asciiMode() ? "-" : "─";
+  if (!label) return c("dim", bar.repeat(width));
   const text = ` ${label} `;
   const side = Math.max(0, Math.floor((width - visibleWidth(text)) / 2));
-  return c("dim", `${"─".repeat(side)}${text}${"─".repeat(Math.max(0, width - side - visibleWidth(text)))}`);
+  return c("dim", `${bar.repeat(side)}${text}${bar.repeat(Math.max(0, width - side - visibleWidth(text)))}`);
 };
 
 /** Persistent session strip: model · directory · context. Claude-style. */
@@ -148,15 +166,26 @@ export function toolRow(
   state: "running" | "done" | "error" = "running",
   detail?: string,
 ): string {
-  const glyph = state === "done" ? c("mint", "✓") : state === "error" ? c("coral", "✗") : c("cyan", "⏺");
+  const glyph = asciiMode()
+    ? state === "done"
+      ? "+"
+      : state === "error"
+        ? "x"
+        : "*"
+    : state === "done"
+      ? c("mint", "✓")
+      : state === "error"
+        ? c("coral", "✗")
+        : c("cyan", "⏺");
   const lines = [`${glyph} ${title}`];
-  if (detail) lines.push(c("dim", `  ⎿ ${detail}`));
+  if (detail) lines.push(c("dim", asciiMode() ? `  - ${detail}` : `  ⎿ ${detail}`));
   return lines.join("\n");
 }
 
 /** Welcome banner: wordmark + version chip + model line. */
 export function banner(version: string, model?: string): string {
-  const head = `${c("mint", bold("◈ Rook"))}  ${c("dim", `v${version}`)}`;
+  const mark = asciiMode() ? c("mint", bold("* Rook")) : c("mint", bold("◈ Rook"));
+  const head = `${mark}  ${c("dim", `v${version}`)}`;
   const sub = model ? c("dim", `model ${model} · /help for commands`) : c("dim", "/help for commands");
   return `${head}\n${sub}`;
 }
@@ -164,12 +193,16 @@ export function banner(version: string, model?: string): string {
 /** Inline `code`, **bold**, headings, lists, quotes, fences — terminal-safe. */
 export function md(text: string): string {
   const out: string[] = [];
+  const fenceOpen = asciiMode() ? "-- code" : "┌ code";
+  const fenceClose = asciiMode() ? "--" : "└";
+  const quoteBar = asciiMode() ? "|" : "│";
+  const bullet = asciiMode() ? "-" : "•";
   let inFence = false;
   for (const rawLine of text.split("\n")) {
     const line = rawLine;
     if (/^\s*```/.test(line)) {
       inFence = !inFence;
-      out.push(c("dim", inFence ? "┌ code" : "└"));
+      out.push(c("dim", inFence ? fenceOpen : fenceClose));
       continue;
     }
     if (inFence) {
@@ -183,12 +216,12 @@ export function md(text: string): string {
     }
     const quote = /^>\s?(.*)$/.exec(line.trim());
     if (quote) {
-      out.push(c("dim", `│ ${inline((quote[1] ?? "").trim())}`));
+      out.push(c("dim", `${quoteBar} ${inline((quote[1] ?? "").trim())}`));
       continue;
     }
-    const bullet = /^[-*+]\s+(.+)$/.exec(line.trim());
-    if (bullet) {
-      out.push(`• ${inline(bullet[1] ?? "")}`);
+    const bulletLine = /^[-*+]\s+(.+)$/.exec(line.trim());
+    if (bulletLine) {
+      out.push(`${bullet} ${inline(bulletLine[1] ?? "")}`);
       continue;
     }
     const ordered = /^(\d+)[.)]\s+(.+)$/.exec(line.trim());
@@ -202,7 +235,7 @@ export function md(text: string): string {
     }
     out.push(line.trim() ? inline(line) : "");
   }
-  if (inFence) out.push(c("dim", "└"));
+  if (inFence) out.push(c("dim", fenceClose));
   return out.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
 }
 
@@ -226,10 +259,15 @@ const WORDMARK_GLYPHS: Record<string, string[]> = {
 const BLANK_GLYPH = [".....", ".....", ".....", ".....", "....."];
 
 export function wordmark(word = "ROOK"): string {
+  const fill = asciiMode() ? "#" : "█";
   const glyphs = word
     .toUpperCase()
     .split("")
-    .map((ch) => (WORDMARK_GLYPHS[ch] ?? BLANK_GLYPH).map((row) => row.replace(/\./g, " ")));
+    .map((ch) =>
+      (WORDMARK_GLYPHS[ch] ?? BLANK_GLYPH).map((row) =>
+        row.replace(/\./g, " ").replace(/█/g, fill),
+      ),
+    );
   const rows: string[] = [];
   for (let r = 0; r < 5; r += 1) {
     const line = glyphs.map((glyph) => glyph[r]).join(" ");
@@ -253,7 +291,9 @@ export function centerBlock(text: string, width?: number): string {
 
 /** `● Tip …`: amber marker, amber label, dim body. */
 export const tipLine = (tip: string): string =>
-  `${c("amber", "●")} ${c("amber", "Tip")} ${c("dim", tip)}`;
+  asciiMode()
+    ? `* ${c("amber", "Tip")} ${c("dim", tip)}`
+    : `${c("amber", "●")} ${c("amber", "Tip")} ${c("dim", tip)}`;
 
 /**
  * Launch screen: pixel wordmark, version chip, model line, one tip.
@@ -342,10 +382,11 @@ export function clearRows(stdout: NodeJS.WriteStream, state: { drawn: number }):
 }
 
 /** Bottom bar: `~/dir` left, `v0.1.0` right — the persistent TUI strip. */
-export function statusBar(cwd: string, version: string, width?: number): string {
+export function statusBar(cwd: string, version: string, width?: number, extra?: string): string {
   const home = process.env.HOME || process.env.USERPROFILE || "";
   const short = home && cwd.startsWith(home) ? `~${cwd.slice(home.length)}` : cwd;
-  return footerRow(short, `v${version}`, width);
+  const right = extra?.trim() ? `${extra.trim()} · v${version}` : `v${version}`;
+  return footerRow(short, right, width);
 }
 
 /** Braille spinner writing to a stream (default stderr). No-op-safe. */
@@ -353,7 +394,9 @@ export function createSpinner(message: string, stream?: NodeJS.WriteStream): {
   start: () => void;
   stop: (finalMessage?: string) => void;
 } {
-  const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  const frames = asciiMode()
+    ? ["-", "\\", "|", "/"]
+    : ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
   const out = stream ?? process.stderr;
   let timer: ReturnType<typeof setInterval> | undefined;
   let frame = 0;

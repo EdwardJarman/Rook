@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  asciiMode,
   banner,
   box,
   c,
@@ -10,7 +11,10 @@ import {
   footerRow,
   launchScreen,
   md,
+  pickerHint,
+  promptGlyph,
   rule,
+  selectGlyph,
   statusBar,
   statusline,
   stripAnsi,
@@ -184,5 +188,46 @@ describe("markdown-lite renderer", () => {
   it("collapses blank runs and closes unclosed fences", () => {
     expect(md("a\n\n\n\nb")).toBe("a\n\nb");
     expect(stripAnsi(md("```\ncode"))).toContain("code");
+  });
+});
+
+describe("ascii fallback (ROOK_ASCII=1)", () => {
+  it("swaps every decorative glyph, keeps layout widths", () => {
+    vi.stubEnv("ROOK_ASCII", "1");
+    expect(asciiMode()).toBe(true);
+    expect(promptGlyph()).toBe(">");
+    expect(selectGlyph()).toBe(">");
+    expect(pickerHint()).toContain("up/down");
+    const panel = stripAnsi(box({ title: "T", lines: ["hi"] }));
+    expect(panel).toContain("+");
+    expect(panel).not.toContain("╭");
+    expect(stripAnsi(toolRow("Run", "running"))).toContain("* Run");
+    expect(stripAnsi(toolRow("Run", "done"))).toContain("+ Run");
+    expect(stripAnsi(toolRow("Run", "error"))).toContain("x Run");
+    expect(stripAnsi(banner("0.1.0"))).toContain("* Rook");
+    expect(stripAnsi(wordmark())).toContain("#");
+    expect(stripAnsi(wordmark())).not.toContain("█");
+    const doc = stripAnsi(md("- one\n> noted\n```\nx\n```"));
+    expect(doc).toContain("- one");
+    expect(doc).toContain("| noted");
+    expect(truncate("abcdef", 5)).toBe("ab...");
+    expect(stripAnsi(tipLine("x"))).toContain("* Tip");
+  });
+
+  it("leaves unicode chrome untouched by default", () => {
+    expect(asciiMode()).toBe(false);
+    expect(promptGlyph()).toBe("❯");
+    expect(stripAnsi(box({ title: "T", lines: ["hi"] })).slice(0, 1)).toBe("╭");
+  });
+});
+
+describe("status bar context", () => {
+  it("appends model and turn extras without breaking the plain form", () => {
+    const plain = stripAnsi(statusBar("/repo", "0.1.0", 40));
+    expect(plain).toContain("v0.1.0");
+    expect(plain).not.toContain("model");
+    const rich = stripAnsi(statusBar("/repo", "0.1.0", 60, "model X · turn 3"));
+    expect(rich).toContain("model X · turn 3 · v0.1.0");
+    expect(rich).toContain("/repo");
   });
 });

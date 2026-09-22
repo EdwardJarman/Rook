@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   defaultModelId,
+  filterModels,
   groupModels,
   modelDisplay,
   providerForModelId,
@@ -47,5 +48,19 @@ describe("model catalog", () => {
     expect(defaultModelId(catalog)).toBe("openrouter/free");
     expect(defaultModelId([catalog[1]!])).toBe("opencode:big-pickle");
     expect(defaultModelId([])).toBeUndefined();
+  });
+
+  it("filters by id, name, or provider substring", () => {
+    expect(filterModels(catalog, "")).toHaveLength(3);
+    expect(filterModels(catalog, "  ")).toHaveLength(3);
+    expect(filterModels(catalog, "pickle").map((m) => m.id)).toEqual(["opencode:big-pickle"]);
+    expect(filterModels(catalog, "GPT").map((m) => m.id)).toEqual(["chatgpt:gpt-5.5"]);
+    expect(filterModels(catalog, "openrouter")).toHaveLength(1);
+    expect(filterModels(catalog, "zzz")).toEqual([]);
+    const text = renderModels(catalog, false, "pickle");
+    expect(text).toContain("big-pickle");
+    expect(text).not.toContain("GPT 5.5");
+    expect(renderModels(catalog, false, "zzz")).toContain('No models match "zzz"');
+    expect(JSON.parse(renderModels(catalog, true, "pickle"))).toHaveLength(1);
   });
 });
