@@ -1,14 +1,28 @@
-import { describe, expect, it } from "vitest";
+import { createServer, type Server } from "node:http";
+import { afterEach, describe, expect, it } from "vitest";
+import superjson from "superjson";
 
+import type { CliProfile } from "../config.js";
 import {
   defaultModelId,
   filterModels,
   groupModels,
+  listModels,
   modelDisplay,
   providerForModelId,
   renderModels,
   type CatalogModel,
 } from "./models.js";
+
+let server: Server | undefined;
+
+afterEach(async () => {
+  await new Promise<void>((resolve) => {
+    if (!server) return resolve();
+    server.close(() => resolve());
+    server = undefined;
+  });
+});
 
 const catalog: CatalogModel[] = [
   { id: "openrouter/free", name: "Auto · Best available", provider: "OpenRouter", automatic: true },
@@ -48,6 +62,34 @@ describe("model catalog", () => {
     expect(defaultModelId(catalog)).toBe("openrouter/free");
     expect(defaultModelId([catalog[1]!])).toBe("opencode:big-pickle");
     expect(defaultModelId([])).toBeUndefined();
+  });
+
+  it("fetches the catalog and honors a snappy timeout budget", async () => {
+    const profile: CliProfile = { apiUrl: "", token: "rook_test" };
+    // Happy path: one GET, superjson envelope, models array unwrapped.
+    server = createServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify([
+          { result: { data: superjson.serialize({ models: catalog }) } },
+        ]),
+      );
+    });
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
+    const port = (server!.address() as { port: number }).port;
+    const models = await listModels({ ...profile, apiUrl: `http://127.0.0.1:${port}` });
+    expect(models.map((m) => m.id)).toContain("openrouter/free");
+    // A wedged server fails within the caller's budget (chat startup
+    // passes 10s instead of hanging the terminal for the full 30s).
+    const hanging = createServer(() => {
+      /* never responds */
+    });
+    server = hanging;
+    await new Promise<void>((resolve) => hanging.listen(0, "127.0.0.1", resolve));
+    const hangPort = (hanging.address() as { port: number }).port;
+    await expect(
+      listModels({ ...profile, apiUrl: `http://127.0.0.1:${hangPort}` }, { timeoutMs: 100 }),
+    ).rejects.toThrow(/took too long|unreachable/);
   });
 
   it("filters by id, name, or provider substring", () => {

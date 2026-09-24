@@ -45,6 +45,12 @@ export const HELP_TOPICS: Record<string, string[]> = {
     "  rook                        (bare, on a terminal, opens chat too)",
     "",
     "Slash: /model /models /new /copy /retry /save /help /exit.",
+    "",
+    "Keys: tab complete · ctrl+j newline · ctrl+n model picker",
+    "      ctrl+c clears the line (twice exits) · ctrl+d exits",
+    "      home/end, ctrl+arrows, ctrl+w/u/k edit like readline",
+    "      up/down walks history — it persists across sessions",
+    "      pasting multiline text just works (bracketed paste)",
   ],
   completion: [
     "Print a shell completion script (commands + flags stay in sync).",

@@ -67,6 +67,43 @@ export async function resolveAskModel(
   return fallback;
 }
 
+/**
+ * Pure streaming core: runs one turn end to end and returns the answer +
+ * saved files without printing a single line. `runAsk` adds chrome for the
+ * one-shot CLI; the chat REPL uses this directly so its live composer stays
+ * the sole owner of the terminal's bottom rows (no mid-turn printlns to
+ * desync the redraw math).
+ */
+export async function askTurn(
+  profile: CliProfile,
+  opts: Pick<AskOptions, "message" | "model" | "recentContext" | "outDir" | "signal"> & {
+    onToken?: (delta: string) => void;
+    onTrace?: (step: { title: string }) => void;
+  },
+): Promise<AskResult> {
+  if (!opts.message.trim()) throw new Error("Nothing to ask. Usage: rook ask \"your question\"");
+  const model = await resolveAskModel(profile, opts.model);
+  const emit = opts.onToken ?? ((delta: string) => process.stdout.write(delta));
+  const body = {
+    ...CLI_BOT,
+    taskId: randomUUID(),
+    model,
+    message: opts.message,
+    recentContext: buildRecentContext(opts.recentContext ?? []),
+  };
+  const done = await streamAgentRound(
+    profile,
+    body,
+    {
+      onToken: emit,
+      onTrace: opts.onTrace ?? ((step) => eprintln(toolRow(step.title, "running"))),
+    },
+    opts.signal,
+  );
+  const savedFiles = saveTurnFiles(done.files, opts.outDir ?? process.cwd());
+  return { text: done.text, model, savedFiles };
+}
+
 export async function runAsk(profile: CliProfile, opts: AskOptions): Promise<AskResult> {
   if (!opts.message.trim()) throw new Error("Nothing to ask. Usage: rook ask \"your question\"");
   const model = await resolveAskModel(profile, opts.model);

@@ -9,9 +9,11 @@
  * exits. Everything degrades under pipes.
  */
 
+import { emitKeypressEvents } from "node:readline";
 import { createInterface } from "node:readline/promises";
 
 import type { CliProfile } from "../config.js";
+import { loadHistory, pushHistory, saveHistory } from "../history.js";
 import { eprintln, println, ROOK_CLI_VERSION } from "../output.js";
 import {
   bold,
@@ -24,9 +26,12 @@ import {
   promptGlyph,
   selectGlyph,
   statusBar,
+  syncRows,
+  terminalWidth,
+  truncate,
   type CommandMenuItem,
 } from "../ui.js";
-import { buildRecentContext, runAsk, type HistoryTurn } from "./ask.js";
+import { askTurn, buildRecentContext, type HistoryTurn } from "./ask.js";
 import { saveAnswerText } from "./files.js";
 import { askInput, isModelArg, MODEL_ARG_HINT, type Agent } from "./input.js";
 import { listModels, modelDisplay, renderModels, defaultModelId, type CatalogModel } from "./models.js";
@@ -94,6 +99,8 @@ export const CHAT_TIPS = [
   "switch models mid-chat with /model — pick with arrows",
   "copy the last answer with /copy, save it with /save",
   "/new forgets the thread — history never leaves your machine",
+  "up-arrow recalls prompts from your previous sessions",
+  "ctrl+j adds a newline; paste multiline text just works",
 ];
 
 export const pickTip = (): string =>
@@ -110,50 +117,88 @@ export const osc52Copy = (text: string): string =>
 /**
  * Interactive model picker: up/down over the live catalog, Enter picks,
  * Esc cancels. Rows are grouped-by-provider labels; current model bold.
- * Returns the picked id, or undefined. listModels row is fully text —
- * the picker is a render over a CatalogModel[].
+ * Returns the picked id, or undefined.
+ *
+ * Rendering rides `syncRows` (the composer's primitive), so the redraw
+ * math is exact by construction: the old hand-rolled `\x1b[NA` counts
+ * drifted one line per keypress and `clear()` then erased the wrong rows.
+ * Long catalogs window to a few rows around the selection — a 30-model
+ * picker must never outgrow the screen — and every row is width-capped
+ * (conhost wraps exact-width writes and desyncs everything).
  */
-export async function pickModel(models: CatalogModel[], current: string): Promise<string | undefined> {
-  const stdin = process.stdin;
-  const stdout = process.stdout;
+export type PickerItem = { id: string; label: string };
+
+/** Pure windowed rows for the picker, centered on the selection. */
+export function modelPickerRows(items: PickerItem[], selected: number, windowSize = 7): string[] {
+  if (!items.length) return [];
+  const sel = Math.min(Math.max(0, selected), items.length - 1);
+  const start = Math.max(
+    0,
+    Math.min(sel - Math.floor(windowSize / 2), items.length - windowSize),
+  );
+  return items.slice(start, start + windowSize).map((item, i) => {
+    const picked = start + i === sel;
+    return picked ? `${c("orange", selectGlyph())} ${item.label}` : c("dim", `  ${item.label}`);
+  });
+}
+
+export async function pickModel(
+  models: CatalogModel[],
+  current: string,
+  io?: { stdin?: NodeJS.ReadStream; stdout?: NodeJS.WriteStream },
+): Promise<string | undefined> {
+  const stdin = io?.stdin ?? process.stdin;
+  const stdout = io?.stdout ?? process.stdout;
   if (!stdin.isTTY || !stdout.isTTY) return undefined;
-  const rows = models.map((m) => ({ id: m.id, label: `${modelDisplay(m.id)} — ${m.name}` }));
-  let sel = Math.max(0, rows.findIndex((r) => r.id === current));
-  const render = (count: number): void => {
-    if (count > 0) stdout.write(`\x1b[${count}A`);
-    const out: string[] = [c("dim", `─ model ─`)];
-    out.push(...rows.map((r, i) => (i === sel ? `${c("orange", selectGlyph())} ${r.label}` : c("dim", `  ${r.label}`))));
-    out.push(c("dim", pickerHint()));
-    for (const line of out) stdout.write("\r\x1b[2K" + line + "\n");
-  };
-  const clear = (count: number): void => {
-    if (count > 0) stdout.write(`\x1b[${count - 1}A`);
-    for (let i = 0; i < count; i += 1) stdout.write("\r\x1b[2K\n");
-    stdout.write(`\x1b[${count}A`);
-  };
+  const items = models.map((m) => ({ id: m.id, label: `${modelDisplay(m.id)} — ${m.name}` }));
+  let sel = Math.max(0, items.findIndex((r) => r.id === current));
+  // Measure the stream we actually draw on (not process.stdout): piped
+  // or redirected output must not wrap rows meant for the real terminal.
+  const columns = (stdout as { columns?: number }).columns;
+  const target = Math.max(20, (typeof columns === "number" && columns > 0 ? columns : terminalWidth()) - 1);
+  const rows = (): string[] => [
+    c("dim", "─ model ─"),
+    ...modelPickerRows(items, sel).map((row) => truncate(row, target)),
+    c("dim", pickerHint()),
+  ];
   return new Promise((resolve) => {
-    let drawn = 0;
+    const state = { drawn: 0 };
+    const showCursor = (): void => {
+      try {
+        stdout.write("\x1b[?25h");
+      } catch {
+        // A dead stream at exit time has nothing left to restore.
+      }
+    };
     const finish = (id: string | undefined): void => {
       stdin.removeListener("keypress", onKey);
+      process.removeListener("exit", showCursor);
       stdin.setRawMode(false);
       stdin.pause();
-      clear(drawn);
+      syncRows(stdout, state, []);
+      showCursor();
       resolve(id);
     };
     const onKey = (_ch: string | undefined, key: { name?: string }): void => {
-      const name = key.name ?? "";
+      const name = key?.name ?? "";
       if (name === "up") sel = Math.max(0, sel - 1);
-      else if (name === "down") sel = Math.min(rows.length - 1, sel + 1);
+      else if (name === "down") sel = Math.min(items.length - 1, sel + 1);
       else if (name === "escape") return finish(undefined);
-      else if (name === "return") return finish(rows[sel]?.id);
-      drawn = rows.length + 2;
-      render(drawn - 1);
+      else if (name === "return") return finish(items[sel]?.id);
+      else return; // unbound keys never redraw
+      syncRows(stdout, state, rows());
     };
     stdin.setRawMode(true);
     stdin.resume();
+    emitKeypressEvents(stdin);
     stdin.on("keypress", onKey);
-    drawn = rows.length + 2;
-    render(0);
+    try {
+      stdout.write("\x1b[?25l");
+    } catch {
+      // Cursor stays visible; rendering still works.
+    }
+    process.once("exit", showCursor);
+    syncRows(stdout, state, rows());
   });
 }
 
@@ -162,33 +207,58 @@ const isAbortError = (error: unknown): boolean =>
 
 export const DEFAULT_AGENTS: Agent[] = [{ name: "build", label: "Build" }];
 
+/** Documented default when the catalog cannot be reached at startup. */
+export const OFFLINE_DEFAULT_MODEL = "openrouter/free";
+
+/**
+ * Chat startup model (pure): an explicit -m always wins, the catalog's
+ * default comes next, and an unreachable catalog degrades to the
+ * documented default instead of stranding the REPL — the session still
+ * opens, and each turn fails with its own actionable error if the server
+ * is truly down.
+ */
+export function chatStartupModel(
+  requested: string | undefined,
+  catalog: CatalogModel[] | undefined,
+): { model: string; offline: boolean } {
+  if (requested?.trim()) return { model: requested.trim(), offline: false };
+  const fallback = defaultModelId(catalog ?? []);
+  if (fallback) return { model: fallback, offline: false };
+  return { model: OFFLINE_DEFAULT_MODEL, offline: true };
+}
+
 export async function runChat(
   profile: CliProfile,
   opts?: { model?: string; outDir?: string },
 ): Promise<void> {
   // One catalog fetch shared by the default-model pick and the picker —
   // the old code listed twice serially (resolveAskModel, then listModels).
+  // Interactive startup gets a snappier budget: a wedged server must not
+  // hang the terminal for the full 30s metadata timeout.
   let catalog: CatalogModel[] | undefined;
   try {
-    catalog = await listModels(profile);
+    catalog = await listModels(profile, { timeoutMs: 10_000 });
   } catch {
     catalog = undefined;
   }
-  let model: string;
-  if (opts?.model?.trim()) {
-    model = opts.model.trim();
-  } else {
-    const fallback = defaultModelId(catalog ?? []);
-    if (!fallback) {
-      throw new Error("No models available. Check the Rook server connection (`rook status`).");
-    }
-    model = fallback;
+  const start = chatStartupModel(opts?.model, catalog);
+  if (start.offline) {
+    eprintln(
+      c(
+        "amber",
+        `Could not reach the model catalog — starting on ${OFFLINE_DEFAULT_MODEL}. Try \`rook doctor\` if this keeps happening.`,
+      ),
+    );
   }
+  let model = start.model;
   const display = (): string => modelDisplay(model);
   const hasPicker = Boolean(catalog && process.stdin.isTTY && process.stdout.isTTY);
   println(launchScreen({ version: ROOK_CLI_VERSION, model: display(), tip: pickTip() }));
   eprintln(statusBar(process.cwd(), ROOK_CLI_VERSION, undefined, `model ${display()}`));
   const history: HistoryTurn[] = [];
+  // Up-arrow history: submitted lines only (the old code fed bot replies
+  // into the walker too), persisted across sessions readline-style.
+  let inputHistory = loadHistory();
   let lastAnswer: string | undefined;
   let turn = 0;
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -214,7 +284,7 @@ export async function runChat(
           model: display(),
           agent: DEFAULT_AGENTS[0],
           commands: CHAT_COMMANDS.map((i) => ({ command: i.command, hint: i.hint, description: i.description })),
-          history: history.map((h) => h.body),
+          history: inputHistory,
           pickModel:
             hasPicker && catalog
               ? async (): Promise<string | undefined> => {
@@ -239,6 +309,8 @@ export async function runChat(
         println(footerRow("enter send", display()));
       }
       if (!line.trim()) continue;
+      inputHistory = pushHistory(inputHistory, line);
+      saveHistory(inputHistory);
       let parsed = parseSlash(line);
       let retrying = false;
       if (parsed.cmd === "exit") break;
@@ -311,13 +383,17 @@ export async function runChat(
       if (!retrying) history.push({ author: "user", body: parsed.text });
       busy = new AbortController();
       try {
-        const result = await runAsk(profile, {
+        // Stream the answer ourselves instead of via runAsk's chrome: the
+        // live composer owns the bottom rows, so any mid-turn println would
+        // scroll it up and eat its border. One printlns() here, then the
+        // next composer render reclaims the cursor.
+        println();
+        const result = await askTurn(profile, {
           message: parsed.text,
           model,
           outDir: opts?.outDir,
-          recentContext: buildRecentContext(history.slice(0, -1)),
+          recentContext: history.slice(0, -1),
           onToken: (delta) => process.stdout.write(delta),
-          chrome: false,
           signal: busy.signal,
         });
         println();

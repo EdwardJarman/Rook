@@ -38,9 +38,14 @@ export const providerForModelId = (id: string): string => {
   return "openrouter";
 };
 
-export async function listModels(profile: CliProfile): Promise<CatalogModel[]> {
+export async function listModels(
+  profile: CliProfile,
+  opts?: { timeoutMs?: number },
+): Promise<CatalogModel[]> {
   const data = await trpc<{ models: CatalogModel[] }>(profile, "ai.models", undefined, {
-    timeoutMs: 30_000,
+    // Fast metadata calls fail loudly instead of hanging the terminal;
+    // interactive callers (chat startup) pass a snappier budget.
+    timeoutMs: opts?.timeoutMs ?? 30_000,
   });
   return data.models ?? [];
 }

@@ -65,13 +65,20 @@ rook whoami
 rook models [--json]            # same catalog as web, grouped by provider
 rook status [--json]            # provider health (Online / Attention / Setup)
 rook ask [-m MODEL] [--no-stream] [--out-dir DIR] <message...>
-rook chat [-m MODEL]            # REPL: /model /models /new /help /exit
+rook chat [-m MODEL]            # REPL: /model /models /new /copy /retry /save /help /exit
 rook help | rook version
 ```
 
 Answers stream to stdout (pipeable: `rook ask … > answer.md`); progress
 and saved-file notes go to stderr. Files an agent builds are saved to
 the working directory without clobbering (`game (1).html`).
+
+`rook chat` composer keys: `tab` completes slash commands, `ctrl+j`
+inserts a newline (multiline prompts; pasting multiline text just
+works), `ctrl+n` opens the model picker, `ctrl+c` clears the line
+(twice exits), `ctrl+d` exits. Editing follows readline (`home`/`end`,
+`ctrl+arrows`, `ctrl+w`/`u`/`k`); up/down walks your prompt history,
+which persists across sessions in the OS config dir.
 
 ```sh
 rook ask "why is the sky blue"
