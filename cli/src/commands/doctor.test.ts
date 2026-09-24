@@ -84,4 +84,65 @@ describe("doctor", () => {
     const parsed = JSON.parse(renderDoctor(checks, true)) as Array<{ name: string }>;
     expect(parsed.map((check) => check.name)).toContain("Terminal");
   });
+
+  it("never cries wolf: a failed probe is reconciled with API evidence", async () => {
+    // The health probe gave up, but auth just round-tripped against the
+    // same URL — the server is up and the report must say so.
+    const checks = await runDoctor(profile, {
+      probe: async () => false,
+      me: async () => ({ name: "Ada", email: "ada@x.io" }),
+      models: async () => {
+        throw new Error("took too long");
+      },
+    });
+    expect(checks[0]?.ok).toBe(true);
+    expect(checks[0]?.detail).toContain("health probe was slow or blocked");
+  });
+
+  it("an empty catalog still proves the server responded", async () => {
+    const checks = await runDoctor(profile, {
+      probe: async () => false,
+      me: async () => null, // no token: no network call, not evidence
+      models: async () => [], // completed round trip, empty list
+    });
+    expect(checks[0]?.ok).toBe(true);
+    expect(checks[0]?.detail).toContain("API calls succeeded");
+  });
+
+  it("stays unreachable when nothing round-tripped", async () => {
+    const checks = await runDoctor(profile, {
+      probe: async () => false,
+      me: async () => null,
+      models: async () => {
+        throw new Error("took too long");
+      },
+    });
+    expect(checks[0]?.ok).toBe(false);
+    expect(checks[0]?.detail).toContain("unreachable");
+  });
+
+  it("reconciles a probe that threw, not just one that returned false", async () => {
+    const checks = await runDoctor(profile, {
+      probe: async () => {
+        throw new Error("connect ECONNREFUSED");
+      },
+      me: async () => null,
+      models: async () => [{ id: "openrouter/free" }],
+    });
+    expect(checks[0]?.ok).toBe(true);
+    expect(checks[0]?.detail).toContain("API calls succeeded");
+  });
+
+  it("gives the health probe a realistic budget (cold starts are slow)", async () => {
+    const budgets: Array<number | undefined> = [];
+    await runDoctor(profile, {
+      probe: async (_url, timeoutMs) => {
+        budgets.push(timeoutMs);
+        return true;
+      },
+      me: async () => null,
+      models: async () => [],
+    });
+    expect(budgets[0]).toBeGreaterThanOrEqual(10_000);
+  });
 });

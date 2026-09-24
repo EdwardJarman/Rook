@@ -1,7 +1,7 @@
 /** Tiny terminal output helpers. Plain text only — no color deps, respects pipes. */
 
 /** Single source for --version and banners (keep in sync with package.json). */
-export const ROOK_CLI_VERSION = "0.1.0";
+export const ROOK_CLI_VERSION = "0.2.0";
 
 export const println = (line = ""): void => {
   process.stdout.write(`${line}\n`);
