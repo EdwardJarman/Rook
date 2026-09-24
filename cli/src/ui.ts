@@ -37,7 +37,7 @@ export const colorsEnabled = (): boolean => {
 export const asciiMode = (): boolean => process.env.ROOK_ASCII === "1";
 
 /** Prompt + selection glyphs shared by the input engine and pickers. */
-export const promptGlyph = (): string => (asciiMode() ? ">" : "❯");
+export const promptGlyph = (): string => (asciiMode() ? ">" : "›");
 export const selectGlyph = (): string => (asciiMode() ? ">" : "›");
 export const pickerHint = (): string =>
   asciiMode() ? "up/down move · enter pick · esc cancel" : "↑↓ move · enter pick · esc cancel";
@@ -47,6 +47,15 @@ export const c = (color: ColorName, text: string): string =>
 
 export const bold = (text: string): string =>
   colorsEnabled() ? `${BOLD}${text}${RESET}` : text;
+
+/**
+ * Reverse-video cell: the composer draws its own cursor with it (the
+ * hardware cursor parks below the live block, so without this the cursor
+ * position is invisible). `[27m` ends only the inversion, so surrounding
+ * colors survive. Degrades to plain text without colors.
+ */
+export const invert = (text: string): string =>
+  colorsEnabled() ? `\x1b[7m${text}\x1b[27m` : text;
 
 /** Strip ANSI escapes (tests, width math, piped output). */
 export const stripAnsi = (text: string): string =>
@@ -62,9 +71,13 @@ export const truncate = (text: string, width: number): string => {
   return `${plain.slice(0, Math.max(0, width - marker.length))}${marker}`;
 };
 
-const termWidth = (): number => {
+export const terminalWidth = (): number => {
   const columns = process.stdout.columns;
-  return typeof columns === "number" && columns > 20 ? columns : 80;
+  // Unknown width (pipes) assumes 80. A real-but-tiny terminal clamps to
+  // 20 instead of jumping to 80 — pretending a 15-column window is 80 made
+  // every row wrap and desynced the redraw math.
+  if (typeof columns !== "number" || !Number.isFinite(columns) || columns <= 0) return 80;
+  return Math.max(20, columns);
 };
 
 /**
@@ -79,7 +92,7 @@ export function box(opts: {
   padding?: number;
 }): string {
   const padding = opts.padding ?? 1;
-  const maxWidth = Math.min(opts.width ?? termWidth(), termWidth()) - 2 - padding * 2;
+  const maxWidth = Math.min(opts.width ?? terminalWidth(), terminalWidth()) - 2 - padding * 2;
   const wrapped: string[] = [];
   for (const line of opts.lines) {
     if (!stripAnsi(line)) {
@@ -145,7 +158,7 @@ export function wrapAnsi(line: string, maxWidth: number): string[] {
 
 /** Faint divider, optional centered label. */
 export const rule = (label = ""): string => {
-  const width = termWidth();
+  const width = terminalWidth();
   const bar = asciiMode() ? "-" : "─";
   if (!label) return c("dim", bar.repeat(width));
   const text = ` ${label} `;
@@ -160,7 +173,7 @@ export const statusline = (parts: Array<string | undefined | null>): string => {
   return c("dim", items.join(" · "));
 };
 
-/** Tool activity row: ⏺ while running, ✓/✗ after — nested detail on ⎿. */
+/** Tool activity row: ● while running, ✓/✗ after — nested detail on ⎿. */
 export function toolRow(
   title: string,
   state: "running" | "done" | "error" = "running",
@@ -176,7 +189,7 @@ export function toolRow(
       ? c("mint", "✓")
       : state === "error"
         ? c("coral", "✗")
-        : c("cyan", "⏺");
+        : c("cyan", "●");
   const lines = [`${glyph} ${title}`];
   if (detail) lines.push(c("dim", asciiMode() ? `  - ${detail}` : `  ⎿ ${detail}`));
   return lines.join("\n");
@@ -279,7 +292,7 @@ export function wordmark(word = "ROOK"): string {
 
 /** Center every line in `width` (default: terminal). ANSI-aware. */
 export function centerBlock(text: string, width?: number): string {
-  const target = Math.max(1, width ?? termWidth());
+  const target = Math.max(1, width ?? terminalWidth());
   return text
     .split("\n")
     .map((line) => {
@@ -305,7 +318,7 @@ export function launchScreen(opts: {
   tip?: string;
   width?: number;
 }): string {
-  const width = Math.max(30, opts.width ?? termWidth());
+  const width = Math.max(30, opts.width ?? terminalWidth());
   const parts = [
     "",
     centerBlock(wordmark(), width),
@@ -327,7 +340,7 @@ export type CommandMenuItem = { command: string; description: string; hint?: str
  * `width` wide so hints form a straight rail.
  */
 export function commandMenu(items: CommandMenuItem[], width?: number): string {
-  const target = Math.max(20, width ?? termWidth());
+  const target = Math.max(20, width ?? terminalWidth());
   const cmdWidth = Math.max(...items.map((item) => visibleWidth(item.command)), 1);
   return items
     .map((item) => {
@@ -344,7 +357,7 @@ export function commandMenu(items: CommandMenuItem[], width?: number): string {
  * The statusline, input-box bottom row, and turn footer share it.
  */
 export function footerRow(left: string, right: string, width?: number): string {
-  const target = Math.max(1, width ?? termWidth());
+  const target = Math.max(1, width ?? terminalWidth());
   const leftText = c("dim", left);
   const rightText = c("dim", right);
   const room = target - visibleWidth(rightText);
@@ -354,6 +367,26 @@ export function footerRow(left: string, right: string, width?: number): string {
 
 /** Frames double as sync rows; keep the cursor math beside the renderer. */
 export const rowsBackToStart = (drawn: number): number => Math.max(0, drawn);
+
+/**
+ * Redraw primitive that survives shrinking: move to the start of the live
+ * block, draw every row, erase surplus lines from the previous (larger)
+ * block, then park the cursor right after the last live row. The old
+ * drawRows left stale rows behind whenever the palette closed — the
+ * screenshot ladder. Pure cursor math, unit-tested against a fake stream.
+ */
+export function syncRows(
+  stdout: NodeJS.WriteStream,
+  state: { drawn: number },
+  rows: string[],
+): void {
+  if (state.drawn > 0) stdout.write(`\x1b[${rowsBackToStart(state.drawn)}A`);
+  for (const row of rows) stdout.write("\r\x1b[2K" + row + "\n");
+  const surplus = state.drawn - rows.length;
+  for (let i = 0; i < surplus; i += 1) stdout.write("\r\x1b[2K\n");
+  if (surplus > 0) stdout.write(`\x1b[${surplus}A`);
+  state.drawn = rows.length;
+}
 
 /**
  * Shared redraw primitive: move to the start of the live input block, draw
@@ -394,9 +427,8 @@ export function createSpinner(message: string, stream?: NodeJS.WriteStream): {
   start: () => void;
   stop: (finalMessage?: string) => void;
 } {
-  const frames = asciiMode()
-    ? ["-", "\\", "|", "/"]
-    : ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  // Classic frames: every console font has these (braille does not).
+  const frames = ["-", "\\", "|", "/"];
   const out = stream ?? process.stderr;
   let timer: ReturnType<typeof setInterval> | undefined;
   let frame = 0;

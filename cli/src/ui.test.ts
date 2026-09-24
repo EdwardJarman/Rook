@@ -9,6 +9,7 @@ import {
   commandMenu,
   createSpinner,
   footerRow,
+  invert,
   launchScreen,
   md,
   pickerHint,
@@ -18,6 +19,8 @@ import {
   statusBar,
   statusline,
   stripAnsi,
+  syncRows,
+  terminalWidth,
   tipLine,
   toolRow,
   truncate,
@@ -50,6 +53,29 @@ describe("terminal styling core", () => {
     expect(truncate("hi", 5)).toBe("hi");
   });
 
+  it("inverts a cell for the drawn cursor and degrades to plain text", () => {
+    expect(invert("x")).toBe("\x1b[7mx\x1b[27m");
+    expect(stripAnsi(invert("x"))).toBe("x");
+    expect(visibleWidth(invert("x"))).toBe(1);
+    vi.stubEnv("NO_COLOR", "1");
+    expect(invert("x")).toBe("x");
+  });
+
+  it("clamps tiny terminals to 20 columns instead of pretending 80", () => {
+    const stdout = process.stdout as { columns?: number };
+    const original = stdout.columns;
+    try {
+      stdout.columns = 15;
+      expect(terminalWidth()).toBe(20);
+      stdout.columns = 120;
+      expect(terminalWidth()).toBe(120);
+      stdout.columns = undefined;
+      expect(terminalWidth()).toBe(80);
+    } finally {
+      stdout.columns = original;
+    }
+  });
+
   it("draws rounded boxes with titles and exact widths", () => {
     const rendered = box({ title: "Files", lines: ["game.html", "a much longer file name here"] });
     const lines = rendered.split("\n");
@@ -70,7 +96,7 @@ describe("terminal styling core", () => {
     expect(stripAnsi(rule("Models"))).toContain("Models");
     expect(stripAnsi(statusline(["big-pickle", undefined, ""]))).toBe("big-pickle");
     expect(statusline([])).toBe("");
-    expect(stripAnsi(toolRow("write file", "running"))).toContain("⏺");
+    expect(stripAnsi(toolRow("write file", "running"))).toContain("●");
     expect(stripAnsi(toolRow("write file", "done", "ok"))).toContain("✓");
     expect(stripAnsi(toolRow("write file", "done", "ok"))).toContain("⎿");
     expect(stripAnsi(toolRow("write file", "error"))).toContain("✗");
@@ -214,10 +240,17 @@ describe("ascii fallback (ROOK_ASCII=1)", () => {
     expect(stripAnsi(tipLine("x"))).toContain("* Tip");
   });
 
-  it("leaves unicode chrome untouched by default", () => {
-    expect(asciiMode()).toBe(false);
-    expect(promptGlyph()).toBe("❯");
-    expect(stripAnsi(box({ title: "T", lines: ["hi"] })).slice(0, 1)).toBe("╭");
+  it("uses only glyphs every console font has", async () => {
+    expect(promptGlyph()).toBe("›");
+    expect(stripAnsi(toolRow("Run", "running"))).toContain("● Run");
+    const writes: string[] = [];
+    const stream = { write: (s: string) => writes.push(s), isTTY: true } as unknown as NodeJS.WriteStream;
+    const spinner = createSpinner("busy", stream);
+    spinner.start();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    spinner.stop();
+    expect(writes.join("")).toContain("-");
+    expect(writes.join("")).not.toContain("⠋");
   });
 });
 
@@ -229,5 +262,39 @@ describe("status bar context", () => {
     const rich = stripAnsi(statusBar("/repo", "0.1.0", 60, "model X · turn 3"));
     expect(rich).toContain("model X · turn 3 · v0.1.0");
     expect(rich).toContain("/repo");
+  });
+});
+
+describe("syncRows (shrink clears stale rows, cursor lands right)", () => {
+  const stream = () => {
+    const writes: string[] = [];
+    return {
+      writes,
+      stdout: { write: (s: string) => writes.push(s) } as unknown as NodeJS.WriteStream,
+    };
+  };
+
+  it("grows, holds, and shrinks with surplus clears", () => {
+    const { writes, stdout } = stream();
+    const state = { drawn: 0 };
+    syncRows(stdout, state, ["a", "b"]);
+    expect(state.drawn).toBe(2);
+    syncRows(stdout, state, ["a", "b"]);
+    expect(state.drawn).toBe(2);
+    syncRows(stdout, state, ["a"]);
+    expect(state.drawn).toBe(1);
+    // Shrink pass: up 2, draw 1 row, clear 1 surplus line, back up 1.
+    const tail = writes.slice(-4);
+    expect(tail[0]).toBe("\x1b[2A");
+    expect(tail[1]).toBe("\r\x1b[2Ka\n");
+    expect(tail[2]).toBe("\r\x1b[2K\n");
+    expect(tail[3]).toBe("\x1b[1A");
+  });
+
+  it("emits no cursor motion on first draw", () => {
+    const { writes, stdout } = stream();
+    const state = { drawn: 0 };
+    syncRows(stdout, state, ["only"]);
+    expect(writes).toEqual(["\r\x1b[2Konly\n"]);
   });
 });
