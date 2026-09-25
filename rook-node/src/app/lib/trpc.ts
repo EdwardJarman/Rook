@@ -22,6 +22,13 @@ const stubRouter = t.router({
   workroom: t.router({
     reply: t.procedure.query(() => null),
   }),
+  cloud: t.router({
+    load: t.procedure.query(() => null),
+    save: t.procedure.mutation(() => null),
+  }),
+  excel: t.router({
+    resolveAction: t.procedure.mutation(() => null),
+  }),
   nodes: t.router({
     listLinkedFolders: t.procedure.query(() => [] as never),
     addLinkedFolder: t.procedure.mutation(() => null),

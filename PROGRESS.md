@@ -1,5 +1,31 @@
 # Rook Desktop — Live Progress
 
+Last updated: 2026-09-09 — **AI backend loop-mode upgrade (streaming, memory, computer tools, fallback router)**
+
+## AI backend loop-mode upgrade (2026-09-09, local only — not pushed)
+Grok-Bot-parity pass on the server agent plus live replies, all additive and
+backward-compatible (`workroom.reply` still works; streaming falls back to it):
+1. **Streaming replies** — new `POST /api/agent/stream` (SSE, Clerk-authed)
+   served by `runRookAgentStream` (same setup + shared tool dispatcher as the
+   normal turn). Chat prefers streaming with a live token bubble and falls
+   back to the mutation; if tools already ran mid-stream it never retries
+   (no double approvals) — partial text is kept honestly with a "cut off" note.
+2. **Bot memory loop** — the stored per-Bot `memory` field is now sent with
+   every turn and injected into the system prompt; durable facts/preferences
+   are extracted deterministically (no extra model call, secrets excluded)
+   and returned as `suggestedMemories`, which the client appends via a new
+   `updateBotMemory` store action (deduped, capped, snapshot-synced).
+3. **Computer tools** — the model can now call `computer_status` (live
+   paired/online state, no secrets) and `computer_propose_task` (validated
+   proposal, max 2/turn, never executes). Proposals surface as Medium
+   approvals in Updates and run from the Computer panel.
+4. **Fallback router + telemetry** — transient provider wobbles fail over
+   across configured shared providers (never TO ChatGPT billing) with a
+   circuit breaker; every turn is recorded (shapes/timings only) and visible
+   via `trpc.ai.turns`. Verified: `pnpm check` clean, full suite 162 passed.
+   Still roadmap: true scheduled routines, skill-instruction bodies, E2B-style
+   cloud execution (Rook Node stays the computer).
+
 Last updated: 2026-09-07 — **GitHub connector shipped across web, mobile, and desktop**
 
 ## GitHub connector (2026-09-07)

@@ -86,8 +86,10 @@ function SessionNavigator() {
     const isAuthRoute = route === "sign-in" || route === "sign-up";
     const isOnboardingRoute = route === "onboarding";
     const isPublicLandingRoute = route === "index" || pathname === "/";
-    // Rook Node pairing pages and public download pages handle their own sign-in prompt.
-    const isSelfManagedRoute = route === "connect-node" || route === "download";
+    // Rook Node pairing pages, public download pages, and the CLI device
+    // approval handle their own sign-in prompt.
+    const isSelfManagedRoute =
+      route === "connect-node" || route === "download" || route === "cli-auth";
     const pairingRequest = browserDesktopPairingRequest();
     if (loading) return;
 
@@ -125,11 +127,11 @@ function SessionNavigator() {
       router.replace(onboardingComplete ? "/(tabs)" : ("/onboarding" as never));
       return;
     }
-    // Self-managed routes (download, connect-node) are public surfaces that
-    // must never be auto-redirected away from — a signed-in user who hasn't
-    // finished onboarding should still be able to download Rook, and a
-    // desktop pairing handoff must reach connect-node before any other
-    // gate runs.
+    // Self-managed routes (download, connect-node, cli-auth) are public
+    // surfaces that must never be auto-redirected away from — a signed-in
+    // user who hasn't finished onboarding should still be able to download
+    // Rook, and a desktop pairing handoff must reach connect-node, or a
+    // terminal pairing reach cli-auth, before any other gate runs.
     if (isSelfManagedRoute) return;
     if (!onboardingComplete && !isOnboardingRoute)
       router.replace("/onboarding" as never);
@@ -150,6 +152,7 @@ function SessionNavigator() {
   const isSelfManagedRouteForGate =
     routeForGate === "connect-node" ||
     routeForGate === "download" ||
+    routeForGate === "cli-auth" ||
     Boolean(browserDesktopPairingRequest());
   if (
     loading ||
@@ -189,6 +192,7 @@ function SessionNavigator() {
       <Stack.Screen name="onboarding" />
       <Stack.Screen name="connect-node" />
       <Stack.Screen name="download" />
+      <Stack.Screen name="cli-auth" />
       <Stack.Screen name="(tabs)" />
     </Stack>
   );

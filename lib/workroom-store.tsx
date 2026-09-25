@@ -48,6 +48,11 @@ export type Bot = {
   model: string;
   lastActive: string;
 };
+export type WorkMessageFile = {
+  name: string;
+  mimeType: string;
+  content: string;
+};
 export type WorkMessage = {
   id: string;
   botId: string;
@@ -60,6 +65,8 @@ export type WorkMessage = {
   attachmentName?: string;
   /** Data URIs for images pasted or dragged into the composer with this message. */
   imageUris?: string[];
+  /** Agent-built files attached to a bot reply: real bytes, openable in-app. */
+  files?: WorkMessageFile[];
   trace?: AgentTraceStep[];
 };
 export type WorkTask = {
@@ -101,10 +108,27 @@ export type Approval = {
   risk: "Medium" | "High";
   state: "Pending" | "Approved" | "Declined";
   createdAt: string;
+  /** Epoch ms at creation (local clock) — used for stale-approval reconciliation. */
+  createdAtMs: number;
   externalActionId?: string;
   /** Which resolver owns this proposal (excel vs local vs cloud computer). */
   kind?: "excel" | "local" | "cloud";
   taskId?: string;
+  /**
+   * Preserved computer-proposal payload (proposalId/url) so a second device
+   * — or the Computer panel — can act on it instead of reading a dead note.
+   */
+  proposalId?: string;
+  proposalUrl?: string;
+  /**
+   * Set only for composer-blocked (High pre-review) approvals: the exact
+   * message that never reached the AI. Lets the chat thread offer
+   * Send-anyway / Edit / Discard instead of dead-ending the request.
+   */
+  blockedBody?: string;
+  blockedImageUris?: string[];
+  conversationId?: string;
+  blockedConnectors?: Array<"microsoft-excel" | "github">;
 };
 export type WorkFile = {
   id: string;
@@ -162,6 +186,12 @@ type WorkroomContextValue = {
   createBot: (values: BotInput) => Bot;
   updateBotStatus: (id: string, status: Bot["status"]) => void;
   updateBotModel: (id: string, model: string) => void;
+  /**
+   * Appends durable memory lines ("key: value") suggested by the server
+   * after a turn. Dedupes + caps like the server merge so the field — which
+   * is sent back on every future turn and synced via snapshot — stays small.
+   */
+  updateBotMemory: (id: string, entries: Array<{ key: string; value: string }>) => void;
   addMessage: (message: Omit<WorkMessage, "id" | "createdAt">) => void;
   addTask: (task: Omit<WorkTask, "id" | "startedAt">) => WorkTask;
   updateTaskStatus: (
@@ -172,7 +202,7 @@ type WorkroomContextValue = {
   /** Group workroom: reassign an in-progress task to a different Bot in the room. */
   handOffTask: (taskId: string, toBotId: string, note?: string) => void;
   addSkill: (skill: Omit<Skill, "id">) => void;
-  addApproval: (approval: Omit<Approval, "id" | "createdAt" | "state">) => void;
+  addApproval: (approval: Omit<Approval, "id" | "createdAt" | "createdAtMs" | "state">) => void;
   addRoutine: (routine: Omit<Routine, "id">) => void;
   toggleRoutine: (id: string) => void;
   resolveApproval: (id: string, state: "Approved" | "Declined") => void;
@@ -409,6 +439,40 @@ export function WorkroomProvider({ children }: { children: ReactNode }) {
       ),
     [],
   );
+  const updateBotMemory = useCallback(
+    (id: string, entries: Array<{ key: string; value: string }>) => {
+      if (!entries.length) return;
+      setBots((current) =>
+        current.map((bot) => {
+          if (bot.id !== id) return bot;
+          const base =
+            /^no preferences saved yet\.?$/i.test(bot.memory.trim()) ? "" : bot.memory;
+          const lines = base
+            .split("\n")
+            .map((line) => line.trim())
+            .filter(Boolean);
+          let changed = false;
+          for (const entry of entries) {
+            const cleanValue = entry.value.replace(/\s+/g, " ").trim().slice(0, 160);
+            if (cleanValue.length < 3) continue;
+            const line = `${entry.key}: ${cleanValue}`;
+            const duplicate = lines.some(
+              (existing) =>
+                existing.toLowerCase() === line.toLowerCase() ||
+                existing.toLowerCase().endsWith(cleanValue.toLowerCase()),
+            );
+            if (duplicate) continue;
+            lines.push(line);
+            changed = true;
+          }
+          if (!changed) return bot;
+          const trimmed = lines.slice(-20).join("\n").slice(-2000);
+          return { ...bot, memory: trimmed.trim(), lastActive: "Memory updated" };
+        }),
+      );
+    },
+    [],
+  );
   const addTask = useCallback((task: Omit<WorkTask, "id" | "startedAt">) => {
     const next = { ...task, id: makeId("task"), startedAt: timeNow() };
     setTasks((current) => [next, ...current]);
@@ -476,13 +540,14 @@ export function WorkroomProvider({ children }: { children: ReactNode }) {
     [addActivity],
   );
   const addApproval = useCallback(
-    (approval: Omit<Approval, "id" | "createdAt" | "state">) => {
+    (approval: Omit<Approval, "id" | "createdAt" | "createdAtMs" | "state">) => {
       setApprovals((current) => [
         {
           ...approval,
           id: makeId("approval"),
           state: "Pending",
           createdAt: timeNow(),
+          createdAtMs: Date.now(),
         },
         ...current,
       ]);
@@ -606,6 +671,7 @@ export function WorkroomProvider({ children }: { children: ReactNode }) {
       createBot,
       updateBotStatus,
       updateBotModel,
+      updateBotMemory,
       addMessage,
       addTask,
       updateTaskStatus,
@@ -639,6 +705,7 @@ export function WorkroomProvider({ children }: { children: ReactNode }) {
       createBot,
       updateBotStatus,
       updateBotModel,
+      updateBotMemory,
       addMessage,
       addTask,
       updateTaskStatus,

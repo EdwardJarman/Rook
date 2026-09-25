@@ -68,7 +68,7 @@ function requireGithubConfig() {
     // production — the card surfaces this text to the user.
     throw new TRPCError({
       code: "PRECONDITION_FAILED",
-      message: `GitHub is not configured for this Rook deployment (missing ${missing.join(", ")}). Environment variables added in Vercel only apply to a NEW deployment — redeploy after saving them.`,
+      message: `GitHub is not configured for this Rook deployment (missing ${missing.join(", ")}). Add them to the server environment, then restart a local API server or redeploy a hosted one (hosts only apply new variables to new deployments).`,
     });
   }
   return {

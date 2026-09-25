@@ -3,14 +3,90 @@ import { CheckCircle2, XCircle, Clock, ShieldCheck } from "lucide-react";
 
 import { Button, Card, EmptyState, Pill, Segmented } from "@/components/primitives";
 import { useTheme } from "@/lib/theme";
-import { useWorkroom } from "@/lib/workroom";
+import { useWorkroom, workroom, type Approval } from "@/lib/workroom";
+import { getTrpcClient } from "@/lib/trpc";
+import { currentToken } from "@/lib/send-bridge";
 
 type Filter = "all" | "pending" | "approved" | "declined";
 
+type ExcelResolveResult = {
+  executed: boolean;
+  declined?: boolean;
+  summary?: string;
+};
+
 export function ApprovalsPage() {
   const { tokens } = useTheme();
-  const { approvals, decideApproval } = useWorkroom();
+  const { approvals } = useWorkroom();
   const [filter, setFilter] = useState<Filter>("pending");
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  /**
+   * Agent-turn approvals (Excel writes) execute server-side, mirroring the
+   * mobile Updates flow. Node-command and computer-proposal approvals stay
+   * local acknowledges — node commands run through the sidecar relay, and
+   * computer proposals run from the Computer panel.
+   */
+  const decide = async (approval: Approval, decision: "approved" | "declined") => {
+    if (approval.state !== "pending" || busyId) return;
+    setError(null);
+    if (approval.agentKind === "excel" && approval.externalActionId) {
+      setBusyId(approval.id);
+      try {
+        const client = getTrpcClient(currentToken);
+        const excel = (
+          client as unknown as {
+            excel: {
+              resolveAction: {
+                mutate: (input: { actionId: string; decision: "approve" | "decline" }) => Promise<ExcelResolveResult>;
+              };
+            };
+          }
+        ).excel;
+        const result = await excel.resolveAction.mutate({
+          actionId: approval.externalActionId,
+          decision: decision === "approved" ? "approve" : "decline",
+        });
+        workroom.decideApproval(approval.id, decision);
+        if (result.executed) {
+          workroom.updateTask(approval.taskId, {
+            status: "Completed",
+            summary: "The approved Excel change was applied successfully.",
+            nextAction: "Review the result and decide what happens next.",
+          });
+          workroom.addMessage({
+            id: `m-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+            botId: approval.botId,
+            author: "bot",
+            body: `Excel updated. ${result.summary ?? approval.summary}`,
+            createdAt: new Date().toISOString(),
+            kind: "result",
+            taskId: approval.taskId,
+          });
+        } else {
+          workroom.updateTask(approval.taskId, {
+            status: "Cancelled",
+            summary: "The proposed Excel change was declined.",
+            nextAction: "Ask the Bot to prepare it again if needed.",
+          });
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Rook could not complete this Excel action. Nothing was changed.");
+      } finally {
+        setBusyId(null);
+      }
+      return;
+    }
+    workroom.decideApproval(approval.id, decision);
+    if (decision === "declined" && approval.taskId) {
+      workroom.updateTask(approval.taskId, {
+        status: "Cancelled",
+        summary: "Discarded before acting. Nothing was attempted.",
+        nextAction: "Send a new message to start over.",
+      });
+    }
+  };
 
   const filtered = approvals.filter((a) =>
     filter === "all" ? true : filter === "pending" ? a.state === "pending" : a.state === filter,
@@ -44,6 +120,9 @@ export function ApprovalsPage() {
         />
       </header>
 
+      {error ? (
+        <div style={{ fontSize: 12.5, color: tokens.coral }}>{error}</div>
+      ) : null}
       {filtered.length === 0 ? (
         <EmptyState
           icon={<ShieldCheck size={20} />}
@@ -82,17 +161,19 @@ export function ApprovalsPage() {
                   <>
                     <Button
                       size="sm"
-                      variant="primary"
-                      onClick={() => decideApproval(a.id, "approved")}
+                      variant="danger"
+                      disabled={busyId === a.id}
+                      onClick={() => void decide(a, "declined")}
                     >
-                      Approve
+                      Decline
                     </Button>
                     <Button
                       size="sm"
-                      variant="danger"
-                      onClick={() => decideApproval(a.id, "declined")}
+                      variant="primary"
+                      disabled={busyId === a.id}
+                      onClick={() => void decide(a, "approved")}
                     >
-                      Decline
+                      {busyId === a.id ? "Working…" : "Approve"}
                     </Button>
                   </>
                 ) : null}

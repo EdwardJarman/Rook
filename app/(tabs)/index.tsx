@@ -1,5 +1,6 @@
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system/legacy";
+import * as Sharing from "expo-sharing";
 import {
   RecordingPresets,
   requestRecordingPermissionsAsync,
@@ -9,12 +10,14 @@ import {
 } from "expo-audio";
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import { useRouter } from "expo-router";
+import { useAuth as useClerkAuth } from "@clerk/expo";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Image,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -54,8 +57,11 @@ import {
   matchingBotsForMention,
   trailingBotMentionQuery,
 } from "@/lib/bot-mentions";
+// OpenCode — real `opencode serve` turns via server/ai/opencode.ts (pick "OpenCode" in Account → Default AI provider); per-workroom sidecar runtime lives in rook-node/src/opencode/runtime.ts
 import { useDesktopSidebar } from "@/lib/desktop-sidebar-state";
 import { useRookNotifications } from "@/lib/rook-notifications";
+import { streamAgentReply } from "@/lib/agent-stream";
+import { getApiBaseUrl } from "@/constants/oauth";
 import { trpc } from "@/lib/trpc";
 import { tint } from "@/lib/ui";
 import {
@@ -70,8 +76,18 @@ import {
   type ChatMarkdownInline,
 } from "@/lib/chat-markdown";
 import { splitMathNotation } from "@/lib/math-notation";
-import { assessRisk, fileSizeLabel } from "@/lib/workroom-helpers";
+import {
+  assessRisk,
+  clampReplyField,
+  fileSizeLabel,
+  isNetworkSendError,
+  isValidationSendError,
+  REPLY_LIMITS,
+  toRecentContextEntries,
+  VALIDATION_SEND_FALLBACK,
+} from "@/lib/workroom-helpers";
 import { useWorkroom, type Approval, type Bot, type WorkMessage } from "@/lib/workroom-store";
+import type { AgentTraceStep } from "@/shared/agent-trace";
 
 /**
  * Rook is one room.
@@ -115,8 +131,44 @@ export default function ChatScreen() {
   const [filesWidth, setFilesWidth] = useState(400);
   const [excelAttached, setExcelAttached] = useState(false);
   const [githubAttached, setGithubAttached] = useState(false);
+  const [attachedSkills, setAttachedSkills] = useState<string[]>([]);
+  const toggleSkill = (id: string) =>
+    setAttachedSkills((current) =>
+      current.includes(id) ? current.filter((entry) => entry !== id) : [...current, id],
+    );
   const [pendingImages, setPendingImages] = useState<PastedImage[]>([]);
   const [imageDropActive, setImageDropActive] = useState(false);
+  /** Live tokens + activity steps for the in-flight streamed reply; null when idle. Render-only. */
+  const [streamingDraft, setStreamingDraft] = useState<{
+    botId: string;
+    text: string;
+    steps: AgentTraceStep[];
+  } | null>(null);
+  /** Agent-built file open in the right-hand code panel; null when closed. */
+  const [viewerFile, setViewerFile] = useState<{
+    name: string;
+    mimeType: string;
+    content: string;
+  } | null>(null);
+  const streamAbortRef = useRef<AbortController | null>(null);
+  /**
+   * One-shot resend payload for High-blocked messages ("Send anyway" on a
+   * blocked approval card). handleSend consumes and clears it, so the full
+   * battle-tested send pipeline runs verbatim — no duplicated send logic.
+   */
+  const sendOverrideRef = useRef<{
+    body: string;
+    images: PastedImage[];
+  } | null>(null);
+  const { getToken } = useClerkAuth();
+  const getTokenRef = useRef(getToken);
+  getTokenRef.current = getToken;
+  useEffect(
+    () => () => {
+      streamAbortRef.current?.abort();
+    },
+    [],
+  );
   const replyMutation = trpc.workroom.reply.useMutation();
   const voiceMutation = trpc.voice.transcribe.useMutation();
   const modelCatalog = trpc.ai.models.useQuery(undefined, {
@@ -194,7 +246,6 @@ export default function ChatScreen() {
   const [resolvingApprovalId, setResolvingApprovalId] = useState<string | null>(
     null,
   );
-  const [replyStartedAtMs, setReplyStartedAtMs] = useState(() => Date.now());
 
   /**
    * Approvals resolve here, in the chat — no tab switching. The proposal card
@@ -341,11 +392,23 @@ export default function ChatScreen() {
   useEffect(() => {
     if (visibleMessages.length > 0)
       threadRef.current?.scrollToEnd({ animated: true });
-  }, [visibleMessages.length, replyMutation.isPending]);
+  }, [visibleMessages.length]);
+
+  /* Pin to the bottom while live tokens arrive. */
+  useEffect(() => {
+    if (streamingDraft && streamingDraft.text.length > 0)
+      threadRef.current?.scrollToEnd({ animated: false });
+  }, [streamingDraft]);
 
   const handleSend = async () => {
-    const clean = composer.trim();
-    const images = pendingImages;
+    const override = sendOverrideRef.current;
+    sendOverrideRef.current = null;
+    const clean = (override?.body ?? composer).trim();
+    const overrideUris = new Set((override?.images ?? []).map((image) => image.uri));
+    const images = [
+      ...(override?.images ?? []),
+      ...pendingImages.filter((image) => !overrideUris.has(image.uri)),
+    ];
     if ((!clean && !images.length) || !activeBot) return;
     if (!resolvedModel) {
       Alert.alert(
@@ -356,12 +419,25 @@ export default function ChatScreen() {
       );
       return;
     }
-    // Auto-Review: classify risk into Low/Medium/High rather than a single
-    // approve-or-not boolean. Low risk (drafting, research, reading) never
-    // creates approval friction; only Medium/High pause for a decision.
+    // Auto-Review: only High risk (irreversible, financial, live-system)
+    // pauses sending for an explicit decision. Medium labels the task but
+    // never blocks — every real consequence is gated server-side anyway.
+    // A blocked message is stored on its approval so the thread card can
+    // offer Send anyway / Edit / Discard instead of dead-ending.
     const messageBody = clean || (images.length ? "Shared an image." : "");
+    // Over-long messages fail server validation with a raw error payload —
+    // stop before creating anything, keeping the composer text intact.
+    if (messageBody.length > REPLY_LIMITS.message) {
+      Alert.alert(
+        "Message too long",
+        `That message is ${messageBody.length.toLocaleString()} characters; Rook sends up to ${REPLY_LIMITS.message.toLocaleString()} per turn. Shorten it or split it across messages — nothing was sent.`,
+      );
+      return;
+    }
     const risk = assessRisk(messageBody);
-    const requiresReview = risk.tier !== "Low";
+    // An approved override already passed review: normal task labels, and
+    // the user message is already in the thread from the blocked attempt.
+    const requiresReview = risk.tier === "High" && !override;
     const task = workroom.addTask({
       botId: activeBot.id,
       title:
@@ -384,13 +460,15 @@ export default function ChatScreen() {
         { id: "return", label: "Return the result", state: "pending" },
       ],
     });
-    workroom.addMessage({
-      botId: activeBot.id,
-      author: "user",
-      body: messageBody,
-      conversationId: activeChatId,
-      imageUris: images.length ? images.map((image) => image.uri) : undefined,
-    });
+    if (!override) {
+      workroom.addMessage({
+        botId: activeBot.id,
+        author: "user",
+        body: messageBody,
+        conversationId: activeChatId,
+        imageUris: images.length ? images.map((image) => image.uri) : undefined,
+      });
+    }
     setComposer("");
     setPendingImages([]);
     if (requiresReview) {
@@ -398,7 +476,19 @@ export default function ChatScreen() {
         botId: activeBot.id,
         title: task.title,
         detail: risk.reason,
-        risk: risk.tier === "High" ? "High" : "Medium",
+        risk: "High",
+        blockedBody: messageBody,
+        // Cap: pasted images are data URIs that can bloat the synced
+        // snapshot by megabytes. Resend restores these; extras stay in the
+        // already-posted user message for reference.
+        blockedImageUris: images.length
+          ? images.slice(0, 5).map((image) => image.uri)
+          : undefined,
+        conversationId: activeChatId,
+        blockedConnectors: [
+          ...(excelAttached ? (["microsoft-excel"] as const) : []),
+          ...(githubAttached ? (["github"] as const) : []),
+        ],
       });
       void sendTaskAlert({
         kind: "approval",
@@ -410,7 +500,7 @@ export default function ChatScreen() {
         botId: activeBot.id,
         author: "bot",
         conversationId: activeChatId,
-        body: `I can prepare the work, but I need your approval before this step. ${risk.reason}`,
+        body: `I can prepare the work, but I need your approval before this step. ${risk.reason} Approve below to send it anyway, or discard it.`,
         kind: "approval",
         taskId: task.id,
       });
@@ -423,14 +513,12 @@ export default function ChatScreen() {
         "Working",
         "Finishing the requested work.",
       );
-      const response = await (async () => {
-        setReplyStartedAtMs(Date.now());
-        return replyMutation.mutateAsync({
+      const replyInput = {
         botId: activeBot.id,
         taskId: task.id,
-        botName: activeBot.name,
-        botRole: activeBot.role,
-        botPurpose: activeBot.purpose,
+        botName: clampReplyField(activeBot.name, REPLY_LIMITS.botName),
+        botRole: clampReplyField(activeBot.role, REPLY_LIMITS.botRole),
+        botPurpose: clampReplyField(activeBot.purpose, REPLY_LIMITS.botPurpose),
         model: resolvedModel.id,
         message: messageBody,
         userTimeZone: deviceTimeZone(),
@@ -438,18 +526,89 @@ export default function ChatScreen() {
           ...(excelAttached ? (["microsoft-excel"] as const) : []),
           ...(githubAttached ? (["github"] as const) : []),
         ],
-        recentContext: visibleMessages
-          .slice(-6)
-          .map((message) => ({ author: message.author, body: message.body })),
+        skillIds: attachedSkills.length ? [...attachedSkills] : undefined,
+        botMemory: clampReplyField(activeBot.memory, REPLY_LIMITS.botMemory),
+        recentContext: toRecentContextEntries(visibleMessages.slice(-6)),
+      };
+      // Fast path: live token streaming. Any failure — endpoint missing,
+      // auth hiccup, mid-stream cut before tools ran — falls back to the
+      // request/response mutation below, which stays the supported path.
+      // If tools already ran during the stream, do NOT retry (it would
+      // double up approvals); surface the partial failure instead.
+      let response: Awaited<
+        ReturnType<typeof replyMutation.mutateAsync>
+      > | null = null;
+      let streamTouchedTools = false;
+      streamAbortRef.current?.abort();
+      const streamController = new AbortController();
+      streamAbortRef.current = streamController;
+      const isCurrentStream = () => streamAbortRef.current === streamController;
+      setStreamingDraft({ botId: activeBot.id, text: "", steps: [] });
+      try {
+        const streamed = await streamAgentReply({
+          baseUrl: getApiBaseUrl(),
+          body: replyInput,
+          getToken: () => getTokenRef.current(),
+          signal: streamController.signal,
+          callbacks: {
+            onToken: (delta) => {
+              if (!isCurrentStream()) return;
+              setStreamingDraft((current) =>
+                current ? { ...current, text: current.text + delta } : current,
+              );
+            },
+            onTrace: (step) => {
+              if (!isCurrentStream()) return;
+              setStreamingDraft((current) =>
+                current
+                  ? { ...current, steps: [...current.steps, step].slice(-8) }
+                  : current,
+              );
+            },
+            onToolActivity: () => {
+              streamTouchedTools = true;
+            },
+          },
         });
-      })();
+        response = {
+          ...streamed,
+          pushDelivery: streamed.pushDelivery ?? { accepted: false, recipients: 0 },
+        } as Awaited<ReturnType<typeof replyMutation.mutateAsync>>;
+      } catch (streamError) {
+        if (streamTouchedTools) throw streamError;
+        response = null;
+      } finally {
+        if (isCurrentStream()) {
+          streamAbortRef.current = null;
+          setStreamingDraft(null);
+        }
+      }
+      if (!response) {
+        try {
+          response = await replyMutation.mutateAsync(replyInput);
+        } catch (mutationError) {
+          // First send after a cold start / reconnect often dies on the
+          // transport while the retry succeeds — one automatic retry so
+          // the user never has to send twice. Auth/validation errors are
+          // never retried; they surface immediately below.
+          if (!isNetworkSendError(mutationError)) throw mutationError;
+          await new Promise((resolve) => setTimeout(resolve, 1200));
+          response = await replyMutation.mutateAsync(replyInput);
+        }
+      }
       setExcelAttached(false);
       setGithubAttached(false);
-      if (response.approvals.length) {
+      setAttachedSkills([]);
+      if (response.suggestedMemories?.length)
+        workroom.updateBotMemory(activeBot.id, response.suggestedMemories);
+      const computerProposals = response.computerProposals ?? [];
+      if (response.approvals.length || computerProposals.length) {
         workroom.updateTaskStatus(
           task.id,
           "Approval required",
-          "Review the exact Excel change in Updates.",
+          response.approvals.length
+            ? "Review the exact Excel change in this chat."
+            : "Review the proposed computer task in this chat.",
         );
         response.approvals.forEach((approval) =>
           workroom.addApproval({
@@ -462,11 +621,30 @@ export default function ChatScreen() {
             risk: approval.risk,
           }),
         );
+        computerProposals.forEach((proposal) =>
+          workroom.addApproval({
+            botId: activeBot.id,
+            taskId: task.id,
+            title: proposal.title,
+            detail:
+              proposal.detail ??
+              (proposal.url
+                ? `Starting page: ${proposal.url}. Run it from the Computer panel once a Rook Node is online.`
+                : "Review the plan above, then run it from the Computer panel once a Rook Node is online."),
+            risk: "Medium",
+            proposalId: proposal.proposalId,
+            ...(proposal.url ? { proposalUrl: proposal.url } : {}),
+          }),
+        );
         if (!response.pushDelivery.accepted)
           void sendTaskAlert({
             kind: "approval",
-            title: "Excel change needs approval",
-            body: `${activeBot.name} prepared a workbook change`,
+            title: response.approvals.length
+              ? "Excel change needs approval"
+              : "Computer task proposed",
+            body: response.approvals.length
+              ? `${activeBot.name} prepared a workbook change`
+              : `${activeBot.name} proposed a computer task`,
             url: "/",
           });
       } else {
@@ -482,12 +660,16 @@ export default function ChatScreen() {
         author: "bot",
         conversationId: activeChatId,
         body: response.text,
-        kind: response.approvals.length ? "approval" : "message",
+        kind:
+          response.approvals.length || computerProposals.length
+            ? "approval"
+            : "message",
         trace: response.trace,
         taskId: task.id,
+        files: response.files,
       });
       if (
-        !response.approvals.length &&
+        (!response.approvals.length && !computerProposals.length) &&
         notificationPreferences.completion &&
         !response.pushDelivery.accepted
       )
@@ -498,10 +680,14 @@ export default function ChatScreen() {
           url: "/",
         });
     } catch (error) {
-      const message =
+      const raw =
         error instanceof Error && error.message
           ? error.message
           : "Free AI capacity is unavailable right now. Please try again shortly.";
+      // Validation-shaped rejections must never render raw (they read as
+      // `[{ "code": "too_big", … }]`). The clamps above make them rare;
+      // this is the backstop.
+      const message = isValidationSendError(error) ? VALIDATION_SEND_FALLBACK : raw;
       workroom.updateTaskStatus(task.id, "Partially completed", message);
       workroom.updateBotStatus(activeBot.id, "Ready");
       workroom.addMessage({
@@ -514,11 +700,70 @@ export default function ChatScreen() {
     }
   };
 
+  const linkedBlockedApproval = (taskId?: string) =>
+    taskId
+      ? approvals.find(
+          (entry) =>
+            entry.taskId === taskId &&
+            entry.state === "Pending" &&
+            typeof entry.blockedBody === "string",
+        )
+      : undefined;
+
+  const sendBlockedAnyway = async (approval: Approval) => {
+    if (!approval.blockedBody) return;
+    if (approval.botId !== activeBot?.id) {
+      const owner = bots.find((entry) => entry.id === approval.botId);
+      focusChatBot(approval.botId);
+      Alert.alert(
+        "Switched focus",
+        `Moved focus to ${owner?.name ?? "that Bot"} — tap Send anyway again to send it.`,
+      );
+      return;
+    }
+    if (approval.taskId)
+      workroom.updateTaskStatus(
+        approval.taskId,
+        "Cancelled",
+        "Approved — continuing in a new turn below.",
+      );
+    workroom.resolveApproval(approval.id, "Approved");
+    sendOverrideRef.current = {
+      body: approval.blockedBody,
+      images: (approval.blockedImageUris ?? []).map((uri) => ({
+        uri,
+        name: uri.split("/").pop() ?? "image",
+      })),
+    };
+    await handleSend();
+  };
+
+  const editBlocked = (approval: Approval) => {
+    if (approval.blockedBody) setComposer(approval.blockedBody);
+    if (approval.blockedImageUris?.length)
+      setPendingImages(
+        approval.blockedImageUris.map((uri) => ({
+          uri,
+          name: uri.split("/").pop() ?? "image",
+        })),
+      );
+    workroom.resolveApproval(approval.id, "Declined");
+  };
+
+  const discardBlocked = (approval: Approval) => {
+    workroom.resolveApproval(approval.id, "Declined");
+    if (approval.taskId)
+      workroom.updateTaskStatus(
+        approval.taskId,
+        "Cancelled",
+        "Discarded before sending. Nothing was attempted.",
+      );
+  };
+
   const addPendingImages = (images: PastedImage[]) => {
     if (!images.length) return;
     setPendingImages((current) => [...current, ...images]);
-  };
-  const removePendingImage = (uri: string) =>
+  };  const removePendingImage = (uri: string) =>
     setPendingImages((current) => current.filter((image) => image.uri !== uri));
   const composerImageDropProps = imageDropTargetProps({
     onEnter: () => setImageDropActive(true),
@@ -731,7 +976,7 @@ export default function ChatScreen() {
               <IconButton
                 icon="folder-open"
                 label={`Open ${activeBot.name}'s files`}
-                onPress={() => setFilesOpen((open) => !open)}
+                onPress={() => setFilesOpen(true)}
               />
             ) : null}
             <IconButton
@@ -1257,11 +1502,11 @@ export default function ChatScreen() {
                         );
                       }
                       if (message.kind === "approval") {
+                        const blocked = linkedBlockedApproval(message.taskId);
                         return (
                           <View
                             key={message.id}
                             style={{
-                              flexDirection: "row",
                               gap: 10,
                               backgroundColor: colors.amberSoft,
                               borderWidth: 1,
@@ -1270,33 +1515,214 @@ export default function ChatScreen() {
                               padding: 13,
                             }}
                           >
-                            <MaterialIcons
-                              name="shield"
-                              size={17}
-                              color={colors.amber}
-                            />
-                            <ChatMarkdown
-                              text={message.body}
-                              color={colors.text}
-                              baseSize={13.5}
-                            />
+                            <View style={{ flexDirection: "row", gap: 10 }}>
+                              <MaterialIcons
+                                name="shield"
+                                size={17}
+                                color={colors.amber}
+                              />
+                              <View style={{ flex: 1, minWidth: 0 }}>
+                                <ChatMarkdown
+                                  text={message.body}
+                                  color={colors.text}
+                                  baseSize={13.5}
+                                  colors={colors}
+                                />
+                              </View>
+                            </View>
+                            {blocked ? (
+                              <View style={{ flexDirection: "row", gap: 8 }}>
+                                <Pressable
+                                  accessibilityRole="button"
+                                  accessibilityLabel="Send blocked message anyway"
+                                  onPress={() => void sendBlockedAnyway(blocked)}
+                                  style={({ pressed }) => [
+                                    {
+                                      flex: 1,
+                                      minHeight: 40,
+                                      flexDirection: "row",
+                                      alignItems: "center",
+                                      justifyContent: "center",
+                                      gap: 6,
+                                      borderRadius: 12,
+                                      backgroundColor: colors.ink,
+                                    },
+                                    pressed && { opacity: 0.78 },
+                                  ]}
+                                >
+                                  <MaterialIcons
+                                    name="send"
+                                    size={14}
+                                    color={colors.onInk}
+                                  />
+                                  <Text
+                                    style={{
+                                      color: colors.onInk,
+                                      fontSize: 13,
+                                      fontWeight: "600",
+                                    }}
+                                  >
+                                    Send anyway
+                                  </Text>
+                                </Pressable>
+                                <Pressable
+                                  accessibilityRole="button"
+                                  accessibilityLabel="Edit blocked message"
+                                  onPress={() => editBlocked(blocked)}
+                                  style={({ pressed }) => [
+                                    {
+                                      minHeight: 40,
+                                      paddingHorizontal: 14,
+                                      flexDirection: "row",
+                                      alignItems: "center",
+                                      justifyContent: "center",
+                                      borderRadius: 12,
+                                      borderWidth: 1,
+                                      borderColor: colors.lineStrong,
+                                      backgroundColor: colors.surface,
+                                    },
+                                    pressed && { opacity: 0.7 },
+                                  ]}
+                                >
+                                  <Text
+                                    style={{
+                                      color: colors.text,
+                                      fontSize: 13,
+                                      fontWeight: "600",
+                                    }}
+                                  >
+                                    Edit
+                                  </Text>
+                                </Pressable>
+                                <Pressable
+                                  accessibilityRole="button"
+                                  accessibilityLabel="Discard blocked message"
+                                  onPress={() => discardBlocked(blocked)}
+                                  style={({ pressed }) => [
+                                    {
+                                      minHeight: 40,
+                                      paddingHorizontal: 14,
+                                      flexDirection: "row",
+                                      alignItems: "center",
+                                      justifyContent: "center",
+                                      borderRadius: 12,
+                                    },
+                                    pressed && { opacity: 0.7 },
+                                  ]}
+                                >
+                                  <Text
+                                    style={{
+                                      color: colors.textFaint,
+                                      fontSize: 13,
+                                      fontWeight: "600",
+                                    }}
+                                  >
+                                    Discard
+                                  </Text>
+                                </Pressable>
+                              </View>
+                            ) : null}
                           </View>
                         );
                       }
                       // Ordinary bot reply: plain text with the real activity trace.
                       return (
-                        <BotMessage
+                        <View
                           key={message.id}
-                          message={message}
-                          bot={source}
-                        />
+                          style={{
+                            flexDirection: "row",
+                            gap: 10,
+                            paddingRight: 20,
+                          }}
+                        >
+                          <View style={{ width: 28, alignItems: "center" }}>
+                            <Avatar
+                              label={source?.avatar ?? "?"}
+                              color={source?.color}
+                              icon={source?.icon}
+                              size={28}
+                            />
+                          </View>
+                          <View style={{ flex: 1, minWidth: 0 }}>
+                            {message.trace?.length && source ? (
+                              <AgentActivityTrace
+                                bot={source}
+                                trace={message.trace}
+                              />
+                            ) : null}
+                            <ChatMarkdown
+                              text={message.body}
+                              color={colors.text}
+                              baseSize={15}
+                              colors={colors}
+                            />
+                            {message.attachmentName ? (
+                              <FileChip name={message.attachmentName} />
+                            ) : null}
+                            {message.files?.map((file) => (
+                              <AgentFileCard
+                                key={file.name}
+                                file={file}
+                                onOpen={setViewerFile}
+                              />
+                            ))}
+                            <Text
+                              style={{
+                                color: colors.textFaint,
+                                fontSize: 10.5,
+                                marginTop: 5,
+                              }}
+                            >
+                              {message.createdAt}
+                            </Text>
+                          </View>
+                        </View>
                       );
                     })}
+                    {streamingDraft &&
+                    activeBot &&
+                    streamingDraft.botId === activeBot.id ? (
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          gap: 10,
+                          paddingRight: 20,
+                        }}
+                      >
+                        <View style={{ width: 28, alignItems: "center" }}>
+                          <Avatar
+                            label={activeBot.avatar}
+                            color={activeBot.color}
+                            icon={activeBot.icon}
+                            size={28}
+                          />
+                        </View>
+                        <View style={{ flex: 1, minWidth: 0 }}>
+                          {streamingDraft.steps.length ? (
+                            <AgentActivityTrace
+                              bot={activeBot}
+                              trace={streamingDraft.steps}
+                              live
+                            />
+                          ) : null}
+                          {streamingDraft.text ? (
+                            <ChatMarkdown
+                              text={`${streamingDraft.text} ▍`}
+                              color={colors.text}
+                              baseSize={15}
+                              colors={colors}
+                            />
+                          ) : (
+                            // Keep the working state visible until the first
+                            // text arrives: setup steps alone look finished,
+                            // and a quiet trace plus silence reads as a hang.
+                            <AiWorkingIndicator bot={activeBot} />
+                          )}
+                        </View>
+                      </View>
+                    ) : null}
                     {replyMutation.isPending && activeBot ? (
-                      <AiWorkingIndicator
-                        bot={activeBot}
-                        startedAtMs={replyStartedAtMs}
-                      />
+                      <AiWorkingIndicator bot={activeBot} />
                     ) : null}
                   </View>
                 ) : (
@@ -1576,11 +2002,17 @@ export default function ChatScreen() {
                     <ComposerControl
                       icon="add"
                       label={
-                        excelAttached || githubAttached
-                          ? `${excelAttached ? "Microsoft Excel" : "GitHub"} attached. Open connectors`
+                        excelAttached || githubAttached || attachedSkills.length
+                          ? `${[
+                              ...(excelAttached ? ["Microsoft Excel"] : []),
+                              ...(githubAttached ? ["GitHub"] : []),
+                              ...(attachedSkills.length
+                                ? [`${attachedSkills.length} skill${attachedSkills.length > 1 ? "s" : ""}`]
+                                : []),
+                            ].join(" + ")} attached. Open connectors`
                           : "Open connectors"
                       }
-                      active={excelAttached || githubAttached}
+                      active={excelAttached || githubAttached || attachedSkills.length > 0}
                       onPress={() => setConnectorsOpen(true)}
                     />
                     <ComposerModelPicker
@@ -1851,6 +2283,8 @@ export default function ChatScreen() {
         onClose={() => setConnectorsOpen(false)}
         onSelectExcel={() => setExcelAttached(true)}
         onSelectGithub={() => setGithubAttached(true)}
+        attachedSkillIds={attachedSkills}
+        onToggleSkill={toggleSkill}
       />
 
       {/* Create a Bot — shared three-step sheet. */}
@@ -1860,6 +2294,10 @@ export default function ChatScreen() {
         onCreated={(bot) => addBotToChat(bot.id)}
       />
 
+      {/* Agent-built file code panel: read + download, never auto-run. */}
+      {viewerFile ? (
+        <FileViewerPanel file={viewerFile} onClose={() => setViewerFile(null)} />
+      ) : null}
       <BotFilesDock
         open={filesOpen}
         width={filesWidth}
@@ -2036,10 +2474,12 @@ function ChatMarkdown({
   text,
   color,
   baseSize,
+  colors,
 }: {
   text: string;
   color: string;
   baseSize: number;
+  colors: { surfaceAlt: string; line: string; textFaint: string };
 }) {
   const blocks = parseChatMarkdown(text);
   return (
@@ -2063,6 +2503,48 @@ function ChatMarkdown({
               fontSize={baseSize}
               display
             />
+          );
+        }
+        if (block.type === "code") {
+          return (
+            <View
+              key={`code-${index}`}
+              style={{
+                borderRadius: 12,
+                backgroundColor: colors.surfaceAlt,
+                borderWidth: 1,
+                borderColor: colors.line,
+                paddingVertical: 10,
+                paddingHorizontal: 12,
+                gap: 6,
+              }}
+            >
+              {block.language ? (
+                <Text
+                  style={{
+                    color: colors.textFaint,
+                    fontSize: 10.5,
+                    fontWeight: "700",
+                    letterSpacing: 0.6,
+                  }}
+                >
+                  {block.language.toUpperCase()}
+                </Text>
+              ) : null}
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                <Text
+                  selectable
+                  style={{
+                    color,
+                    fontSize: baseSize - 1,
+                    lineHeight: baseSize + 6,
+                    fontFamily: "monospace",
+                  }}
+                >
+                  {block.code}
+                </Text>
+              </ScrollView>
+            </View>
           );
         }
         if (block.type === "bullet" || block.type === "ordered") {
@@ -2157,42 +2639,256 @@ function renderInlineMarkdown(
   );
 }
 
-/** Plain bot reply: text plus the real activity trace underneath. */
-function BotMessage({ message, bot }: { message: WorkMessage; bot?: Bot }) {
+/**
+ * A file an agent built during this turn, pulled back from the Rook
+ * server with real bytes. Sits at the bottom of the reply; one tap opens
+ * the code side panel — never a dead server-local path, never auto-run.
+ */
+function AgentFileCard({
+  file,
+  onOpen,
+}: {
+  file: { name: string; mimeType: string; content: string };
+  onOpen: (file: { name: string; mimeType: string; content: string }) => void;
+}) {
   const { colors } = useRookTheme();
   return (
-    <View style={{ flexDirection: "row", gap: 10, paddingRight: 20 }}>
-      <View style={{ width: 28, alignItems: "center" }}>
-        <Avatar
-          label={bot?.avatar ?? "?"}
-          color={bot?.color}
-          icon={bot?.icon}
-          size={28}
-        />
-      </View>
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`View ${file.name} code`}
+      onPress={() => onOpen(file)}
+      style={({ pressed }) => [
+        {
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 9,
+          alignSelf: "flex-start",
+          marginTop: 8,
+          backgroundColor: tint(colors.mint, 0.1),
+          borderWidth: 1,
+          borderColor: tint(colors.mint, 0.3),
+          borderRadius: 12,
+          paddingHorizontal: 11,
+          paddingVertical: 9,
+          minWidth: 180,
+        },
+        pressed && { opacity: 0.7 },
+      ]}
+    >
+      <MaterialIcons name="description" size={17} color={colors.mint} />
       <View style={{ flex: 1, minWidth: 0 }}>
-        {message.trace?.length && bot ? (
-          <AgentActivityTrace bot={bot} trace={message.trace} />
-        ) : null}
-        <ChatMarkdown text={message.body} color={colors.text} baseSize={15} />
-        {message.attachmentName ? (
-          <FileChip name={message.attachmentName} />
-        ) : null}
         <Text
-          style={{ color: colors.textFaint, fontSize: 10.5, marginTop: 5 }}
+          numberOfLines={1}
+          style={{ color: colors.text, fontSize: 12.5, fontWeight: "700" }}
         >
-          {message.createdAt}
+          {file.name}
+        </Text>
+        <Text
+          numberOfLines={1}
+          style={{ color: colors.textFaint, fontSize: 10.5, marginTop: 1 }}
+        >
+          {`${fileSizeLabel(file.content.length)} · Tap to view code`}
         </Text>
       </View>
-    </View>
+      <MaterialIcons name="chevron-right" size={17} color={colors.textFaint} />
+    </Pressable>
   );
 }
 
 /**
- * Right-side floating dock: the focused Bot's own files, browsable and
- * openable. Right-aligned overlay (never full-screen); drag the left edge
- * to resize on desktop web.
+ * Right-hand code panel for an agent-built file: read the code, download
+ * it. Deliberately no Run/Play — viewing and saving only.
  */
+function FileViewerPanel({
+  file,
+  onClose,
+}: {
+  file: { name: string; mimeType: string; content: string };
+  onClose: () => void;
+}) {
+  const { colors, dark } = useRookTheme();
+  const [busy, setBusy] = useState(false);
+
+  const downloadFile = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      if (Platform.OS === "web") {
+        const blob = new Blob([file.content], {
+          type: file.mimeType || "text/plain",
+        });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = file.name;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      } else {
+        const uri = `${FileSystem.documentDirectory}rook-${Date.now()}-${file.name}`;
+        await FileSystem.writeAsStringAsync(uri, file.content, {
+          encoding: FileSystem.EncodingType.UTF8,
+        });
+        if (await Sharing.isAvailableAsync()) {
+          await Sharing.shareAsync(uri, {
+            mimeType: file.mimeType,
+            dialogTitle: file.name,
+          });
+        } else {
+          Alert.alert("File ready", file.name);
+        }
+      }
+    } catch {
+      Alert.alert("Couldn't save the file", file.name);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      transparent
+      visible
+      animationType="fade"
+      onRequestClose={onClose}
+      statusBarTranslucent
+    >
+      <Pressable
+        accessibilityLabel="Close file viewer"
+        onPress={onClose}
+        style={{
+          flex: 1,
+          flexDirection: "row",
+          justifyContent: "flex-end",
+          backgroundColor: dark
+            ? "rgba(2, 4, 7, 0.6)"
+            : "rgba(18, 23, 31, 0.28)",
+        }}
+      >
+        <Pressable
+          accessibilityViewIsModal
+          onPress={(event) => event.stopPropagation()}
+          style={{
+            width: "92%",
+            maxWidth: 560,
+            height: "100%",
+            backgroundColor: colors.surface,
+            borderLeftWidth: 1,
+            borderLeftColor: colors.line,
+          }}
+        >
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 10,
+              paddingHorizontal: 16,
+              paddingVertical: 14,
+              borderBottomWidth: 1,
+              borderBottomColor: colors.line,
+            }}
+          >
+            <MaterialIcons name="description" size={19} color={colors.mint} />
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text
+                numberOfLines={1}
+                style={{ color: colors.text, fontSize: 14.5, fontWeight: "700" }}
+              >
+                {file.name}
+              </Text>
+              <Text
+                numberOfLines={1}
+                style={{ color: colors.textFaint, fontSize: 11, marginTop: 1 }}
+              >
+                {fileSizeLabel(file.content.length)} · Code view only
+              </Text>
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Close file viewer"
+              onPress={onClose}
+              style={({ pressed }) => [
+                {
+                  width: 34,
+                  height: 34,
+                  borderRadius: 12,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  backgroundColor: colors.surfaceAlt,
+                },
+                pressed && { opacity: 0.62 },
+              ]}
+            >
+              <MaterialIcons name="close" size={18} color={colors.textSoft} />
+            </Pressable>
+          </View>
+
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{ padding: 14 }}
+            showsVerticalScrollIndicator={false}
+          >
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <Text
+                selectable
+                style={{
+                  color: colors.text,
+                  fontSize: 12,
+                  lineHeight: 18,
+                  fontFamily: "monospace",
+                }}
+              >
+                {file.content}
+              </Text>
+            </ScrollView>
+          </ScrollView>
+
+          <View
+            style={{
+              flexDirection: "row",
+              gap: 9,
+              paddingHorizontal: 16,
+              paddingVertical: 14,
+              borderTopWidth: 1,
+              borderTopColor: colors.line,
+            }}
+          >
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={busy ? `Saving ${file.name}` : `Download ${file.name}`}
+              onPress={() => void downloadFile()}
+              style={({ pressed }) => [
+                {
+                  flex: 1,
+                  minHeight: 46,
+                  borderRadius: 15,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 8,
+                  backgroundColor: colors.ink,
+                },
+                pressed && { opacity: 0.8 },
+              ]}
+            >
+              <MaterialIcons
+                name="download"
+                size={18}
+                color={colors.onInk}
+              />
+              <Text
+                style={{ color: colors.onInk, fontSize: 14, fontWeight: "700" }}
+              >
+                {busy ? "Saving…" : "Download"}
+              </Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+/** Right-side panel: the focused Bot's own files, browsable and openable. */
 function BotFilesDock({
   open,
   width,

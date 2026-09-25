@@ -28,20 +28,31 @@ const iconForStep = (kind: AgentTraceStep["kind"]) => {
 export function AgentActivityTrace({
   bot,
   trace,
+  live,
 }: {
   bot: Bot;
   trace: AgentTraceStep[];
+  /** Live turn in progress: start expanded and narrate the latest step. */
+  live?: boolean;
 }) {
   const { colors } = useRookTheme();
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(Boolean(live));
   const steps = trace.filter((step) => !isBoilerplate(step));
   if (!steps.length) return null;
 
   const first = steps[0];
+  const latest = steps[steps.length - 1];
+  const sourceCount = steps.filter((step) => step.kind === "source").length;
   const summary =
-    steps.length === 1
-      ? first.title
-      : `${first.title} · +${steps.length - 1} more`;
+    live && latest
+      ? latest.title
+      : live
+        ? "Working…"
+        : sourceCount > 0
+          ? `${sourceCount} public ${sourceCount === 1 ? "source" : "sources"} found`
+          : steps.length === 1
+            ? first.title
+            : `${first.title} · +${steps.length - 1} more`;
 
   return (
     <View style={{ marginBottom: 9, maxWidth: 520 }}>

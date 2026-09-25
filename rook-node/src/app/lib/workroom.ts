@@ -1,5 +1,6 @@
 /**
  * In-memory workroom model used by the desktop chat surface.
+ * OpenCode sidecar: see `rook-node/src/opencode/runtime.ts` — provider `opencode:` — spawned per workroom via `OpenCodeRuntime` alongside Chromium.
  *
  * Mirrors the Expo app's `useWorkroom()` shape so screens are easy to lift.
  * The desktop app receives its initial state from the tRPC `workroom.snapshot`
@@ -23,6 +24,13 @@ export type Bot = {
   approvalRule: string;
 };
 
+export type TraceStep = {
+  kind: string;
+  title: string;
+  detail?: string;
+  url?: string;
+};
+
 export type Message = {
   id: string;
   botId: string | null;
@@ -31,6 +39,9 @@ export type Message = {
   createdAt: string;
   taskId?: string;
   attachmentName?: string;
+  imageUris?: string[];
+  conversationId?: string;
+  trace?: TraceStep[];
   kind?: "message" | "activity" | "result" | "approval" | "handoff";
   pending?: boolean;
 };
@@ -56,7 +67,16 @@ export type Approval = {
   capability: string;
   state: "pending" | "approved" | "declined" | "expired";
   createdAt: string;
-  expiresAt: string;
+  expiresAt?: string;
+  /**
+   * Set for agent-turn approvals coming from workroom.reply (Excel writes,
+   * computer proposals). Node-command approvals use capability + envelope
+   * flow instead. When present, decisions execute server-side.
+   */
+  externalActionId?: string;
+  agentKind?: "excel" | "computer";
+  /** Preserved computer-proposal payload so a second device can run it later. */
+  proposalUrl?: string;
 };
 
 export type Skill = {
@@ -283,6 +303,48 @@ class WorkroomStore {
       bots: this.state.bots.map((b) => (b.id === id ? { ...b, ...patch } : b)),
     };
     this.notify();
+  }
+
+  /**
+   * Appends durable memory lines from a turn's suggestedMemories. Same
+   * merge rules as the mobile store (dedupe, 20 lines / 2000 chars) so a
+   * Bot remembers identically no matter which surface taught it.
+   * Returns true when anything changed.
+   */
+  updateBotMemory(id: string, entries: Array<{ key: string; value: string }>): boolean {
+    if (!entries.length) return false;
+    let changed = false;
+    this.state = {
+      ...this.state,
+      bots: this.state.bots.map((bot) => {
+        if (bot.id !== id) return bot;
+        const base = /^no preferences saved yet\.?$/i.test(bot.memory.trim())
+          ? ""
+          : bot.memory;
+        const lines = base
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean);
+        for (const entry of entries) {
+          const cleanValue = entry.value.replace(/\s+/g, " ").trim().slice(0, 160);
+          if (cleanValue.length < 3) continue;
+          const line = `${entry.key}: ${cleanValue}`;
+          const duplicate = lines.some(
+            (existing) =>
+              existing.toLowerCase() === line.toLowerCase() ||
+              existing.toLowerCase().endsWith(cleanValue.toLowerCase()),
+          );
+          if (duplicate) continue;
+          lines.push(line);
+          changed = true;
+        }
+        if (!changed) return bot;
+        const trimmed = lines.slice(-20).join("\n").slice(-2000);
+        return { ...bot, memory: trimmed.trim(), lastActive: "Memory updated" };
+      }),
+    };
+    if (changed) this.notify();
+    return changed;
   }
 
   setActiveChat(botIds: string[], activeId: string | null) {

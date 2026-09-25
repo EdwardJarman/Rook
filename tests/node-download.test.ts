@@ -1,3 +1,6 @@
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -68,20 +71,48 @@ describe("Rook CLI installation", () => {
     expect(CLI_ASSETS.windows).toBe("Rook-CLI-windows-x64.zip");
   });
 
-  it("builds a user-scoped POSIX installer that verifies the CLI", () => {
+  it("builds a user-scoped POSIX installer that builds the real CLI from source", () => {
     const script = buildPosixCliInstaller("https://www.rook.lighting/");
-    expect(script).toContain("curl --fail --location");
-    expect(script).toContain("ROOK_INSTALL_DIR");
-    expect(script).toContain("/api/download/cli?platform=$TARGET");
-    expect(script).toContain('"$INSTALL_DIR/rook" --version');
+    expect(script).toContain("sparse-checkout set cli");
+    expect(script).toContain("npm --prefix");
+    expect(script).toContain("dist/rook.cjs");
+    expect(script).toContain("ROOK_BIN_DIR");
+    expect(script).toContain('"$BIN_DIR/rook" version');
+    expect(script).toContain("rook login");
     expect(script).not.toMatch(/sudo|eval/);
+    expect(script).not.toContain("releases/latest/download");
+    expect(script).not.toContain("rook.exe");
+    expect(script).not.toContain("chromium");
+    expect(script).toContain("has no cli/ yet");
+    expect(script).toContain("Push the Rook repo first");
   });
 
-  it("builds a user-scoped PowerShell installer that verifies the CLI", () => {
+  it("ships reinstall scripts that clear stale shims but keep sign-in", () => {
+    const ps1 = readFileSync(resolve(process.cwd(), "cli/reinstall.ps1"), "utf8");
+    expect(ps1).toContain("rook.cmd");
+    expect(ps1).toContain("rook.exe");
+    expect(ps1).toContain("install.ps1");
+    expect(ps1).toContain("config dir untouched");
+    expect(ps1).not.toMatch(/[^\x00-\x7F]/);
+    const sh = readFileSync(resolve(process.cwd(), "cli/reinstall.sh"), "utf8");
+    expect(sh).toContain("install.sh");
+    expect(sh).toContain("config dir untouched");
+  });
+
+  it("builds a user-scoped PowerShell installer that builds the real CLI from source", () => {
     const script = buildPowerShellCliInstaller("https://www.rook.lighting/");
     expect(script).toContain("$env:LOCALAPPDATA");
-    expect(script).toContain("/api/download/cli?platform=windows");
-    expect(script).toContain('& (Join-Path $InstallDir "rook.exe") --version');
+    expect(script).toContain("sparse-checkout set cli");
+    expect(script).toContain("dist/rook.cjs");
+    expect(script).toContain("rook.cmd");
+    expect(script).toContain("rook login");
     expect(script).not.toMatch(/Start-Process|RunAs/);
+    expect(script).not.toContain("releases/latest/download");
+    expect(script).not.toContain("rook.exe");
+    expect(script).toContain("has no cli/ yet");
+    expect(script).toContain("this window is ready too");
+    // Windows PowerShell 5.1 misdecodes UTF-8 without BOM: served bytes
+    // must stay strictly ASCII (verified once live, pinned here forever).
+    expect(script).not.toMatch(/[^\x00-\x7F]/);
   });
 });

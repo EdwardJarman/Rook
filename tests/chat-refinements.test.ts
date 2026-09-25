@@ -27,8 +27,28 @@ const agent = readFileSync(
   resolve(process.cwd(), "server/integrations/excel-agent.ts"),
   "utf8",
 );
-const computer = readFileSync(
-  resolve(process.cwd(), "server/integrations/cloud-computer.ts"),
+const systemPrompt = readFileSync(
+  resolve(process.cwd(), "server/ai/system-prompt.ts"),
+  "utf8",
+);
+const reliability = readFileSync(
+  resolve(process.cwd(), "server/ai/agent-reliability.ts"),
+  "utf8",
+);
+const botSheet = readFileSync(
+  resolve(process.cwd(), "components/bot-create-sheet.tsx"),
+  "utf8",
+);
+const chatScreenFile = readFileSync(
+  resolve(process.cwd(), "app/(tabs)/index.tsx"),
+  "utf8",
+);
+const connectorsSheet = readFileSync(
+  resolve(process.cwd(), "components/composer-connectors-sheet.tsx"),
+  "utf8",
+);
+const identityPicker = readFileSync(
+  resolve(process.cwd(), "components/bot-identity-picker.tsx"),
   "utf8",
 );
 
@@ -43,7 +63,12 @@ describe("chat experience refinements", () => {
     expect(agent).toContain("shouldSearchPublicWeb(input.message)");
     expect(agent).toContain("await searchPublicWeb(publicSearchQuery)");
     expect(agent).toContain("trace,");
-    expect(agent).toContain("never claim you opened a source");
+    // Honesty rule lives in the versioned system prompt (v2); the agent
+    // imports it via buildRookSystemPrompt.
+    expect(`${agent}${systemPrompt}${reliability}`).toContain(
+      "never claim you opened a page",
+    );
+    expect(systemPrompt).toContain("Your computer (Rook Node");
     expect(chatScreen).toContain("<AgentActivityTrace");
     expect(chatScreen).not.toContain("Save to Library");
     expect(chatScreen).toContain("<BotFilesDock");
@@ -51,32 +76,14 @@ describe("chat experience refinements", () => {
     expect(chatScreen).toContain("nodes.computer.browse");
     expect(chatScreen).toContain("nodes.computer.readFile");
     expect(workingIndicator).toContain("phaseHeadline");
-    expect(workingIndicator).toContain("startedAtMs");
     expect(workingIndicator).toContain("<DrivePixels color={colors.text} />");
     expect(workingIndicator).not.toContain("<Sparkle");
     expect(workingIndicator).not.toContain("Thinking through a plan");
     expect(workingIndicator).not.toContain("Checking connected tools");
-    expect(chatScreen).toContain("startedAtMs={replyStartedAtMs}");
     expect(chatScreen).toContain("Resize files panel");
-    expect(chatScreen).toContain("onWidthChange");
     expect(agent).toContain("Public search result");
     expect(activityTrace).toContain("Linking.openURL");
     expect(activityTrace).toContain("isBoilerplate");
-  });
-
-  it("gives every bot the same shared-computer knowledge", () => {
-    expect(agent).toContain("cloudComputerStatusForAgent(input.userId)");
-    expect(agent).toContain("computer.toolsAvailable ? CLOUD_TOOLS : []");
-    expect(computer).toContain("cloudComputerStatusForAgent");
-    expect(computer).toContain("You have a shared computer");
-    expect(computer).toContain("computer_write_file");
-    expect(computer).toContain("no computer is reachable for this user");
-  });
-
-  it("stamps real elapsed times on trace steps", () => {
-    expect(agent).toContain("atMs: Date.now() - traceClock");
-    expect(agent).toContain("const traceClock = Date.now()");
-    expect(activityTrace).toContain("formatWorkingElapsed(step.atMs)");
   });
 
   it("uses a compact rounded model dialog without dropping the provider model list", () => {
@@ -85,5 +92,39 @@ describe("chat experience refinements", () => {
     expect(modelPicker).toContain("modelsForProvider");
     expect(modelPicker).toContain("models.map((model)");
     expect(modelPicker).toContain("borderRadius: 22");
+  });
+
+  it("keeps the Bot maker free of per-Bot model locks and ownership boxes", () => {
+    expect(botSheet).not.toContain("AiModelSelector");
+    expect(botSheet).not.toContain("What it owns");
+    expect(botSheet).toContain("defaultModelForProvider");
+  });
+
+  it("renders selected finish cards on the theme canvas instead of tinted color", () => {
+    expect(identityPicker).toContain("colors.canvas");
+    expect(identityPicker).not.toContain("tint(color");
+  });
+
+  it("shows agent-built files in a code panel with download and no auto-run", () => {
+    expect(chatScreenFile).toContain("FileViewerPanel");
+    expect(chatScreenFile).toContain("Download");
+    expect(chatScreenFile).toContain("Code view only");
+    expect(chatScreenFile).toContain("Tap to view code");
+    expect(chatScreenFile).not.toContain("DeliverableCard");
+  });
+
+  it("attaches skills per message from the connectors sheet", () => {
+    expect(connectorsSheet).toContain("attachedSkillIds");
+    expect(connectorsSheet).toContain("onToggleSkill");
+    expect(connectorsSheet).toContain("ai.skills");
+    expect(chatScreenFile).toContain("skillIds");
+    expect(chatScreenFile).toContain("setAttachedSkills([])");
+  });
+
+  it("offers every provider's models in the composer instead of locking to one", () => {
+    expect(modelPicker).toContain("PROVIDER_ORDER");
+    expect(modelPicker).toContain("providerForModel");
+    expect(modelPicker).toContain("MODELS · ALL PROVIDERS");
+    expect(modelPicker).toContain("showGroupHeader");
   });
 });

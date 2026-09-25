@@ -76,7 +76,7 @@ export function GithubCard() {
   const loadStatus = useCallback(async () => {
     setBusy(true);
     try {
-      setStatus(await githubRouter().status.query());
+      setStatus(await githubRouter().github.status.query());
       setError(null);
     } catch (err) {
       setError((err as Error).message || "Could not reach the Rook server.");
@@ -87,7 +87,7 @@ export function GithubCard() {
 
   const loadRepos = useCallback(async () => {
     try {
-      setRepos(await githubRouter().repos.query());
+      setRepos(await githubRouter().github.repos.query());
     } catch (err) {
       setError((err as Error).message || "Could not list repositories.");
     }
@@ -116,7 +116,7 @@ export function GithubCard() {
     setBusy(true);
     setError(null);
     try {
-      const url = await githubRouter().authorizationUrl.mutate({});
+      const url = await githubRouter().github.authorizationUrl.mutate({});
       window.open(url, "_blank", "noopener");
       setError(null);
     } catch (err) {
@@ -131,7 +131,7 @@ export function GithubCard() {
   const disconnect = async () => {
     setBusy(true);
     try {
-      await githubRouter().disconnect.mutate();
+      await githubRouter().github.disconnect.mutate();
       setBrowserOpen(false);
       setRepos(null);
       await loadStatus();
@@ -145,7 +145,7 @@ export function GithubCard() {
   const addRepo = async (fullName: string) => {
     setBusy(true);
     try {
-      await githubRouter().selectRepo.mutate({ fullName });
+      await githubRouter().github.selectRepo.mutate({ fullName });
       await loadStatus();
     } catch (err) {
       setError((err as Error).message || "Could not add that repository.");
@@ -157,7 +157,7 @@ export function GithubCard() {
   const removeRepo = async (fullName: string) => {
     setBusy(true);
     try {
-      await githubRouter().unselectRepo.mutate({ fullName });
+      await githubRouter().github.unselectRepo.mutate({ fullName });
       await loadStatus();
     } catch (err) {
       setError((err as Error).message || "Could not remove that repository.");
@@ -469,7 +469,7 @@ export function GithubCard() {
               }}
             >
               {status.missingEnv.length
-                ? `Setup needed on this deployment: missing ${status.missingEnv.join(", ")}. Redeploy after adding them — Vercel only applies new env vars to new deployments.`
+                ? `Setup needed on this deployment: missing ${status.missingEnv.join(", ")}. Add them to the server environment, then restart a local API server or redeploy a hosted one.`
                 : "Setup needed on this deployment: add GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET."}
             </p>
           ) : null}

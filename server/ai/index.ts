@@ -9,6 +9,13 @@ import {
 } from "./openrouter";
 import { invokeChatGPT, isChatGPTModel, listChatGPTModels } from "./chatgpt";
 import {
+  invokeOpenCode,
+  isOpenCodeModel,
+  listOpenCodeModels,
+  opencodeStatus,
+  OPENCODE_MODEL_PREFIX,
+} from "./opencode";
+import {
   invokeOrcaRouter,
   invokeTokenRouter,
   isOrcaRouterModel,
@@ -35,16 +42,23 @@ export const listAiModels = async (request?: Request) => {
     ...openRouter,
     ...listOrcaRouterModels(),
     ...listTokenRouterModels(),
+    ...listOpenCodeModels(),
   ];
 };
 export const getAiBackendStatus = async (
-  provider: "openrouter" | "orcarouter" | "tokenrouter" = "openrouter",
+  provider: "openrouter" | "orcarouter" | "tokenrouter" | "opencode" = "openrouter",
 ): Promise<AiBackendStatus> => {
   if (provider === "orcarouter") return await orcaRouterStatus();
   if (provider === "tokenrouter") return await tokenRouterStatus();
+  if (provider === "opencode") return await opencodeStatus();
   return await openRouterStatus();
 };
 export const invokeAi = (params: InvokeParams, request?: Request): Promise<InvokeResult> => {
+  if (params.model?.startsWith(OPENCODE_MODEL_PREFIX)) {
+    if (!isOpenCodeModel(params.model))
+      throw new Error("That OpenCode model is not available in Rook.");
+    return invokeOpenCode(params);
+  }
   if (params.model?.startsWith(ORCAROUTER_MODEL_PREFIX)) {
     if (!isOrcaRouterModel(params.model))
       throw new Error("That OrcaRouter model is not available in Rook.");

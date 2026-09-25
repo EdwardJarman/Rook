@@ -52,14 +52,24 @@ export function ComposerConnectorsSheet({
   onClose,
   onSelectExcel,
   onSelectGithub,
+  attachedSkillIds,
+  onToggleSkill,
 }: {
   visible: boolean;
   onClose: () => void;
   onSelectExcel: () => void;
   onSelectGithub: () => void;
+  attachedSkillIds: string[];
+  onToggleSkill: (id: string) => void;
 }) {
   const router = useRouter();
   const { colors, dark } = useRookTheme();
+  const skills = trpc.ai.skills.useQuery(undefined, {
+    enabled: visible,
+    retry: 1,
+    staleTime: 60_000,
+  });
+  const skillEntries = skills.data?.skills ?? [];
   const excel = trpc.excel.status.useQuery(undefined, {
     enabled: visible,
     retry: 1,
@@ -192,6 +202,71 @@ export function ComposerConnectorsSheet({
           loading={github.isLoading}
           onPress={chooseGithub}
         />
+
+        <View
+          style={{ height: 1, backgroundColor: colors.line, marginVertical: 5 }}
+        />
+        <Text
+          style={{
+            color: colors.textFaint,
+            fontSize: 10.5,
+            fontWeight: "700",
+            letterSpacing: 0.8,
+            textTransform: "uppercase",
+            paddingHorizontal: 4,
+          }}
+        >
+          Skills
+        </Text>
+        <Text
+          style={{
+            color: colors.textFaint,
+            fontSize: 11,
+            lineHeight: 15,
+            paddingHorizontal: 4,
+            marginTop: 2,
+          }}
+        >
+          Attach procedures for this message. Attached skills run in full;
+          every skill stays one tap away with read_skill.
+        </Text>
+
+        {skills.isLoading ? (
+          <ConnectorRow
+            name="Loading skills"
+            detail="Reading the Rook skill library"
+            icon="extension"
+            color={colors.mint}
+            status="Loading"
+            loading
+            disabled
+          />
+        ) : null}
+        {!skills.isLoading && !skillEntries.length ? (
+          <ConnectorRow
+            name="No skills installed"
+            detail="Drop a skill folder into Rook's skills directory"
+            icon="extension"
+            color={colors.textFaint}
+            status="Empty"
+            disabled
+          />
+        ) : null}
+        {skillEntries.map((skill) => {
+          const attached = attachedSkillIds.includes(skill.id);
+          return (
+            <ConnectorRow
+              key={skill.id}
+              name={skill.name}
+              detail={skill.description}
+              icon="extension"
+              color={colors.mint}
+              status={attached ? "Attached" : "Tap to attach"}
+              active={attached}
+              onPress={() => onToggleSkill(skill.id)}
+            />
+          );
+        })}
 
         <View
           style={{ height: 1, backgroundColor: colors.line, marginVertical: 5 }}

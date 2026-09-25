@@ -14,6 +14,7 @@ import {
 } from "react-native";
 
 import { Card, StatusPill } from "@/components/rook-primitives";
+import { getApiBaseUrl } from "@/constants/oauth";
 import { rookAlert, rookConfirm } from "@/lib/rook-alert";
 import { trpc } from "@/lib/trpc";
 import { tint, useRookTheme } from "@/lib/ui";
@@ -165,6 +166,17 @@ export function GithubConnectionCard() {
       );
   };
 
+  // Local dev talks to localhost: explain .env.local + restart. Hosted
+  // deployments need new env vars + a redeploy instead.
+  // (connected/needsReauthorization are declared once above.)
+  const localApi = /localhost|127\.0\.0\.1/i.test(getApiBaseUrl());
+  const setupHint = status.data?.missingEnv?.length
+    ? `Setup needed on this deployment: missing ${status.data.missingEnv.join(", ")}. ${
+        localApi
+          ? "Add them to .env.local and restart the API server."
+          : "Add them to the host environment, then redeploy — hosts only apply new variables to new deployments."
+      }`
+    : "Setup needed on this deployment: add GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET.";
   const selected = status.data?.selectedRepos ?? [];
   const term = search.trim().toLowerCase();
   const candidateRepos = (repos.data ?? []).filter(
@@ -471,9 +483,7 @@ export function GithubConnectionCard() {
           </Pressable>
           {!status.data?.configured ? (
             <Text style={[styles.browserNote, { color: colors.textFaint }]}>
-              {status.data?.missingEnv?.length
-                ? `Setup needed on this deployment: missing ${status.data.missingEnv.join(", ")}. Redeploy after adding them — Vercel only applies new env vars to new deployments.`
-                : "Setup needed on this deployment: add GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET."}
+              {setupHint}
             </Text>
           ) : null}
         </>
