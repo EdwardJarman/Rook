@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { backgroundRouter } from "./background/router";
 
 import { normalizeWorkroomSnapshot } from "../shared/workroom-snapshot";
 import {
@@ -54,6 +55,7 @@ import {
 import { executeComputerReadTool } from "./integrations/cloud-tools";
 
 export const appRouter = router({
+  background: backgroundRouter,
   system: systemRouter,
   auth: router({
     me: publicProcedure.query((opts) => opts.ctx.user),

@@ -289,6 +289,8 @@ export async function executeAgentTool(input: {
   computerOnline: boolean;
   approvals: ExcelAgentApproval[];
   computerProposals: ComputerProposal[];
+  /** Detached runs persist the validated proposal with their fenced attempt. */
+  prepareBackgroundApproval?: (name: string, args: Record<string, unknown>, summary: string) => AgentToolExecution;
 }): Promise<AgentToolExecution> {
   const { userId, botId, taskId, name } = input;
   let rawArgs = input.rawArgs;
@@ -384,6 +386,7 @@ export async function executeAgentTool(input: {
       };
     }
     const proposalArgs = args as { title: string; url?: string; detail?: string };
+    if (input.prepareBackgroundApproval) return input.prepareBackgroundApproval(name, proposalArgs, proposalArgs.title);
     const proposal: ComputerProposal = {
       proposalId: computerProposalId(),
       title: proposalArgs.title,
@@ -421,6 +424,7 @@ export async function executeAgentTool(input: {
         };
       }
       const summary = excelWriteSummary(excelTool, args);
+      if (input.prepareBackgroundApproval) return input.prepareBackgroundApproval(name, args, summary);
       const actionId = makeExcelActionId();      await db.createExcelPendingAction({
         id: actionId,
         userId,
@@ -480,6 +484,7 @@ export async function executeAgentTool(input: {
           },
         };
       }
+      if (input.prepareBackgroundApproval) return input.prepareBackgroundApproval(name, argRecord, cloudTraceTitle(cloudTool, argRecord));
       const proposal = await prepareComputerCommandProposal({
         userId: input.userId,
         botId: input.botId,

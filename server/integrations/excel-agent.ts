@@ -136,6 +136,8 @@ const DISCONNECTED_GITHUB = {
 } as unknown as GithubStatus;
 
 export type RookAgentInput = {
+  /** Server-owned detached execution seam. Never accepted from chat clients. */
+  durableTurn?: import("../background/runtime").DurableTurn;
   userId: string;
   request?: Request;
   botId: string;
@@ -408,6 +410,7 @@ export async function prepareAgentTurn(
 }
 
 export async function runRookAgent(input: RookAgentInput) {
+  await input.durableTurn?.guard();
   const requestId = randomUUID().slice(0, 8);
   const startedAt = Date.now();
   const {
@@ -457,9 +460,19 @@ export async function runRookAgent(input: RookAgentInput) {
     });
   };
 
-  for (let round = 0; round < ROOK_AGENT_MAX_ROUNDS; round += 1) {
+  const saved = input.durableTurn?.checkpoint;
+  if (saved) {
+    messages.splice(0, messages.length, ...structuredClone(saved.messages));
+    continuedText = saved.continuation?.text ?? "";
+    continuationsUsed = saved.continuation?.used ?? 0;
+    toolPayloadChars = saved.toolPayloadChars ?? 0;
+  }
+  for (let round = saved?.round ?? 0; round < ROOK_AGENT_MAX_ROUNDS; round += 1) {
+    await input.durableTurn?.guard();
     let response: InvokeResult | undefined;
     const invokeOnce = async () => {
+      if (saved && round === saved.round) { response = structuredClone(saved.response); return; }
+      await input.durableTurn?.guard();
       const invoked = await invokeAiResilient(
         {
           model: requestedModel,
@@ -529,6 +542,8 @@ export async function runRookAgent(input: RookAgentInput) {
     }
     const answer = response!.choices[0]?.message;
     if (!answer) throw new Error("The model did not return a response");
+    await input.durableTurn?.save({ messages: structuredClone(messages), response: response!, round,
+      continuation: { text: continuedText, used: continuationsUsed }, toolPayloadChars });
 
     // Explicit length-truncation handling: keep writing server-side
     // (up to MAX_OUTPUT_CONTINUATIONS segments) so the user gets a
@@ -644,7 +659,7 @@ export async function runRookAgent(input: RookAgentInput) {
       // streaming turn (see agent-tool-executor.ts).
       let rendered: string;
       try {
-        const executed = await executeAgentTool({
+        const toolInput = {
           userId: input.userId,
           botId: input.botId,
           taskId: input.taskId,
@@ -655,10 +670,14 @@ export async function runRookAgent(input: RookAgentInput) {
           computerOnline: computer.online,
           approvals,
           computerProposals,
-        });
+        };
+        const executed = input.durableTurn
+          ? await input.durableTurn.execute(toolInput, () => executeAgentTool(toolInput))
+          : await executeAgentTool(toolInput);
         trace.push(executed.traceStep);
         rendered = toolResultText(executed.resultPayload);
       } catch (error) {
+        if (input.durableTurn) throw error;
         const failure =
           error instanceof Error ? error.message : "Connected tool failed";
         trace.push({
@@ -700,6 +719,7 @@ export async function runRookAgent(input: RookAgentInput) {
     usedTools,
     latencyMs: Date.now() - startedAt,
   });
+  if (input.durableTurn) throw new Error("The background turn reached its round limit.");
   emitTelemetry();
   return {
     text: approvals.length
@@ -728,6 +748,7 @@ export async function runRookAgent(input: RookAgentInput) {
   };
 
   function friendlyTurnEnd(error: unknown) {
+    if (input.durableTurn) throw error;
     const errorMessage =
       error instanceof Error ? error.message.slice(0, 300) : "unknown";
     emitTelemetry({ error: errorMessage });

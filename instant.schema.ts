@@ -4,6 +4,16 @@ import type { WorkroomCloudSnapshot } from "./shared/workroom-snapshot";
 
 const _schema = i.schema({
   entities: {
+    backgroundJobs: i.entity({
+      owner: i.string().indexed(),
+      needsAttention: i.boolean().indexed(),
+      payload: i.json<import("./server/background/model").Job>(),
+    }),
+    backgroundRevisions: i.entity({
+      key: i.string().unique().indexed(),
+      owner: i.string().indexed(),
+      revision: i.number().indexed(),
+    }),
     users: i.entity({
       openId: i.string().unique().indexed(),
       name: i.string().optional(),

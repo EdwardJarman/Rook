@@ -10,6 +10,7 @@ import { createServer } from "node:http";
 import net from "node:net";
 
 import { createApp } from "./app";
+import { startBackgroundRuntime } from "../background/service";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -44,6 +45,7 @@ async function startServer() {
   );
   createServer(createApp()).listen(port, () => {
     console.log(`[api] server listening on port ${port}`);
+    startBackgroundRuntime();
   });
 }
 
