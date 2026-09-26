@@ -48,6 +48,33 @@ export async function resolveComputerTarget(
 }
 
 /**
+ * Agent-facing computer status for the shared system prompt. Every bot —
+ * Rook or user-created — gets the same treatment: the computer is always
+ * described so the model knows the tools exist, then the note states
+ * whether anything can actually execute right now.
+ */
+export async function cloudComputerStatusForAgent(userId: string): Promise<{
+  toolsAvailable: boolean;
+  agentNote: string;
+}> {
+  const online = await db
+    .getOnlineRookNode(userId)
+    .then((node) => Boolean(node))
+    .catch(() => false);
+  const cloudReady = isCloudComputerConfigured();
+  if (online || cloudReady) {
+    return {
+      toolsAvailable: true,
+      agentNote: `\n\nYou have a shared computer: Rook routes computer work to the user's own device (Rook Node) whenever it is online, and falls back to the free Rook Cloud sandbox (a Linux environment with a workspace) when it is not. computer_run_command and computer_write_file are proposals — they never execute until the user approves them right in the chat. computer_read_file and computer_list_files run immediately. Use the computer whenever the user asks you to run code, build or transform something, or work with files (for example "create a file called test.txt with the text hello" means call computer_write_file with path "test.txt" and content "hello", then confirm the exact path); keep commands small and self-contained and capture output with the command itself.`,
+    };
+  }
+  return {
+    toolsAvailable: false,
+    agentNote: `\n\nYou have a shared computer (Rook Node plus the Rook Cloud sandbox), but right now no computer is reachable for this user: no paired device is online and the cloud sandbox is not configured on this deployment. If the user asks you to run code or work with files, tell them plainly that no computer is available and suggest connecting Rook Node or configuring the cloud sandbox — do not claim the work succeeded.`,
+  };
+}
+
+/**
  * Cloud-computer capabilities. `shell` and `files-write` are sensitive
  * (approval-gated exactly like the local node's sensitive capabilities);
  * `files-read` runs immediately.

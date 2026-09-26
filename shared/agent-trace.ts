@@ -11,4 +11,6 @@ export type AgentTraceStep = {
   title: string;
   detail?: string;
   url?: string;
+  /** Milliseconds since the reply started; set server-side for live progress. */
+  atMs?: number;
 };

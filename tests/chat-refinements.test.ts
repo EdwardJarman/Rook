@@ -71,10 +71,16 @@ describe("chat experience refinements", () => {
     expect(systemPrompt).toContain("Your computer (Rook Node");
     expect(chatScreen).toContain("<AgentActivityTrace");
     expect(chatScreen).not.toContain("Save to Library");
-    expect(chatScreen).toContain("<BotFilesSheet");
+    expect(chatScreen).toContain("<BotFilesDock");
+    expect(chatScreen).toContain("open={filesOpen}");
     expect(chatScreen).toContain("nodes.computer.browse");
     expect(chatScreen).toContain("nodes.computer.readFile");
-    expect(workingIndicator).toContain("Thinking through a plan");
+    expect(workingIndicator).toContain("phaseHeadline");
+    expect(workingIndicator).toContain("<DrivePixels color={colors.text} />");
+    expect(workingIndicator).not.toContain("<Sparkle");
+    expect(workingIndicator).not.toContain("Thinking through a plan");
+    expect(workingIndicator).not.toContain("Checking connected tools");
+    expect(chatScreen).toContain("Resize files panel");
     expect(agent).toContain("Public search result");
     expect(activityTrace).toContain("Linking.openURL");
     expect(activityTrace).toContain("isBoilerplate");

@@ -68,6 +68,17 @@ export type ExcelAgentApproval = {
   kind?: "excel" | "local" | "cloud";
 };
 
+/** Approval status, not model prose, determines whether a sensitive action ran. */
+export function finalAgentText(
+  providerText: string,
+  approvals: readonly ExcelAgentApproval[],
+): string {
+  if (approvals.length) {
+    return "I've prepared this action and it is waiting for your approval here in the chat.";
+  }
+  return providerText || "I could not produce a usable answer. Please try again.";
+}
+
 export function agentClockContext(
   now = new Date(),
   requestedTimeZone?: string,
@@ -586,13 +597,15 @@ export async function runRookAgent(input: RookAgentInput) {
             : computerProposals.length
               ? "I proposed a computer task below - approve it right here in this chat, then run it from the Computer panel."
               : "")) + truncatedNote;
-      const finalText =
+      const finalText = finalAgentText(
         text.trim() ||
         (approvals.length
           ? "I've prepared it for your approval - confirm it right here in this chat."
           : computerProposals.length
             ? "I proposed a computer task below - approve it right here in this chat, then run it from the Computer panel."
-            : friendlyAgentError(new Error("empty reply")));
+            : friendlyAgentError(new Error("empty reply"))),
+        approvals,
+      );
       if (continuationsUsed > 0) {
         trace.push({
           kind: "response",

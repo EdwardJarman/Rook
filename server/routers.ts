@@ -48,9 +48,9 @@ import {
 import { sendExpoPushAlert } from "./push-alerts";
 import {
   buildCloudCommandEnvelope,
+  cloudComputerStatusForAgent,
   cloudMissingEnvVars,
   executeCloudCommand,
-  isCloudComputerConfigured,
 } from "./integrations/cloud-computer";
 import { executeComputerReadTool } from "./integrations/cloud-tools";
 
@@ -619,10 +619,12 @@ export const appRouter = router({
       // the free cloud sandbox as overflow.
       status: protectedProcedure.query(async ({ ctx }) => {
         const nodes = await db.listRookNodesForUser(ctx.user.id);
+        const computer = await cloudComputerStatusForAgent(ctx.user.id);
         return {
-          cloudConfigured: isCloudComputerConfigured(),
+          cloudConfigured: computer.toolsAvailable,
           cloudMissingEnv: cloudMissingEnvVars(),
           localNodesOnline: nodes.filter((node) => node.status === "online").length,
+          computerAvailable: computer.toolsAvailable,
         };
       }),
       requestCommand: protectedProcedure
