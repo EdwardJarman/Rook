@@ -8,6 +8,7 @@ import { registerAgentStreamRoute } from "../agent-stream-route";
 import { createContext } from "./context";
 import { registerOAuthRoutes } from "./oauth";
 import { registerNodeDownloadRoutes } from "../download-routes";
+import { registerOpenAiGatewayRoutes } from "../openai-gateway-routes";
 import { registerNodeRelayRoutes } from "../node-relay-routes";
 import { registerCliAuthRoute } from "../cli-auth-page";
 import * as db from "../db";
@@ -63,6 +64,7 @@ export function createApp() {
   registerOAuthRoutes(app);
   registerAgentStreamRoute(app);
   registerNodeDownloadRoutes(app);
+  registerOpenAiGatewayRoutes(app);
   registerNodeRelayRoutes(app, {
     consumePairingToken: (token) => db.consumePairingToken(token),
     markPairingTokenUsed: (token, nodeId) => db.markPairingTokenUsed(token, nodeId),
