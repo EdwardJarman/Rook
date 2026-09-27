@@ -126,6 +126,8 @@ export function RookDesktopSidebar({ navigation }: BottomTabBarProps) {
         </View>
 
         <View style={styles.content}>
+          <Pressable accessibilityRole="button" accessibilityLabel="Open Bots" onPress={() => navigation.navigate("bots")} style={{ minHeight: 44, justifyContent: "center" }}><Text style={{ color: colors.text }}>Bots</Text></Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel="Open updates" onPress={() => navigation.navigate("updates")} style={{ minHeight: 44, justifyContent: "center" }}><Text style={{ color: colors.text }}>Updates</Text></Pressable>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Start a new chat"

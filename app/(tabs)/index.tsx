@@ -29,6 +29,7 @@ import {
 } from "react-native";
 
 import { BotCreateSheet } from "@/components/bot-create-sheet";
+import { BackgroundStatusStrip } from "@/components/background-jobs";
 import { AgentActivityTrace } from "@/components/agent-activity-trace";
 import { AiWorkingIndicator } from "@/components/ai-working-indicator";
 import { ComposerConnectorsSheet } from "@/components/composer-connectors-sheet";
@@ -907,6 +908,7 @@ export default function ChatScreen() {
       className="flex-1"
       edges={["top", "left", "right"]}
     >
+      <BackgroundStatusStrip />
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : undefined}

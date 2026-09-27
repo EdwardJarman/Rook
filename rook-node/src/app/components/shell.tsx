@@ -20,6 +20,7 @@ import { useWorkroom } from "@/lib/workroom";
 import { useNodeStatus } from "@/lib/use-node-status";
 import { useSafeAuth } from "@/lib/safe-auth";
 import { cn } from "@/lib/cn";
+import { BackgroundStatusStrip } from "./background-status";
 
 type NavItem = {
   to: string;
@@ -129,6 +130,7 @@ export function AppShell() {
         }}
       >
         <Brand />
+        <BackgroundStatusStrip />
         <NewChatButton onClick={startNewChat} />
         <SearchField
           value={query}

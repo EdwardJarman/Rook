@@ -1,6 +1,9 @@
 import { defineConfig } from "vitest/config";
+import path from "node:path";
 
 export default defineConfig({
+  resolve: { alias: { "@": path.resolve(__dirname) } },
+  esbuild: { jsx: "automatic" },
   test: {
     // rook-node is a self-contained package with its own test suite
     // (run `pnpm test` inside rook-node/).

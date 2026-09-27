@@ -1,5 +1,6 @@
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import { useState } from "react";
+import { useRouter } from "expo-router";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { AiModelSelector } from "@/components/ai-model-selector";
@@ -22,6 +23,7 @@ import { tint } from "@/lib/ui";
 import { useWorkroom, type Bot } from "@/lib/workroom-store";
 
 export default function BotsScreen() {
+  const router = useRouter();
   const { colors } = useRookTheme();
   const { aiProvider, bots, selectedBotId, selectBot, updateBotStatus, updateBotModel } = useWorkroom();
   const [openBot, setOpenBot] = useState<Bot | null>(null);
@@ -126,6 +128,7 @@ export default function BotsScreen() {
             <Text style={{ color: colors.textSoft, fontSize: 13.5, lineHeight: 20, marginTop: 14 }}>{openBot.purpose}</Text>
 
             <View style={{ gap: 12, marginTop: 18 }}>
+              <SecondaryButton label="Schedule a job" icon="schedule" onPress={() => { setOpenBot(null); router.push(`/schedule-job?botId=${encodeURIComponent(openBot.id)}` as never); }} />
               <AiModelSelector
                 value={openBot.model || "openrouter/free"}
                 provider={providerForModel(openBot.model, aiProvider)}

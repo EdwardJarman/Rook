@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// "full docs" in the output fixture intentionally triggers the grounding
+// classifier. Output-budget tests must not wait for a real search service.
+vi.mock("../server/integrations/web-research", () => ({
+  searchPublicWeb: vi.fn(async () => []),
+}));
+
 vi.mock("../server/ai/fallback-router", async (importOriginal) => {
   const original =
     await importOriginal<typeof import("../server/ai/fallback-router")>();
