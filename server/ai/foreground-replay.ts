@@ -28,6 +28,22 @@ import { toolCallFingerprint } from "./agent-reliability";
 import { TurnJournal } from "./turn-context";
 
 export const FOREGROUND_TURN_TTL_MS = 24 * 60 * 60_000;
+/** A slow store must never stall chat: past these, the turn proceeds without durability. */
+export const REPLAY_READ_DEADLINE_MS = 1500;
+export const REPLAY_WRITE_DEADLINE_MS = 3000;
+
+export class ReplayTimeout extends Error {
+  constructor() { super("Foreground replay storage timed out."); this.name = "ReplayTimeout"; }
+}
+
+async function withDeadline<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([promise, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new ReplayTimeout()), ms); })]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 const MAX_ROUND_BYTES = 64 * 1024;
 const MAX_OUTPUT_BYTES = 32 * 1024;
 export const TURN_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
@@ -115,19 +131,21 @@ export class ForegroundReplay {
     private owner: string,
     private turn: string,
     private now: () => number,
+    private deadlines: { read: number; write: number },
   ) {}
 
   /** Undefined (non-durable turn) when the store cannot be read. */
   static async open(
     input: { userId: string; botId: string; taskId: string; turnId?: string },
-    options: { store?: ForegroundTurnStore; now?: () => number } = {},
+    options: { store?: ForegroundTurnStore; now?: () => number; deadlines?: { read: number; write: number } } = {},
   ): Promise<ForegroundReplay | undefined> {
     if (!input.turnId || !TURN_ID_PATTERN.test(input.turnId)) return undefined;
     const now = options.now ?? Date.now;
     try {
       const store = options.store ?? (await import("./foreground-turn-store")).instantForegroundTurnStore;
-      const replay = new ForegroundReplay(store, input.userId, turnKey({ ...input, turnId: input.turnId }), now);
-      replay.absorb(await store.list(replay.owner, replay.turn, now()));
+      const replay = new ForegroundReplay(store, input.userId, turnKey({ ...input, turnId: input.turnId }), now,
+        options.deadlines ?? { read: REPLAY_READ_DEADLINE_MS, write: REPLAY_WRITE_DEADLINE_MS });
+      replay.absorb(await withDeadline(store.list(replay.owner, replay.turn, now()), replay.deadlines.read));
       return replay;
     } catch (error) {
       console.warn("[RookAI] foreground replay unavailable", {
@@ -175,7 +193,7 @@ export class ForegroundReplay {
     // outcomes are still journaled by fingerprint hash.
     if (!unchanged(saved) || bytes(saved) > MAX_ROUND_BYTES) return saved;
     try {
-      const result = await this.store.create(this.owner, this.turn, this.event("round", String(round), saved));
+      const result = await withDeadline(this.store.create(this.owner, this.turn, this.event("round", String(round), saved)), this.deadlines.write);
       if (!result.created) {
         const winner = result.existing.payload as SavedRound;
         this.rounds.set(round, winner);
@@ -197,18 +215,22 @@ export class ForegroundReplay {
     if (TOOL_REGISTRY[input.name]?.risk === "read-only") return dispatch();
 
     if (this.intents.has(fingerprint)) throw new ForegroundOutcomeUnknown();
+    let claimedByAnother = false;
     try {
-      const claim = await this.store.create(this.owner, this.turn, this.event("intent", fingerprint, { name: input.name }));
-      if (!claim.created) {
-        // Another attempt claimed it; it may have finished since we listed.
-        this.absorb(await this.store.list(this.owner, this.turn, this.now()));
-        if (this.journal.hasCompleted(fingerprint)) return this.replayed(fingerprint, input);
-        throw new ForegroundOutcomeUnknown();
-      }
+      const claim = await withDeadline(this.store.create(this.owner, this.turn, this.event("intent", fingerprint, { name: input.name })), this.deadlines.write);
+      claimedByAnother = !claim.created;
     } catch (error) {
-      if (error instanceof ForegroundOutcomeUnknown) throw error;
+      // Storage failed or timed out: proceed as a non-durable turn would.
       this.warn("intent", error);
       return dispatch();
+    }
+    if (claimedByAnother) {
+      // Another attempt owns this step, so it must never be dispatched here,
+      // even when the follow-up read fails: unknown outcome, not fail-open.
+      try { this.absorb(await withDeadline(this.store.list(this.owner, this.turn, this.now()), this.deadlines.read)); }
+      catch (error) { this.warn("claim-read", error); }
+      if (this.journal.hasCompleted(fingerprint)) return this.replayed(fingerprint, input);
+      throw new ForegroundOutcomeUnknown();
     }
     this.intents.add(fingerprint);
 
@@ -245,7 +267,7 @@ export class ForegroundReplay {
     const safe = sanitize(payload);
     if (bytes(safe) > MAX_OUTPUT_BYTES) return;
     try {
-      await this.store.create(this.owner, this.turn, this.event("done", fingerprint, safe));
+      await withDeadline(this.store.create(this.owner, this.turn, this.event("done", fingerprint, safe)), this.deadlines.write);
       this.done.set(fingerprint, safe);
       this.journal.record({ fingerprint, code: "COMPLETED", retryable: false });
     } catch (error) {
