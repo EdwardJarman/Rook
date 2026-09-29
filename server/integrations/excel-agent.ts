@@ -10,6 +10,7 @@ import {
   skillCatalogBlock,
 } from "../ai/skills";
 import { recordTurn, recordInterruptedTurn } from "../ai/telemetry";
+import { ForegroundOutcomeUnknown } from "../ai/foreground-replay";
 import { accountingTaskKey, setAccountingSections, withRequestAccounting } from "../ai/request-accounting";
 import { formatToolOutput, OUTPUT_TOOLS, serializeToolOutput, ToolOutputError } from "../ai/tool-output";
 import { getComputerPromptState } from "../ai/computer-context";
@@ -143,6 +144,8 @@ const DISCONNECTED_GITHUB = {
 export type RookAgentInput = {
   /** Server-owned detached execution seam. Never accepted from chat clients. */
   durableTurn?: import("../background/runtime").DurableTurn;
+  /** Server-owned foreground crash-replay log, opened from a client `turnId`. */
+  foregroundReplay?: import("../ai/foreground-replay").ForegroundReplay;
   userId: string;
   request?: Request;
   botId: string;
@@ -507,6 +510,13 @@ async function runAccountedAgent(input: RookAgentInput) {
     let response: InvokeResult | undefined;
     const invokeOnce = async () => {
       if (saved && round === saved.round) { response = structuredClone(saved.response); return; }
+      const replayedRound = input.foregroundReplay?.savedRound(round);
+      if (replayedRound) {
+        response = { id: "replay", created: 0, model: replayedRound.model, choices: [{ index: 0,
+          message: { role: "assistant", content: replayedRound.content, tool_calls: replayedRound.toolCalls },
+          finish_reason: replayedRound.finishReason }] } as InvokeResult;
+        return;
+      }
       await input.durableTurn?.guard();
       const invoked = await invokeAiResilient(
         {
@@ -584,7 +594,15 @@ async function runAccountedAgent(input: RookAgentInput) {
     // complete answer instead of homework. The tail marker below only
     // appears when even that is exhausted.
     const finishReason = response!.choices[0]?.finish_reason ?? null;
-    const calls = answer.tool_calls ?? [];
+    let calls = answer.tool_calls ?? [];
+    if (calls.length && input.foregroundReplay) {
+      calls = (await input.foregroundReplay.recordRound(round, {
+        content: typeof answer.content === "string" ? answer.content : "",
+        toolCalls: calls,
+        finishReason: finishReason ?? null,
+        model: resolvedModel,
+      })).toolCalls;
+    }
     if (!calls.length) {
       const rawText =
         typeof answer.content === "string"
@@ -716,7 +734,9 @@ async function runAccountedAgent(input: RookAgentInput) {
         };
         const executed = input.durableTurn
           ? await input.durableTurn.execute(toolInput, () => executeAgentTool(toolInput))
-          : await executeAgentTool(toolInput);
+          : input.foregroundReplay
+            ? await input.foregroundReplay.execute(toolInput, () => executeAgentTool(toolInput))
+            : await executeAgentTool(toolInput);
         trace.push(executed.traceStep);
         const terminal = terminalToolError(executed.resultPayload);
         if (terminal) return friendlyTurnEnd(terminal);
@@ -725,6 +745,7 @@ async function runAccountedAgent(input: RookAgentInput) {
           inlineLimit: Math.min(12_000, Math.max(2000, ROOK_TURN_TOOL_BUDGET_CHARS - toolPayloadChars)) });
       } catch (error) {
         if (input.durableTurn) throw error;
+        if (error instanceof ForegroundOutcomeUnknown) return friendlyTurnEnd(new AgentLoopStop("OUTCOME_UNKNOWN", error.message));
         if (error instanceof ToolOutputError) return friendlyTurnEnd(new AgentLoopStop("OUTPUT_UNAVAILABLE", error.message));
         const failure =
           error instanceof Error ? error.message : "Connected tool failed";

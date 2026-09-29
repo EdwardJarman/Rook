@@ -126,3 +126,16 @@ After the policy/layout/skills changes: root check PASS; full suite PASS **687 t
 The new capture still has five fixture tasks, six requests, and a byte-identical 4,690-character stable system message across fixtures. Greeting setup is 1,202 serialized characters, and the skill catalog is 719 characters versus 447 before the two new skills. Coding attachment plus catalog is 2,181 versus 1,909 before. No provider billing attribution or task-quality score is inferred from these numbers. Setup boundaries were tested; caching improvement remains an unmeasured hypothesis.
 
 The complete goal remains active. The remaining substantive work is foreground durable crash recovery, retained and authorized retrieval of large outputs, tool result/error telemetry and description audit, prompt/offload/compaction proposals or flags with rollback, and realistic matched quality/cost evaluation. The new procedures do not by themselves prove capability parity. The detailed user-requested implementation prompt is saved as `docs/rook-agent-implementation-prompt.md`.
+
+## Foreground durable replay (follow-up chunk 1)
+
+Clients may send an opaque `turnId` (8-128 chars, `[A-Za-z0-9_-]`) on `/api/agent/stream` and `workroom.reply`. With it, the server journals the turn in an append-only, unique-keyed log (`server/ai/foreground-replay.ts`, InstantDB entity `foregroundTurnEvents`, 24 h TTL, keyed by sha256 of owner/Bot/task/turn so one account can never read another's events). Without it, or when storage fails, the turn is byte-for-byte today's non-durable behavior.
+
+- **Rounds**: each tool-requesting model response is recorded once; a retry replays it instead of asking the model again. If two attempts race, the first recorded response is canonical.
+- **Side effects**: approval-gated tools atomically claim `sha256(toolCallFingerprint)` before dispatch (`TurnJournal` completion semantics, same fingerprints as the background runtime) and record their outcome, approvals and computer proposals afterwards. A retry rehydrates those into the result; a claim without an outcome (killed mid-step) is never re-dispatched and ends the turn with an honest "may already be waiting for approval" message (`OUTCOME_UNKNOWN`).
+- **Read-only tools** re-run on replay and are never persisted, so connector data (cells, files) is not copied into the log. Secret-bearing rounds and outcomes are not persisted verbatim (`sanitize`).
+- **Client**: the stream response carries `X-Rook-Turn-Replay: 1` when journaled; only then does the app retry through `workroom.reply` after tools already ran. Proposal UX is unchanged.
+- **Deploy**: run `pnpm db:push` for the new entity before relying on it; missing schema fails open (no replay).
+
+Verified hermetically (`tests/foreground-replay.test.ts`, both loops): kill after a completed step, kill between claim and outcome, concurrent duplicate attempt, recorded-error replay, no-`turnId` inertness, store failure, secret rounds, cross-user isolation, TTL. Not verified: a live InstantDB uniqueness conflict (the store test uses a fake that mimics it) and a real process kill on a deployed server.
+

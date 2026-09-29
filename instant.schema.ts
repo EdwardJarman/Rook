@@ -4,6 +4,15 @@ import type { WorkroomCloudSnapshot } from "./shared/workroom-snapshot";
 
 const _schema = i.schema({
   entities: {
+    foregroundTurnEvents: i.entity({
+      eventKey: i.string().unique().indexed(),
+      owner: i.string().indexed(),
+      turn: i.string().indexed(),
+      kind: i.string(),
+      at: i.number(),
+      expiresAt: i.number().indexed(),
+      payload: i.json<unknown>(),
+    }),
     backgroundJobs: i.entity({
       owner: i.string().indexed(),
       needsAttention: i.boolean().indexed(),

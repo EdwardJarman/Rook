@@ -24,6 +24,7 @@ import { transcribeOpenRouterAudio } from "./ai/openrouter";
 import { deleteChatGPTSession } from "./ai/chatgpt";
 import * as db from "./db";
 import { runRookAgent } from "./integrations/excel-agent";
+import { ForegroundReplay, TURN_ID_PATTERN } from "./ai/foreground-replay";
 import {
   executeValidatedExcelWrite,
   type ExcelToolName,
@@ -82,6 +83,7 @@ export const appRouter = router({
         z.object({
           botId: z.string().min(1).max(128),
           taskId: z.string().min(1).max(128),
+          turnId: z.string().regex(TURN_ID_PATTERN).optional(),
           botName: z.string().min(1).max(80),
           botRole: z.string().min(1).max(120),
           botPurpose: z.string().min(1).max(500),
@@ -112,10 +114,12 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         let result: Awaited<ReturnType<typeof runRookAgent>>;
         try {
+          const { turnId, ...turn } = input;
           result = await runRookAgent({
             userId: ctx.user.id,
             request: ctx.req,
-            ...input,
+            foregroundReplay: await ForegroundReplay.open({ userId: ctx.user.id, botId: turn.botId, taskId: turn.taskId, turnId }),
+            ...turn,
           });
         } catch (error) {
           // Last-resort guard: the agent itself returns friendly text for
