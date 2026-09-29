@@ -30,6 +30,8 @@ export type TurnRecord = {
   computerProposals: number;
   webSearched: boolean;
   codeTask: boolean;
+  /** Enabled experimental variants (names only) for eval attribution. */
+  variants?: string[];
   continuations?: number;
   error?: string;
   /** Opaque process-local HMAC; never the user, Bot or task id. */
