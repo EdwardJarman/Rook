@@ -92,7 +92,8 @@ describe("frozen tool order (cache-safe registry)", () => {
     // + 4 cloud computer tools (appended merging origin/main; see
     // orderToolset cache-bust note in agent-tool-executor.ts).
     // Retained-output reader appended as a read-only family; prior order preserved.
-    expect(offered).toHaveLength(19);
+    // load_tools (flagged tool-offload variant) is registered but only advertised when that flag is on.
+    expect(offered).toHaveLength(20);
     for (const name of offered) {
       expect(
         TOOL_RISK[name as keyof typeof TOOL_RISK],

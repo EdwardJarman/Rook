@@ -18,6 +18,7 @@ import { formatToolOutput, OUTPUT_TOOLS, serializeToolOutput, ToolOutputError } 
 import { getComputerPromptState } from "../ai/computer-context";
 import { buildRookSystemPromptParts } from "../ai/system-prompt";
 import { activeVariantNames, resolveVariants } from "../ai/variants";
+import { offloadTools, ToolActivation } from "../ai/tool-offload";
 import {
   buildMemoryBlock,
   extractMemoryCandidates,
@@ -184,6 +185,8 @@ export type PreparedAgentTurn = {
   github: GithubStatus;
   computer: { paired: boolean; online: boolean; block: string };
   tools: Tool[] | undefined;
+  /** Tools withheld from `tools` by the offload variant; empty otherwise. */
+  offloaded: Tool[];
   messages: Message[];
   trace: AgentTraceStep[];
   publicSearchQuery: string;
@@ -281,7 +284,9 @@ export async function prepareAgentTurn(
     outputs: OUTPUT_TOOLS,
   });
   const permittedTools = toolset.filter((tool) => !input.disallowedTools?.includes(tool.function.name));
-  const tools = permittedTools.length ? permittedTools : undefined;
+  const permitted = permittedTools.length ? permittedTools : undefined;
+  const variants = resolveVariants(input.variants);
+  const { tools, offloaded } = variants.toolOffload ? offloadTools(permitted) : { tools: permitted, offloaded: [] as Tool[] };
   const excelSelected = input.connectors?.includes("microsoft-excel") === true;
   const githubSelected = input.connectors?.includes("github") === true;
   const connectionNote = connection.connected
@@ -379,7 +384,6 @@ export async function prepareAgentTurn(
       .filter(Boolean)
       .join("\n") || undefined;
 
-  const variants = resolveVariants(input.variants);
   const prompt = buildRookSystemPromptParts({
     botName: input.botName,
     botRole: input.botRole,
@@ -432,6 +436,7 @@ export async function prepareAgentTurn(
     github,
     computer,
     tools,
+    offloaded,
     messages,
     trace,
     publicSearchQuery,
@@ -464,6 +469,7 @@ async function runAccountedAgent(input: RookAgentInput) {
     github,
     computer,
     tools,
+    offloaded,
     messages,
     trace,
     publicSearchQuery,
@@ -517,6 +523,8 @@ async function runAccountedAgent(input: RookAgentInput) {
     continuationsUsed = saved.continuation?.used ?? 0;
     toolPayloadChars = saved.toolPayloadChars ?? 0;
   }
+  const activation = offloaded.length ? new ToolActivation(tools ?? [], offloaded, messages) : undefined;
+  let liveTools = activation ? activation.current() : tools;
   for (let round = saved?.round ?? 0; round < ROOK_AGENT_MAX_ROUNDS; round += 1) {
     await input.durableTurn?.guard();
     let response: InvokeResult | undefined;
@@ -534,8 +542,8 @@ async function runAccountedAgent(input: RookAgentInput) {
         {
           model: requestedModel,
           messages,
-          tools,
-          toolChoice: tools ? (toolPayloadChars >= ROOK_TURN_TOOL_BUDGET_CHARS ? "none" : "auto") : undefined,
+          tools: liveTools,
+          toolChoice: liveTools ? (toolPayloadChars >= ROOK_TURN_TOOL_BUDGET_CHARS ? "none" : "auto") : undefined,
           maxTokens: effectiveBudget,
           ...(reasoning ? { reasoning } : {}),
         },
@@ -747,12 +755,14 @@ async function runAccountedAgent(input: RookAgentInput) {
           computerOnline: computer.online,
           approvals,
           computerProposals,
+          offloadedTools: offloaded.map((tool) => tool.function.name),
         };
         const executed = input.durableTurn
           ? await input.durableTurn.execute(toolInput, () => executeAgentTool(toolInput))
           : input.foregroundReplay
             ? await input.foregroundReplay.execute(toolInput, () => executeAgentTool(toolInput))
             : await executeAgentTool(toolInput);
+        if (activation) { activation.observe(name, call.function.arguments); liveTools = activation.current(); }
         trace.push(executed.traceStep);
         const terminal = terminalToolError(executed.resultPayload);
         if (terminal) { record(outcomeFromPayload(name, executed.resultPayload)); return friendlyTurnEnd(terminal); }
