@@ -13,7 +13,10 @@ const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_STORE_BYTES = 64 * 1024 * 1024;
 const REF = /^rook-output:([a-f0-9]{32})$/;
 type Scope = { userId: string; botId: string };
-type StoredOutput = { version: 1; scope: string; expiresAt: number; text: string };
+/** What produced a retained output; re-authorized against live connector state on every read. */
+export type OutputSource = { tool: string; resource?: string };
+export type OutputAuthorizer = (source: OutputSource) => boolean | Promise<boolean>;
+type StoredOutput = { version: 2; scope: string; source: OutputSource; expiresAt: number; text: string };
 const scopeKey = (scope: Scope) => createHash("sha256").update(JSON.stringify([scope.userId, scope.botId])).digest("hex");
 
 export class ToolOutputError extends Error {
@@ -38,10 +41,10 @@ export function serializeToolOutput(value: unknown): string {
 export class ToolOutputStore {
   private pending: Promise<unknown> = Promise.resolve();
   constructor(private readonly options: { root: string; now: () => number; id: () => string }) {}
-  async put(scope: Scope, text: string): Promise<{ reference: string; characters: number; bytes: number; expiresAt: number }> {
+  async put(scope: Scope, text: string, source: OutputSource): Promise<{ reference: string; characters: number; bytes: number; expiresAt: number }> {
     const write = this.pending.then(async () => {
       const expiresAt = this.options.now() + OUTPUT_TTL_MS;
-      const content = JSON.stringify({ version: 1, scope: scopeKey(scope), expiresAt, text } satisfies StoredOutput);
+      const content = JSON.stringify({ version: 2, scope: scopeKey(scope), source, expiresAt, text } satisfies StoredOutput);
       if (Buffer.byteLength(content) > MAX_FILE_BYTES) throw new Error("Output exceeds retention capacity");
       await fs.mkdir(this.options.root, { recursive: true, mode: 0o700 });
       let bytes = 0;
@@ -66,8 +69,8 @@ export class ToolOutputStore {
     try { return await write; }
     catch { throw new ToolOutputError("OUTPUT_STORAGE_UNAVAILABLE", "The tool finished, but its large result could not be retained. No shortened copy is being presented as complete. Request a smaller range or file."); }
   }
-  async read(scope: Scope, args: { reference: string; offset?: number; limit?: number; search?: string }) {
-    const unavailable = () => new ToolOutputError("OUTPUT_UNAVAILABLE", "That retained output is unavailable, expired, or outside this Bot's scope.");
+  async read(scope: Scope, args: { reference: string; offset?: number; limit?: number; search?: string }, authorize?: OutputAuthorizer) {
+    const unavailable = () => new ToolOutputError("OUTPUT_UNAVAILABLE", "That retained output is unavailable, expired, or outside this Bot's scope, or its source is no longer authorized.");
     const match = REF.exec(args.reference);
     if (!match) throw unavailable();
     const offset = args.offset ?? 0, limit = args.limit ?? 2000;
@@ -77,7 +80,9 @@ export class ToolOutputStore {
       const stat = await fs.lstat(filename);
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_FILE_BYTES) throw unavailable();
       const stored = JSON.parse(await fs.readFile(filename, "utf8")) as StoredOutput;
-      if (stored.version !== 1 || stored.scope !== scopeKey(scope) || !Number.isFinite(stored.expiresAt) || stored.expiresAt <= this.options.now() || typeof stored.text !== "string") throw unavailable();
+      if (stored.version !== 2 || stored.scope !== scopeKey(scope) || typeof stored.source?.tool !== "string" || !Number.isFinite(stored.expiresAt) || stored.expiresAt <= this.options.now() || typeof stored.text !== "string") throw unavailable();
+      // Fail closed: a revoked connector, deselected repo, or newly denied tool makes old output unreadable.
+      if (authorize && !(await authorize(stored.source))) throw unavailable();
       let start = Math.min(offset, stored.text.length);
       if (args.search) {
         const found = stored.text.indexOf(args.search, start);
@@ -100,7 +105,7 @@ export const OUTPUT_TOOLS: Tool[] = [{ type: "function", function: { name: "read
     search: { type: "string", description: "Optional exact text to find at or after the offset." } }, required: ["reference"], additionalProperties: false } } }];
 
 /** Hooks transform before retention; oversized results become retrievable references rather than cuts. */
-export async function formatToolOutput(input: Scope & { name: string; value: unknown; inlineLimit?: number; retrievalAllowed?: boolean }, store = toolOutputStore): Promise<string> {
+export async function formatToolOutput(input: Scope & { name: string; value: unknown; inlineLimit?: number; retrievalAllowed?: boolean; resource?: string }, store = toolOutputStore): Promise<string> {
   const sanitized = serializeToolOutput(input.value);
   const transformed = await runPostToolUse({ event: "PostToolUse", toolName: input.name, output: sanitized });
   let text: string;
@@ -108,7 +113,7 @@ export async function formatToolOutput(input: Scope & { name: string; value: unk
   catch { text = redactOutputText(transformed.output); }
   if (text.length <= (input.inlineLimit ?? OUTPUT_INLINE_CHARS) || input.name === "read_tool_output") return text;
   if (input.retrievalAllowed === false) throw new ToolOutputError("OUTPUT_STORAGE_UNAVAILABLE", "This tool produced a large result, but read_tool_output is disabled for this Bot. Request a smaller range or enable that reader.");
-  const saved = await store.put(input, text);
+  const saved = await store.put(input, text, { tool: input.name, ...(input.resource ? { resource: input.resource } : {}) });
   return JSON.stringify({ status: "retained_output", ...saved, readTool: "read_tool_output", offsetUnit: "UTF-16 characters",
     preview: text.slice(0, 400), tail: text.slice(-1200), message: "The complete sanitized result is retained. Read or search the reference for details outside this preview." });
 }

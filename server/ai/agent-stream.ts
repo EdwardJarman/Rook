@@ -36,6 +36,7 @@ import { invokeAiResilient } from "./fallback-router";
 import { recordTurn, recordInterruptedTurn } from "./telemetry";
 import { ForegroundOutcomeUnknown } from "./foreground-replay";
 import { accountingTaskKey, withRequestAccounting } from "./request-accounting";
+import { retainedOutputResource } from "../integrations/retained-output-scope";
 import { formatToolOutput, serializeToolOutput, ToolOutputError } from "./tool-output";
 import {
   MAX_OUTPUT_CONTINUATIONS,
@@ -536,6 +537,7 @@ async function runAccountedAgentStream(
         }
         rendered = await formatToolOutput({ ...input, name, value: executed.resultPayload,
           retrievalAllowed: !input.disallowedTools?.includes("read_tool_output"),
+          resource: retainedOutputResource(name, call.function.arguments),
           inlineLimit: Math.min(12_000, Math.max(2000, ROOK_TURN_TOOL_BUDGET_CHARS - toolPayloadChars)) });
       } catch (error) {
         if (error instanceof ForegroundOutcomeUnknown) return friendlyTurnEnd(new AgentLoopStop("OUTCOME_UNKNOWN", error.message));

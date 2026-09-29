@@ -62,6 +62,7 @@ import {
 import { makeExcelActionId } from "./microsoft-excel";
 import { checkToolPolicy, loadToolPolicyFromEnv, sniffPolicyHints } from "./tool-policy";
 import { runPreToolUse } from "../ai/hooks";
+import { retainedOutputAuthorizer } from "./retained-output-scope";
 import { OUTPUT_TOOLS, readToolOutputArgs, toolOutputStore, ToolOutputError } from "../ai/tool-output";
 
 const EXCEL_TOOL_SET = new Set(EXCEL_TOOLS.map((tool) => tool.function.name));
@@ -356,7 +357,7 @@ export async function executeAgentTool(input: {
   if (name === "read_tool_output") {
     try {
       const args = readToolOutputArgs.parse(JSON.parse(rawArgs || "{}"));
-      return { traceStep: step("Read retained tool output"), resultPayload: { status: "completed", result: await toolOutputStore.read(input, args) } };
+      return { traceStep: step("Read retained tool output"), resultPayload: { status: "completed", result: await toolOutputStore.read(input, args, retainedOutputAuthorizer(input)) } };
     } catch (error) {
       return { traceStep: step("Retained output unavailable"), resultPayload: { status: "error", retryable: false,
         code: error instanceof ToolOutputError ? error.code : "INVALID_ARGUMENTS",
