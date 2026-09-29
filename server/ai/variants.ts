@@ -13,14 +13,17 @@ export type VariantFlags = {
   leanPrompt: boolean;
   /** Low-use tools load on demand through `load_tools` instead of riding every request. */
   toolOffload: boolean;
+  /** Smaller verbatim history window; older turns become a plan ledger plus a scoped transcript pointer. */
+  compactPlan: boolean;
 };
 
 export const VARIANT_ENV: Record<keyof VariantFlags, string> = {
   leanPrompt: "ROOK_VARIANT_LEAN_PROMPT",
   toolOffload: "ROOK_VARIANT_TOOL_OFFLOAD",
+  compactPlan: "ROOK_VARIANT_COMPACT_PLAN",
 };
 
-export const NO_VARIANTS: VariantFlags = { leanPrompt: false, toolOffload: false };
+export const NO_VARIANTS: VariantFlags = { leanPrompt: false, toolOffload: false, compactPlan: false };
 
 const truthy = (value: string | undefined) => value === "1" || value?.toLowerCase() === "true";
 
