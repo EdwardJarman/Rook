@@ -20,7 +20,7 @@ describe("variant flags", () => {
     for (const on of ["1", "true", "TRUE"]) expect(resolveVariants(undefined, { ROOK_VARIANT_LEAN_PROMPT: on }).leanPrompt).toBe(true);
     expect(resolveVariants({ leanPrompt: false }, { ROOK_VARIANT_LEAN_PROMPT: "1" }).leanPrompt).toBe(false);
     expect(resolveVariants({ leanPrompt: true }, {}).leanPrompt).toBe(true);
-    expect(activeVariantNames({ leanPrompt: true })).toEqual(["leanPrompt"]);
+    expect(activeVariantNames({ ...NO_VARIANTS, leanPrompt: true })).toEqual(["leanPrompt"]);
     expect(activeVariantNames(NO_VARIANTS)).toEqual([]);
   });
 });

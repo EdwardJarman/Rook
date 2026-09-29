@@ -5,6 +5,7 @@ Every variant is **default-off**, independent, and unevaluated for quality. None
 | Variant | Env flag | Status |
 | --- | --- | --- |
 | Lean prompt | `ROOK_VARIANT_LEAN_PROMPT=1` | Implemented, tests green, quality unevaluated |
+| Tool offload | `ROOK_VARIANT_TOOL_OFFLOAD=1` | Implemented, tests green, quality unevaluated |
 
 ## Lean prompt
 
@@ -25,3 +26,18 @@ The stable prompt alone is 4,666 → 3,210 characters (-31%) for the test bot. N
 Untested risks to watch in the eval: fewer explicit "tight answer" cues may lengthen replies (more output tokens); dropping "ultra-code" may change coding depth; the stale-topic regression guard was reworded.
 
 **Rollback:** unset `ROOK_VARIANT_LEAN_PROMPT` (or set it to anything but `1`/`true`) and redeploy or restart. No data or schema is involved. Code revert: `git revert` the chunk 4a commit; the legacy builder was never modified.
+
+## Tool offload
+
+Five low-use tools stop riding every request: `excel_list_tables`, `excel_add_worksheet`, `excel_create_workbook`, `github_repo_overview`, `computer_propose_task` (`OFFLOADABLE_TOOL_NAMES` in `server/ai/tool-offload.ts`). **This list is a hypothesis from tool purpose, not measured call share** (PR #38's audit found no real usage data). In their place a small `load_tools` tool, appended last, lists them with one-liners. Calling `load_tools({names})` returns their full definitions and activates them for the rest of the turn (`ToolActivation`; rebuilt from message history on a resumed turn). If the model calls an offloaded tool directly, the dispatcher still runs it (all policy checks unchanged) and activates it, so a model that knows the name is never blocked, only possibly slower or less accurate without the schema. Read, search, edit and shell tools are never offloaded (pinned by test). Bot `disallowedTools` are respected for both the pointer and the loaded tool; the pointer is omitted when nothing offloadable is permitted or offered. `load_tools` is read-only and registered in `TOOL_REGISTRY` / `TOOL_RISK` (offered-tool count pin 19 -> 20).
+
+Measured (characters, not tokens):
+
+| Scenario | Tool definitions off → on |
+| --- | ---: |
+| All connectors (19 offered tools) | 11,551 → 9,307 (-2,244, -19%); 15 tools |
+| Harness fixtures (no connectors) | 2,247 → 1,950 (-297, -13%) |
+
+Costs not counted above: an extra round (and its full-request resend) whenever the model loads a tool before using it; and the tool list changes mid-turn on load, which can defeat provider prefix caching for later rounds. Either can exceed the schema saving on tasks that do use an offloaded tool. Per the pre-registered rule in the audit, the eval must show no rise in `invalid_arguments`/error rate, extra rounds, or success regression, and share of the offloaded tools must be confirmed low on real traffic (>=500 calls, <2%).
+
+**Rollback:** unset `ROOK_VARIANT_TOOL_OFFLOAD` and restart. Code revert: `git revert` the chunk 4b commit (removes `load_tools`, restores the 19-tool pin).
