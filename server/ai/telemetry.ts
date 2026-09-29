@@ -11,6 +11,7 @@
  * any secret material. Only shapes and timings.
  */
 
+import { toolUsageStats, type ToolOutcomeRecord } from "./tool-metrics";
 import { accountingTurnRecorded, markAccountingTurnRecorded, requestAccountingSnapshot, summarizeUsage, type ModelRequestRecord, type UsageTotals } from "./request-accounting";
 
 export type TurnRecord = {
@@ -23,6 +24,8 @@ export type TurnRecord = {
   fellBack: boolean;
   providers: string[];
   tools: string[];
+  /** One entry per model-requested tool call, including skipped duplicates. Codes only. */
+  toolOutcomes?: ToolOutcomeRecord[];
   approvals: number;
   computerProposals: number;
   webSearched: boolean;
@@ -110,6 +113,9 @@ export function turnStats(): {
       .slice(0, 8),
   };
 }
+
+/** Per-tool call share and error rates over the bounded window. */
+export const toolStats = () => toolUsageStats(turns);
 
 export const __resetTelemetryForTests = (): void => {
   turns.length = 0;

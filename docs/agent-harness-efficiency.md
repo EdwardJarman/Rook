@@ -16,7 +16,7 @@ Status: in progress. Starting point: main `7463c95`, clean checkout, 2026-09-28.
 | Fallback | `fallback-router.ts`, `ai/index.ts` | Cross-provider breaker exists. ChatGPT fallback in index is broader than the taxonomy; review in reliability phase. |
 | Detached work | `server/background/*`, durable turn seam | Fenced persistence and replay already exist. Telemetry must retain requests when an attempt parks or exits early. |
 | Side questions | Not yet implemented | Add lightweight answer path and independent UI state; no tools or main-thread persistence. |
-| Telemetry | `telemetry.ts`, new `request-accounting.ts` | In-memory, last 100 turns, per process. Diagnostic window, not durable billing ledger. |
+| Telemetry | `telemetry.ts`, new `request-accounting.ts` | In-memory, last 100 turns, per process. Diagnostic window, not durable billing ledger. Per-tool outcome counts (`toolOutcomes`, `ai.turns.toolUsage`) added in chunk 3; see [tool-description-audit.md](tool-description-audit.md). |
 
 ## Accounting implemented first
 
