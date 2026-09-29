@@ -14,6 +14,9 @@ import {
 
 import { Avatar, Button, Spinner } from "@/components/primitives";
 import { Markdown } from "@/components/markdown";
+import { BtwPanel, type BtwPanelHandle } from "@/components/btw-panel";
+import { parseBtwCommand } from "../../../../shared/btw";
+import { useSafeAuth } from "@/lib/safe-auth";
 import { useTheme } from "@/lib/theme";
 import { useWorkroom, type Message, type Bot } from "@/lib/workroom";
 import { useLinkedFolders } from "@/lib/workspaces";
@@ -41,6 +44,8 @@ export function WorkroomPage() {
   } = useWorkroom();
   const { folders: linkedFolders, add: addLinkedFolder } = useLinkedFolders();
   const [composer, setComposer] = useState("");
+  const btwRef = useRef<BtwPanelHandle>(null);
+  const { userId } = useSafeAuth();
   const [attachments, setAttachments] = useState<string[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -60,6 +65,12 @@ export function WorkroomPage() {
   const submit = () => {
     const trimmed = composer.trim();
     if (!trimmed) return;
+    const sideQuestion = parseBtwCommand(trimmed);
+    if (sideQuestion !== null) {
+      btwRef.current?.open(sideQuestion);
+      setComposer("");
+      return;
+    }
     const botId = ensureChatTarget();
     void send(trimmed, attachments, botId);
     setComposer("");
@@ -159,11 +170,16 @@ export function WorkroomPage() {
             </div>
           ) : null}
 
+          <BtwPanel ref={btwRef} key={`${userId}:${activeChatBotId}:${activeWorkspacePath}`}
+            onClose={() => document.getElementById("rook-desktop-composer")?.focus()}
+            context={{ botId: activeBot?.id ?? "rook", botName: activeBot?.name ?? "Rook", model: activeBot?.model,
+              context: messages.filter((m) => m.botId === activeBot?.id).slice(-6).map(({ author, body }) => ({ author, body })) }} />
           <Composer
             value={composer}
             onChange={setComposer}
             onSubmit={submit}
             onAttach={onAttach}
+            onBtw={() => btwRef.current?.open()}
             attachments={attachments}
             onRemoveAttachment={(name) =>
               setAttachments((a) => a.filter((x) => x !== name))
@@ -500,6 +516,7 @@ function Composer({
   onChange,
   onSubmit,
   onAttach,
+  onBtw,
   attachments,
   onRemoveAttachment,
   activeBot,
@@ -514,6 +531,7 @@ function Composer({
   onChange: (next: string) => void;
   onSubmit: () => void;
   onAttach: () => void;
+  onBtw: () => void;
   attachments: string[];
   onRemoveAttachment: (name: string) => void;
   activeBot: Bot | null;
@@ -593,6 +611,7 @@ function Composer({
 
       <textarea
         ref={textAreaRef}
+        id="rook-desktop-composer"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onFocus={() => setArmed(true)}
@@ -647,6 +666,8 @@ function Composer({
         >
           <Paperclip size={15} />
         </button>
+        <button type="button" onClick={onBtw} title="Side question (/btw)" aria-label="Side question (/btw)"
+          style={{ border: 0, background: "transparent", color: tokens.textSoft, cursor: "pointer", padding: "4px 8px" }}>/btw</button>
 
         <button
           type="button"

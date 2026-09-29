@@ -1,5 +1,5 @@
 /**
- * Rook agent system prompt — v3 (cache-ordered, research-grounded).
+ * Rook agent system prompt — v4 layout (v3 standing instructions preserved).
  *
  * Layout follows the Anthropic/OpenAI harness rule verified in
  * `docs/ai-backend-research.md`: **static-first, volatile-last**. Provider
@@ -7,7 +7,7 @@
  * turns for one Bot (identity, route, standing rules) comes first and
  * everything that changes per turn (clock, computer/pairing state,
  * connector state, memory, search snippets) trails in one clearly-marked
- * `## Live context` section. Reordering stable content busts the cache —
+ * `## Live context` user-role setup message. Reordering stable content busts the cache —
  * treat the section order as frozen (see the order-pinning test).
  *
  * v2 carried: Bot identity delimiters, model-route transparency, Grok-Bot
@@ -16,7 +16,7 @@
  * first, batch independent reads, never re-call identical args, path refs).
  */
 
-export const ROOK_SYSTEM_PROMPT_VERSION = 3;
+export const ROOK_SYSTEM_PROMPT_VERSION = 4;
 
 export type CapabilityState = {
   /** "Rook Node" shared computer (user-owned, supervised Chromium). */
@@ -34,7 +34,7 @@ const sanitizeIdentity = (value: string, max: number) =>
     .slice(0, max)
     .trim();
 
-export function buildRookSystemPrompt(input: {
+export type RookSystemPromptInput = {
   botName: string;
   botRole: string;
   botPurpose: string;
@@ -46,7 +46,16 @@ export function buildRookSystemPrompt(input: {
   capabilities: CapabilityState;
   /** Extra connector/tool notes + web snippets, already formatted. */
   extraContext?: string;
-}): string {
+};
+
+/** Compatibility renderer for callers that need a single document. Agent requests use the parts. */
+export function buildRookSystemPrompt(input: RookSystemPromptInput): string {
+  const { stable, setup } = buildRookSystemPromptParts(input);
+  return `${stable}\n\n${setup}`;
+}
+
+/** Stable instructions precede a separate user-role setup message in provider requests. */
+export function buildRookSystemPromptParts(input: RookSystemPromptInput): { stable: string; setup: string } {
   const name = sanitizeIdentity(input.botName, 80) || "Rook Bot";
   const role = sanitizeIdentity(input.botRole, 120) || "AI teammate";
   const purpose = sanitizeIdentity(input.botPurpose, 500) || "Help with whatever the user hands over.";
@@ -97,8 +106,5 @@ export function buildRookSystemPrompt(input: {
     input.extraContext ?? ``,
   ];
 
-  return [...stable, ...live]
-    .filter((line) => line !== undefined)
-    .join("\n")
-    .trim();
+  return { stable: stable.join("\n").trim(), setup: live.join("\n").trim() };
 }

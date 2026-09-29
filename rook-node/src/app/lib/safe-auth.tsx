@@ -15,6 +15,7 @@ export type SafeUser = {
 };
 
 export type SafeAuth = {
+  userId?: string;
   mode: "clerk" | "offline";
   isLoaded: boolean;
   isSignedIn: boolean;

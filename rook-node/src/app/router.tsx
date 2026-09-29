@@ -10,6 +10,7 @@ import { ApprovalsPage } from "@/routes/approvals";
 import { ActivityPage } from "@/routes/activity";
 import { AccountPage } from "@/routes/account";
 import { SettingsPage } from "@/routes/settings";
+import { JobsPage } from "@/routes/jobs";
 
 export const router = createHashRouter([
   {
@@ -25,6 +26,7 @@ export const router = createHashRouter([
       { path: "activity", element: <ActivityPage /> },
       { path: "account", element: <AccountPage /> },
       { path: "settings", element: <SettingsPage /> },
+      { path: "jobs", element: <JobsPage /> },
       { path: "*", element: <Navigate to="/" replace /> },
     ],
   },

@@ -30,6 +30,7 @@ const streamBodySchema = z.object({
   connectors: z.array(z.enum(["microsoft-excel", "github"])).max(4).optional(),
   skillIds: z.array(z.string().min(1).max(64)).max(6).optional(),
   botMemory: z.string().max(4000).optional(),
+  disallowedTools: z.array(z.string().regex(/^[a-z][a-z0-9_]{0,79}$/)).max(100).optional(),
   reasoningEffort: z.enum(["low", "medium", "high"]).optional(),
   recentContext: z
     .array(

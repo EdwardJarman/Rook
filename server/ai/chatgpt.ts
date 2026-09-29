@@ -10,6 +10,7 @@ import type { ModelMessage } from "ai";
 import type { InvokeParams, InvokeResult, Message, ToolCall } from "../_core/llm";
 import { extractClerkBearerToken } from "../clerk-auth";
 import type { AiModel } from "./index";
+import { observeManagedCall } from "./request-accounting";
 
 const CHATGPT_PREFIX = "chatgpt:";
 const SESSION_METADATA_KEY = "rookChatGPTSession";
@@ -324,6 +325,14 @@ export async function invokeChatGPT(
   params: InvokeParams,
   request: ExpressRequest,
 ): Promise<InvokeResult> {
+  return observeManagedCall({ provider: "chatgpt", model: params.model ?? "chatgpt", payload: params,
+    scope: "sdk-call" }, () => invokeAccountedChatGPT(params, request));
+}
+
+async function invokeAccountedChatGPT(
+  params: InvokeParams,
+  request: ExpressRequest,
+): Promise<InvokeResult> {
   const model = chatGPTModelSlug(params.model || "");
   if (!model) throw new Error("Choose a ChatGPT model after connecting your account.");
   const requestedEffort = (params.reasoning as { effort?: unknown } | undefined)?.effort;
@@ -383,9 +392,14 @@ export async function invokeChatGPT(
       finish_reason: toolCalls.length ? "tool_calls" : finishReason,
     }],
     usage: usage ? {
-      prompt_tokens: usage.inputTokens ?? 0,
-      completion_tokens: usage.outputTokens ?? 0,
-      total_tokens: usage.totalTokens ?? 0,
+      prompt_tokens: usage.inputTokens,
+      completion_tokens: usage.outputTokens,
+      total_tokens: usage.totalTokens,
+      prompt_tokens_details: {
+        cached_tokens: usage.inputTokenDetails?.cacheReadTokens,
+        cache_write_tokens: usage.inputTokenDetails?.cacheWriteTokens,
+      },
+      completion_tokens_details: { reasoning_tokens: usage.outputTokenDetails?.reasoningTokens },
     } : undefined,
   };
 }

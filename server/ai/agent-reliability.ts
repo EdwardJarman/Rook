@@ -276,6 +276,7 @@ export function isMaxTokensError(error: unknown): boolean {
 }
 
 export function friendlyAgentError(error: unknown): string {
+  if (error instanceof AgentLoopStop) return error.message;
   const message = error instanceof Error ? error.message : String(error ?? "");
   if (/rate.?limit|429|capacity.*full|temporarily full/i.test(message))
     return "Free AI capacity is temporarily full — I kept your message. Please try again in a few seconds.";
@@ -340,7 +341,8 @@ export function isReasoningRejectedError(error: unknown): boolean {
  *   with images removed, not a blind retry)
  * - 429 / rate-limit → `rate-limit` (honor Retry-After via `parseRetryAfterMs`)
  * - other transient (see `isTransientAgentError`) → `retry`
- * - everything else (incl. max-tokens overflow) → `fatal`
+ * - max-tokens rejection → `shrink` (caller permits this once per turn)
+ * - everything else → `fatal`
  *
  * Doom-loop: the turn already computes `toolCallFingerprint` per call — when
  * the last N fingerprints are identical the loop is spinning, so abort with
@@ -348,6 +350,7 @@ export function isReasoningRejectedError(error: unknown): boolean {
  */
 export type RetryDecisionKind =
   | "emit"
+  | "shrink"
   | "image-strip"
   | "rate-limit"
   | "retry"
@@ -420,14 +423,38 @@ export const IDLE_TIMEOUT_MESSAGE =
  * Classify an agent error into the grok-style decision. Pure — the caller
  * owns backoff/fallback presentation. Order mirrors retry.rs: auth first,
  * then image-strip, then rate-limit, then generic retry, else fatal.
- * `max_tokens` overflow is always fatal (never burns the retry budget).
+ * A rejected output budget permits one shrink retry, independently of transient retries.
  */
 export function classifyRetryDecision(error: unknown): RetryDecisionKind {
+  if (error instanceof AgentLoopStop || (error instanceof Error && error.name === "AbortError")) return "fatal";
+  const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+  if (code === "UNKNOWN_TOOL" || code === "POLICY_DENIED" || code === "HOOK_DENIED") return "fatal";
   if (isAuthAgentError(error)) return "emit";
   if (isPayloadTooLargeError(error) || isImageProcessingError(error))
     return "image-strip";
   if (isRateLimitedError(error)) return "rate-limit";
-  if (isMaxTokensError(error) || isIdleTimeoutError(error)) return "fatal";
+  if (isIdleTimeoutError(error)) return "fatal";
+  if (isMaxTokensError(error)) return "shrink";
   if (isTransientAgentError(error)) return "retry";
   return "fatal";
+}
+
+/** Terminal loop state is distinct from provider failures, even if its text mentions a network tool. */
+export class AgentLoopStop extends Error {
+  constructor(public readonly code: "DOOM_LOOP" | "UNKNOWN_TOOL" | "POLICY_DENIED" | "OUTPUT_UNAVAILABLE", message: string) {
+    super(message);
+    this.name = "AgentLoopStop";
+  }
+}
+
+export function canRetryAgentRound(error: unknown): boolean {
+  const decision = classifyRetryDecision(error);
+  return decision === "retry" || decision === "rate-limit";
+}
+
+export function terminalToolError(payload: unknown): AgentLoopStop | undefined {
+  if (payload && typeof payload === "object" && "code" in payload && payload.code === "UNKNOWN_TOOL") {
+    return new AgentLoopStop("UNKNOWN_TOOL", "The model requested a tool that isn't available, so I stopped this turn.");
+  }
+  return undefined;
 }

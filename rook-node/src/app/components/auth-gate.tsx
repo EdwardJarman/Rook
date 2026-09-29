@@ -54,6 +54,7 @@ function AuthGateInner({ children }: { children: ReactNode }) {
     return () => clearTimeout(id);
   }, [isLoaded]);
   const safeAuth: SafeAuth = {
+    userId: user?.id,
     mode: "clerk",
     isLoaded: Boolean(isLoaded),
     isSignedIn: Boolean(isSignedIn),

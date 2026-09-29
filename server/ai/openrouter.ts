@@ -10,6 +10,7 @@ import {
   responseFormatFor,
 } from "./openai-compat";
 import { isReasoningRejectedError } from "./agent-reliability";
+import { fetchModelCompletion, readModelJson } from "./request-accounting";
 
 export const OPENROUTER_API_BASE = "https://openrouter.ai/api/v1";
 export const OPENROUTER_AUTO_MODEL = "openrouter/free";
@@ -388,12 +389,12 @@ export async function invokeOpenRouter(
   let lastNetworkError: unknown;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      response = await fetch(`${OPENROUTER_API_BASE}/chat/completions`, {
+      response = await fetchModelCompletion(`${OPENROUTER_API_BASE}/chat/completions`, {
         method: "POST",
         headers: headers(true),
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      });
+      }, { provider: "openrouter", model, payload });
       lastNetworkError = undefined;
     } catch (error) {
       // AbortSignal.timeout throws + transient network blips: retry with
@@ -407,11 +408,11 @@ export async function invokeOpenRouter(
       continue;
     }
     if (response.ok) {
-      // Gateways can return an HTML/plain-text error with a 2xx status. Treat
-      // that as transient instead of exposing a JSON parser exception in chat.
-      const raw = await response.text();
+      // Gateways can return an HTML/plain-text error with a 2xx status. Parse
+      // through accounting so the failed attempt is recorded, then retry
+      // rather than exposing a JSON parser exception in chat.
       try {
-        result = JSON.parse(raw) as InvokeResult & {
+        result = (await readModelJson<InvokeResult>(response)) as InvokeResult & {
           choices?: Array<{ message?: { tool_calls?: ToolCall[] } }>;
         };
         break;
@@ -461,12 +462,12 @@ export async function invokeOpenRouter(
     ) {
       delete payload.reasoning;
       delete payload.thinking;
-      const retry = await fetch(`${OPENROUTER_API_BASE}/chat/completions`, {
+      const retry = await fetchModelCompletion(`${OPENROUTER_API_BASE}/chat/completions`, {
         method: "POST",
         headers: headers(true),
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      }).catch(() => undefined);
+      }, { provider: "openrouter", model, payload }).catch(() => undefined);
       if (retry?.ok) {
         response = retry;
       } else {
@@ -482,9 +483,8 @@ export async function invokeOpenRouter(
   }
 
   if (!result) {
-    const raw = await response.text();
     try {
-      result = JSON.parse(raw) as InvokeResult & {
+      result = (await readModelJson<InvokeResult>(response)) as InvokeResult & {
         choices?: Array<{ message?: { tool_calls?: ToolCall[] } }>;
       };
     } catch {

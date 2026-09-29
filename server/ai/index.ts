@@ -1,5 +1,6 @@
 import type { InvokeParams, InvokeResult } from "../_core/llm";
 import type { Request } from "express";
+import { canRetryAgentRound } from "./agent-reliability";
 import {
   invokeOpenRouter,
   listOpenRouterModels,
@@ -72,6 +73,7 @@ export const invokeAi = (params: InvokeParams, request?: Request): Promise<Invok
   if (isChatGPTModel(params.model)) {
     if (!request) throw new Error("ChatGPT needs an authenticated Rook request.");
     return invokeChatGPT(params, request).catch((error) => {
+      if (!canRetryAgentRound(error)) throw error;
       console.warn("[AI] ChatGPT unavailable; using OpenRouter fallback", {
         errorName: error instanceof Error ? error.name : "UnknownError",
       });

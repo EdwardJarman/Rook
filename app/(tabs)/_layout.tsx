@@ -117,6 +117,7 @@ function RookTabs() {
           ),
         }}
       />
+      <Tabs.Screen name="updates" options={{ title: "Updates", tabBarAccessibilityLabel: "Open updates", tabBarIcon: ({ color, size }) => <MaterialIcons name="notifications-none" color={color} size={size} /> }} />
     </Tabs>
   );
 }

@@ -91,7 +91,8 @@ describe("frozen tool order (cache-safe registry)", () => {
     // 13 families + read_skill (appended deliberately for the skills loop)
     // + 4 cloud computer tools (appended merging origin/main; see
     // orderToolset cache-bust note in agent-tool-executor.ts).
-    expect(offered).toHaveLength(18);
+    // Retained-output reader appended as a read-only family; prior order preserved.
+    expect(offered).toHaveLength(19);
     for (const name of offered) {
       expect(
         TOOL_RISK[name as keyof typeof TOOL_RISK],

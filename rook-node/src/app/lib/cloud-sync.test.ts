@@ -45,10 +45,11 @@ describe("cloud bot mapping", () => {
       model: "auto",
       lastActive: "now",
       memory: "m",
+      disallowedTools: ["computer_write_file"],
       approvalRule: "ask",
     };
     const back = mapCloudBot(unmapDesktopBot(desktop));
-    expect(back).toMatchObject({ id: "b1", name: "Scout", memory: "m", model: "auto" });
+    expect(back).toMatchObject({ id: "b1", name: "Scout", memory: "m", model: "auto", disallowedTools: ["computer_write_file"] });
   });
 });
 

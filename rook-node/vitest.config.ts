@@ -6,6 +6,7 @@ export default defineConfig({
     alias: { "@": path.resolve(__dirname, "src/app") },
   },
   esbuild: {
+    jsx: "automatic",
     // The shared relay module lives outside this package, so vitest's tsconfig
     // discovery walks up to the web app's tsconfig (which extends
     // "expo/tsconfig.base" — unresolvable here). Pin the transform config.

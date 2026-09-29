@@ -86,3 +86,5 @@ data controls (clear local history), keyboard-shortcuts help overlay
 the sidebar Recent section (the critic found "Workroom" vaguer than
 Claude's "Chats"). Remove in-product competitor name-drops ("like Codex
 and Claude desktop") — comparison belongs on the website, not in the UI.
+
+Phase 3 tray status is deferred: src-tauri/Cargo.toml has neither the roadmap's tauri-plugin-tray dependency nor Tauri's tray-icon feature, and no tray integration exists. The desktop shell now has an in-app background-job status link. No native dependency was added.

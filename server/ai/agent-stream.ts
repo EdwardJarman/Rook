@@ -33,20 +33,25 @@ import {
   supportsModelStream,
 } from "./openai-stream";
 import { invokeAiResilient } from "./fallback-router";
-import { recordTurn } from "./telemetry";
+import { recordTurn, recordInterruptedTurn } from "./telemetry";
+import { accountingTaskKey, withRequestAccounting } from "./request-accounting";
+import { formatToolOutput, serializeToolOutput, ToolOutputError } from "./tool-output";
 import {
   MAX_OUTPUT_CONTINUATIONS,
   OUTPUT_LIMIT_TAIL,
   ROOK_AGENT_MAX_ROUNDS,
   ROOK_TURN_TOOL_BUDGET_CHARS,
   backoffSleep,
+  AgentLoopStop,
+  canRetryAgentRound,
+  DOOM_LOOP_ABORT_MESSAGE,
+  hasDoomLoop,
+  terminalToolError,
   friendlyAgentError,
-  isMaxTokensError,
-  isTransientAgentError,
+  classifyRetryDecision,
   parseRetryAfterMs,
   stripScaffolding,
   toolCallFingerprint,
-  toolResultText,
 } from "./agent-reliability";
 import type { AgentTraceStep } from "../../shared/agent-trace";
 import type { ExcelAgentApproval } from "../integrations/excel-agent";
@@ -94,6 +99,21 @@ export async function runRookAgentStream(
   emit: AgentStreamEmit,
   signal?: AbortSignal,
 ) {
+  return withRequestAccounting(accountingTaskKey(input.userId, input.botId, input.taskId), async () => {
+    const started = Date.now();
+    try { return await runAccountedAgentStream(input, emit, signal); }
+    catch (error) {
+      recordInterruptedTurn(randomUUID().slice(0, 8), input.model ?? "openrouter/free", started, error);
+      throw error;
+    }
+  });
+}
+
+async function runAccountedAgentStream(
+  input: RookAgentInput,
+  emit: AgentStreamEmit,
+  signal?: AbortSignal,
+) {
   const requestId = randomUUID().slice(0, 8);
   const startedAt = Date.now();
   const setup = await prepareAgentTurn(input, requestId);
@@ -123,6 +143,7 @@ export async function runRookAgentStream(
   const usedTools: string[] = [];
   const computerProposals: ComputerProposal[] = [];
   const seenToolCalls = new Set<string>();
+  const toolFingerprints: string[] = [];
   let resolvedModel = requestedModel;
   let fellBackToAuto = false;
   let attemptedProviders: string[] = [];
@@ -257,7 +278,7 @@ export async function runRookAgentStream(
             model: requestedModel,
             messages,
             tools,
-            toolChoice: tools ? "auto" : undefined,
+            toolChoice: tools ? (toolPayloadChars >= ROOK_TURN_TOOL_BUDGET_CHARS ? "none" : "auto") : undefined,
             maxTokens: effectiveBudget,
             ...(reasoning ? { reasoning } : {}),
           },
@@ -303,10 +324,15 @@ export async function runRookAgentStream(
           // text is the only honest option (a regeneration could double up
           // approvals already recorded this turn).
           throw new PartialStreamError(emittedText);
-        } else if (isTransientAgentError(error)) {
+        } else if (classifyRetryDecision(error) === "shrink" && !budgetHalved) {
+          budgetHalved = true;
+          effectiveBudget = Math.max(800, Math.floor(effectiveBudget / 2));
+          return invokeRoundBare();
+        } else if (canRetryAgentRound(error) && !signal?.aborted) {
           // Nothing emitted yet: drop to the resilient non-streaming path
           // for the rest of this turn rather than failing the chat.
           canStream = false;
+          await backoffSleep(0, parseRetryAfterMs(null));
         } else {
           throw error;
         }
@@ -319,7 +345,7 @@ export async function runRookAgentStream(
           model: requestedModel,
           messages,
           tools,
-          toolChoice: tools ? "auto" : undefined,
+          toolChoice: tools ? (toolPayloadChars >= ROOK_TURN_TOOL_BUDGET_CHARS ? "none" : "auto") : undefined,
           maxTokens: effectiveBudget,
           ...(reasoning ? { reasoning } : {}),
         },
@@ -350,13 +376,13 @@ export async function runRookAgentStream(
         finishReason: invoked.result.choices[0]?.finish_reason ?? null,
       };
     } catch (error) {
-      if (isMaxTokensError(error) && !budgetHalved) {
+      if (classifyRetryDecision(error) === "shrink" && !budgetHalved) {
         budgetHalved = true;
         effectiveBudget = Math.max(800, Math.floor(effectiveBudget / 2));
         await backoffSleep(0, parseRetryAfterMs(null));
         return invokeRoundBare();
       }
-      if (isTransientAgentError(error) && round === 0 && !attemptedProviders.length) {
+      if (canRetryAgentRound(error) && !signal?.aborted) {
         await backoffSleep(0, parseRetryAfterMs(null));
         return invokeRoundBare();
       }
@@ -371,7 +397,7 @@ export async function runRookAgentStream(
         model: requestedModel,
         messages,
         tools,
-        toolChoice: tools ? "auto" : undefined,
+        toolChoice: tools ? (toolPayloadChars >= ROOK_TURN_TOOL_BUDGET_CHARS ? "none" : "auto") : undefined,
         maxTokens: effectiveBudget,
         ...(reasoning ? { reasoning } : {}),
       },
@@ -442,7 +468,15 @@ export async function runRookAgentStream(
 
     for (const call of calls) {
       const name = call.function.name;
+      if (toolPayloadChars >= ROOK_TURN_TOOL_BUDGET_CHARS) {
+        messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify({ status: "not_executed", message: "The turn's tool-output budget is reached. Answer from the retained results and identify remaining work." }) });
+        continue;
+      }
       const fingerprint = toolCallFingerprint(name, call.function.arguments);
+      toolFingerprints.push(fingerprint);
+      if (hasDoomLoop(toolFingerprints)) {
+        return friendlyTurnEnd(new AgentLoopStop("DOOM_LOOP", DOOM_LOOP_ABORT_MESSAGE));
+      }
       if (seenToolCalls.has(fingerprint)) {
         messages.push({
           role: "tool",
@@ -468,6 +502,7 @@ export async function runRookAgentStream(
           taskId: input.taskId,
           name,
           rawArgs: call.function.arguments,
+          disallowedTools: input.disallowedTools,
           excelConnected: connection.connected,
           githubConnected: github.connected && github.selectedRepos.length > 0,
           computerOnline: computer.online,
@@ -476,38 +511,31 @@ export async function runRookAgentStream(
         });
         trace.push(executed.traceStep);
         emit({ type: "trace", step: executed.traceStep });
+        const terminal = terminalToolError(executed.resultPayload);
+        if (terminal) return friendlyTurnEnd(terminal);
         for (const approval of approvals.slice(approvalsBefore)) {
           emit({ type: "approval", approval });
         }
         for (const proposal of computerProposals.slice(proposalsBefore)) {
           emit({ type: "proposal", proposal });
         }
-        rendered = toolResultText(executed.resultPayload);
+        rendered = await formatToolOutput({ ...input, name, value: executed.resultPayload,
+          retrievalAllowed: !input.disallowedTools?.includes("read_tool_output"),
+          inlineLimit: Math.min(12_000, Math.max(2000, ROOK_TURN_TOOL_BUDGET_CHARS - toolPayloadChars)) });
       } catch (error) {
+        if (error instanceof ToolOutputError) return friendlyTurnEnd(new AgentLoopStop("OUTPUT_UNAVAILABLE", error.message));
         const step = {
           kind: "tool",
           title: "A connected-tool step could not be completed",
         } as const;
         trace.push(step);
         emit({ type: "trace", step });
-        rendered = toolResultText({
+        rendered = serializeToolOutput({
           status: "error",
           message: error instanceof Error ? error.message : "Connected tool failed",
         });
       }
       toolPayloadChars += rendered.length;
-      if (toolPayloadChars > ROOK_TURN_TOOL_BUDGET_CHARS) {
-        messages.push({
-          role: "tool",
-          tool_call_id: call.id,
-          content: JSON.stringify({
-            status: "truncated",
-            message:
-              "Tool budget for this turn is exhausted. Summarize what you have so far and ask the user for a narrower next step instead of calling more tools.",
-          }),
-        });
-        break;
-      }
       messages.push({
         role: "tool",
         tool_call_id: call.id,

@@ -21,6 +21,7 @@ export type Bot = {
   model: string;
   lastActive: string;
   memory: string;
+  disallowedTools?: string[];
   approvalRule: string;
 };
 
