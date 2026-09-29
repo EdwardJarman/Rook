@@ -51,6 +51,8 @@ export function retainedOutputAuthorizer(
     if (input.disallowedTools?.includes(source.tool)) return false;
     try {
       if (SKILL_TOOL_NAMES.has(source.tool)) return true;
+      // Owner + Bot scope is enforced by the store; a transcript touches no connector.
+      if (source.tool === "conversation_transcript") return true;
       if (EXCEL_TOOL_NAMES.has(source.tool)) {
         const status = await deps.excelStatus(input.userId);
         if (!status.connected) return false;
