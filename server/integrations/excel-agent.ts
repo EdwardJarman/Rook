@@ -14,7 +14,7 @@ import { outcomeFromError, outcomeFromPayload, skippedOutcome, type ToolOutcomeR
 import { ForegroundOutcomeUnknown } from "../ai/foreground-replay";
 import { accountingTaskKey, setAccountingSections, withRequestAccounting } from "../ai/request-accounting";
 import { retainedOutputResource } from "./retained-output-scope";
-import { formatToolOutput, OUTPUT_TOOLS, serializeToolOutput, ToolOutputError } from "../ai/tool-output";
+import { formatToolOutput, OUTPUT_TOOLS, redactOutputText, serializeToolOutput, ToolOutputError, toolOutputStore } from "../ai/tool-output";
 import { getComputerPromptState } from "../ai/computer-context";
 import { buildRookSystemPromptParts } from "../ai/system-prompt";
 import { activeVariantNames, resolveVariants } from "../ai/variants";
@@ -48,7 +48,7 @@ import {
   toolCallFingerprint,
   type ReasoningEffort,
 } from "../ai/agent-reliability";
-import { buildCheckpointLedger } from "../ai/compaction";
+import { buildCheckpointLedger, buildPlanLedger, PLAN_HISTORY_BUDGET_TOKENS } from "../ai/compaction";
 import { resolveRequestedModel } from "../ai/turn-context";
 import { githubConnectionStatus, isGithubConfigured } from "./github";
 import { GITHUB_TOOLS } from "./github-tools";
@@ -366,9 +366,19 @@ export async function prepareAgentTurn(
   // turns are condensed into a checkpoint ledger (never silently lost).
   const { kept: fittedHistory, dropped: droppedHistory } = partitionRecentContext(
     freshContext,
-    6000,
+    variants.compactPlan ? PLAN_HISTORY_BUDGET_TOKENS : 6000,
   );
-  const ledgerBlock = buildCheckpointLedger(droppedHistory);
+  let ledgerBlock: string;
+  if (variants.compactPlan) {
+    let reference: string | undefined;
+    if (droppedHistory.length && !input.disallowedTools?.includes("read_tool_output")) {
+      try {
+        const transcript = redactOutputText(droppedHistory.map((entry) => `[${entry.author}] ${entry.body}`).join("\n\n"));
+        reference = (await toolOutputStore.put({ userId: input.userId, botId: input.botId }, transcript, { tool: "conversation_transcript" })).reference;
+      } catch { /* No pointer; the ledger still stands on its own. */ }
+    }
+    ledgerBlock = buildPlanLedger(droppedHistory, reference);
+  } else ledgerBlock = buildCheckpointLedger(droppedHistory);
 
   const memoryBlock = buildMemoryBlock(input.botMemory);
   const suggestedMemories: MemoryCandidate[] = extractMemoryCandidates(input.message);
