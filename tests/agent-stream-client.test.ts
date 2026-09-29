@@ -71,6 +71,14 @@ describe("agent stream client", () => {
   });
 
   it("throws on mid-stream error events so callers fall back", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(sseResponse([{ kind: "done", result: doneResult }]).body, {
+      status: 200, headers: { "Content-Type": "text/event-stream", "X-Rook-Turn-Replay": "1" },
+    })));
+    let replayable = false;
+    await streamAgentReply({ baseUrl: "https://api.test", body: {}, getToken: async () => null,
+      callbacks: { onReplayable: () => { replayable = true; } } });
+    expect(replayable).toBe(true);
+
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(

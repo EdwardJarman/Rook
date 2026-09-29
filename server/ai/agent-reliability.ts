@@ -441,7 +441,7 @@ export function classifyRetryDecision(error: unknown): RetryDecisionKind {
 
 /** Terminal loop state is distinct from provider failures, even if its text mentions a network tool. */
 export class AgentLoopStop extends Error {
-  constructor(public readonly code: "DOOM_LOOP" | "UNKNOWN_TOOL" | "POLICY_DENIED" | "OUTPUT_UNAVAILABLE", message: string) {
+  constructor(public readonly code: "DOOM_LOOP" | "UNKNOWN_TOOL" | "POLICY_DENIED" | "OUTPUT_UNAVAILABLE" | "OUTCOME_UNKNOWN", message: string) {
     super(message);
     this.name = "AgentLoopStop";
   }

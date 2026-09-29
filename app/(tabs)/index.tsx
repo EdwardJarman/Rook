@@ -526,6 +526,7 @@ export default function ChatScreen() {
       const replyInput = {
         botId: activeBot.id,
         taskId: task.id,
+        turnId: `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`,
         botName: clampReplyField(activeBot.name, REPLY_LIMITS.botName),
         botRole: clampReplyField(activeBot.role, REPLY_LIMITS.botRole),
         botPurpose: clampReplyField(activeBot.purpose, REPLY_LIMITS.botPurpose),
@@ -544,12 +545,14 @@ export default function ChatScreen() {
       // Fast path: live token streaming. Any failure — endpoint missing,
       // auth hiccup, mid-stream cut before tools ran — falls back to the
       // request/response mutation below, which stays the supported path.
-      // If tools already ran during the stream, do NOT retry (it would
-      // double up approvals); surface the partial failure instead.
+      // If tools already ran during the stream, only retry when the server
+      // journaled the turn (`onReplayable`): the retry shares `turnId` and
+      // replays recorded steps. Otherwise it would double up approvals.
       let response: Awaited<
         ReturnType<typeof replyMutation.mutateAsync>
       > | null = null;
       let streamTouchedTools = false;
+      let streamReplayable = false;
       streamAbortRef.current?.abort();
       const streamController = new AbortController();
       streamAbortRef.current = streamController;
@@ -579,6 +582,9 @@ export default function ChatScreen() {
             onToolActivity: () => {
               streamTouchedTools = true;
             },
+            onReplayable: () => {
+              streamReplayable = true;
+            },
           },
         });
         response = {
@@ -586,7 +592,7 @@ export default function ChatScreen() {
           pushDelivery: streamed.pushDelivery ?? { accepted: false, recipients: 0 },
         } as Awaited<ReturnType<typeof replyMutation.mutateAsync>>;
       } catch (streamError) {
-        if (streamTouchedTools) throw streamError;
+        if (streamTouchedTools && !streamReplayable) throw streamError;
         response = null;
       } finally {
         if (isCurrentStream()) {

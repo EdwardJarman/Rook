@@ -43,6 +43,8 @@ export type AgentStreamCallbacks = {
   onTrace?: (step: AgentStreamTraceStep) => void;
   /** Set when a tool ran — caller must NOT retry via mutation (would double up approvals). */
   onToolActivity?: () => void;
+  /** The server journals this turn: a retry with the same `turnId` replays instead of repeating tool effects. */
+  onReplayable?: () => void;
 };
 
 const SSE_EVENT_SPLIT = /\r?\n\r?\n/;
@@ -94,6 +96,7 @@ export async function streamAgentReply(input: {
   if (!response.ok || !hasStreamBody(response)) {
     throw new Error(`Stream unavailable (${response.status}).`);
   }
+  if (response.headers?.get?.("x-rook-turn-replay") === "1") input.callbacks?.onReplayable?.();
 
   const reader = (response.body as ReadableStream).getReader();
   const decoder = new TextDecoder();

@@ -17,10 +17,12 @@ import type { Express, Request, Response } from "express";
 import { authenticateClerkRequest } from "./clerk-auth";
 import { runRookAgentStream } from "./ai/agent-stream";
 import { friendlyAgentError } from "./ai/agent-reliability";
+import { ForegroundReplay, TURN_ID_PATTERN } from "./ai/foreground-replay";
 
 const streamBodySchema = z.object({
   botId: z.string().min(1).max(128),
   taskId: z.string().min(1).max(128),
+  turnId: z.string().regex(TURN_ID_PATTERN).optional(),
   botName: z.string().min(1).max(80),
   botRole: z.string().min(1).max(120),
   botPurpose: z.string().min(1).max(500),
@@ -74,11 +76,17 @@ export function registerAgentStreamRoute(app: Express): void {
       return;
     }
 
+    const { turnId, ...turn } = parsed.data;
+    const foregroundReplay = await ForegroundReplay.open({ userId: user.id, botId: turn.botId, taskId: turn.taskId, turnId });
+
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",
       "X-Accel-Buffering": "no",
+      ...(foregroundReplay
+        ? { "X-Rook-Turn-Replay": "1", "Access-Control-Expose-Headers": "X-Rook-Turn-Replay" }
+        : {}),
     });
     // Flush headers immediately so the client leaves its spinner fast.
     void (res as { flushHeaders?: () => void }).flushHeaders?.();
@@ -94,7 +102,7 @@ export function registerAgentStreamRoute(app: Express): void {
 
     try {
       const result = await runRookAgentStream(
-        { userId: user.id, request: req, ...parsed.data },
+        { userId: user.id, request: req, foregroundReplay, ...turn },
         (event) => send(serializeStreamEvent(event)),
         controller.signal,
       );

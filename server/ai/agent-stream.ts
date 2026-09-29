@@ -34,6 +34,7 @@ import {
 } from "./openai-stream";
 import { invokeAiResilient } from "./fallback-router";
 import { recordTurn, recordInterruptedTurn } from "./telemetry";
+import { ForegroundOutcomeUnknown } from "./foreground-replay";
 import { accountingTaskKey, withRequestAccounting } from "./request-accounting";
 import { formatToolOutput, serializeToolOutput, ToolOutputError } from "./tool-output";
 import {
@@ -270,6 +271,12 @@ async function runAccountedAgentStream(
 
   /** One model round: streaming first, honest fallbacks on failure. */
   const invokeRound = async (round: number): Promise<RoundAnswer> => {
+    const replayed = input.foregroundReplay?.savedRound(round);
+    if (replayed) {
+      if (replayed.content) emit({ type: "token", delta: replayed.content });
+      resolvedModel = replayed.model || resolvedModel;
+      return { content: replayed.content, toolCalls: replayed.toolCalls, model: resolvedModel, finishReason: replayed.finishReason };
+    }
     if (canStream) {
       let emittedText = "";
       try {
@@ -442,7 +449,12 @@ async function runAccountedAgentStream(
       return friendlyTurnEnd(error);
     }
 
-    const calls = answer.toolCalls;
+    let calls = answer.toolCalls;
+    if (calls.length && input.foregroundReplay) {
+      calls = (await input.foregroundReplay.recordRound(round, {
+        content: answer.content, toolCalls: calls, finishReason: answer.finishReason, model: answer.model,
+      })).toolCalls;
+    }
     if (!calls.length) {
       // Length-truncated answers keep streaming server-side (the partial
       // text already went out live) instead of stopping with homework.
@@ -496,7 +508,7 @@ async function runAccountedAgentStream(
       try {
         const proposalsBefore = computerProposals.length;
         const approvalsBefore = approvals.length;
-        const executed = await executeAgentTool({
+        const toolInput = {
           userId: input.userId,
           botId: input.botId,
           taskId: input.taskId,
@@ -508,7 +520,10 @@ async function runAccountedAgentStream(
           computerOnline: computer.online,
           approvals,
           computerProposals,
-        });
+        };
+        const executed = input.foregroundReplay
+          ? await input.foregroundReplay.execute(toolInput, () => executeAgentTool(toolInput))
+          : await executeAgentTool(toolInput);
         trace.push(executed.traceStep);
         emit({ type: "trace", step: executed.traceStep });
         const terminal = terminalToolError(executed.resultPayload);
@@ -523,6 +538,7 @@ async function runAccountedAgentStream(
           retrievalAllowed: !input.disallowedTools?.includes("read_tool_output"),
           inlineLimit: Math.min(12_000, Math.max(2000, ROOK_TURN_TOOL_BUDGET_CHARS - toolPayloadChars)) });
       } catch (error) {
+        if (error instanceof ForegroundOutcomeUnknown) return friendlyTurnEnd(new AgentLoopStop("OUTCOME_UNKNOWN", error.message));
         if (error instanceof ToolOutputError) return friendlyTurnEnd(new AgentLoopStop("OUTPUT_UNAVAILABLE", error.message));
         const step = {
           kind: "tool",
