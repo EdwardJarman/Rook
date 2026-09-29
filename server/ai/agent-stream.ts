@@ -36,6 +36,7 @@ import { invokeAiResilient } from "./fallback-router";
 import { recordTurn, recordInterruptedTurn } from "./telemetry";
 import { outcomeFromError, outcomeFromPayload, skippedOutcome, type ToolOutcomeRecord } from "./tool-metrics";
 import { ForegroundOutcomeUnknown } from "./foreground-replay";
+import { activeVariantNames } from "./variants";
 import { accountingTaskKey, withRequestAccounting } from "./request-accounting";
 import { retainedOutputResource } from "../integrations/retained-output-scope";
 import { formatToolOutput, serializeToolOutput, ToolOutputError } from "./tool-output";
@@ -131,6 +132,7 @@ async function runAccountedAgentStream(
     outputBudget,
     codeTask,
     reasoning,
+    variants,
   } = setup;
   const messages: Message[] = setup.messages;
   const trace: AgentTraceStep[] = [];
@@ -175,6 +177,7 @@ async function runAccountedAgentStream(
       continuations: continuationsUsed,
       webSearched: Boolean(publicSearchQuery),
       codeTask,
+      variants: activeVariantNames(variants),
       ...(extra?.error ? { error: extra.error } : {}),
     });
   };
