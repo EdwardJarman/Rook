@@ -154,3 +154,7 @@ Measured (character counts, not billed tokens): a fixture GitHub read of 120,052
 
 Known limits: the store is local disk (`ROOK_TOOL_OUTPUT_DIR`, default the OS temp dir). On serverless or multi-instance hosting a later turn may land on an instance without the file and see `OUTPUT_UNAVAILABLE`; within one turn's rounds the file is normally present. Moving retention to shared storage needs a storage decision and is deferred. GitHub repo scope compares the repo named in the tool call before any PreToolUse hook rewrite (the hook registry is empty by default).
 
+## Decision probe runner (follow-up chunk 5)
+
+The matched quality/cost comparison is implemented as an operator-run probe over `chatgpt:` models through the existing authenticated session path, returning numbers only. Protocol, requirements, decision rule and statistical limits (notably that a `pass` verdict needs about 8 to 16 repetitions) are in [eval-probe.md](eval-probe.md). No real numbers exist yet: the runner is verified offline with a scripted model only.
+
