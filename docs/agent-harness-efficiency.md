@@ -10,7 +10,7 @@ Status: in progress. Starting point: main `7463c95`, clean checkout, 2026-09-28.
 | Turn execution | `runRookAgent`, `server/ai/agent-stream.ts` | Separate existing loops share setup and dispatcher. Extend both; do not add another loop. |
 | Tools | `agent-tool-executor.ts`, Excel/GitHub/computer/cloud definitions | Frozen family order already present. Tool schemas resend each round. Writes propose approval, not success. |
 | History | `filterRelevantContext`, `partitionRecentContext`, `compaction.ts` | Relevance gate runs before 6,000-token heuristic budget. Overflow becomes an extractive ledger; no searchable transcript pointer. |
-| Tool results | `toolResultText`, aggregate turn budget | Blind 12,000-character truncation and 36,000-character aggregate cap. PostToolUse transformation is not wired into these loops. |
+| Tool results | `formatToolOutput`, `server/ai/tool-output.ts`, aggregate turn budget | Results over the inline limit (12,000 chars, less the remaining 36,000-char turn budget) are sanitized and retained on disk; the model gets a bounded descriptor (reference, size, 400-char preview, 1,200-char tail) and reads ranges via `read_tool_output`. Retrieval is re-authorized against live connector state (see chunk 2 below). |
 | Transport | `openrouter.ts`, `router-gateways.ts`, `openai-stream.ts` | JSON retries occur inside transports; outer-loop counts alone miss them. |
 | Opaque provider paths | `chatgpt.ts`, `opencode.ts` | SDK retries and OpenCode internal rounds are not fully visible to Rook. Final usage alone is not whole-task spend. |
 | Fallback | `fallback-router.ts`, `ai/index.ts` | Cross-provider breaker exists. ChatGPT fallback in index is broader than the taxonomy; review in reliability phase. |
@@ -138,4 +138,19 @@ Clients may send an opaque `turnId` (8-128 chars, `[A-Za-z0-9_-]`) on `/api/agen
 - **Deploy**: run `pnpm db:push` for the new entity before relying on it; missing schema fails open (no replay).
 
 Verified hermetically (`tests/foreground-replay.test.ts`, both loops): kill after a completed step, kill between claim and outcome, concurrent duplicate attempt, recorded-error replay, no-`turnId` inertness, store failure, secret rounds, cross-user isolation, TTL. Not verified: a live InstantDB uniqueness conflict (the store test uses a fake that mimics it) and a real process kill on a deployed server.
+
+## File-backed outputs and authorized retrieval (follow-up chunk 2)
+
+Audit result: the retention mechanism already existed (`tool-output.ts`: sanitized JSON file per output, opaque `rook-output:<id>` reference, 7 day TTL, size caps, owner+Bot scope, range/search reads, typed failures) and the earlier harness-map row calling truncation "blind" was stale. The real gap was authorization: retrieval checked only owner and Bot, so output from a connector stayed readable for 7 days after the user disconnected it, deselected the repo, or the Bot began denying the source tool.
+
+Changed:
+
+- Each retained file records its source (`tool`, plus GitHub `repo` or Excel `account_id` when the call named one). Format version bumped to 2; version-1 files (no provenance) are unreadable, so they fail closed.
+- `read_tool_output` re-authorizes that source at every read (`server/integrations/retained-output-scope.ts`): the source tool must not be in the Bot's `disallowedTools`; GitHub needs a live connection with the repo still in the working set; Excel needs a connected account (the named one, when recorded); computer/cloud file reads need a reachable computer target (`resolveComputerTarget`); skill text is allowed; unknown sources and any status-lookup failure deny.
+- A denial returns the same `OUTPUT_UNAVAILABLE` error as a missing, expired, or foreign reference, so it does not reveal what exists.
+- References remain opaque IDs, never filesystem paths; the model cannot name a path.
+
+Measured (character counts, not billed tokens): a fixture GitHub read of 120,052 characters reaches the next model request as a 2,220-character descriptor in both loops. The five harness fixtures are unchanged by this chunk: per-source input characters are identical before and after (only the wall-clock line in the live setup differs), so there is no cost-table delta on the normal path. Cost impact appears only when a tool result exceeds the inline limit, and that behavior is unchanged from main.
+
+Known limits: the store is local disk (`ROOK_TOOL_OUTPUT_DIR`, default the OS temp dir). On serverless or multi-instance hosting a later turn may land on an instance without the file and see `OUTPUT_UNAVAILABLE`; within one turn's rounds the file is normally present. Moving retention to shared storage needs a storage decision and is deferred. GitHub repo scope compares the repo named in the tool call before any PreToolUse hook rewrite (the hook registry is empty by default).
 

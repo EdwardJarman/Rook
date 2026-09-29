@@ -12,6 +12,7 @@ import {
 import { recordTurn, recordInterruptedTurn } from "../ai/telemetry";
 import { ForegroundOutcomeUnknown } from "../ai/foreground-replay";
 import { accountingTaskKey, setAccountingSections, withRequestAccounting } from "../ai/request-accounting";
+import { retainedOutputResource } from "./retained-output-scope";
 import { formatToolOutput, OUTPUT_TOOLS, serializeToolOutput, ToolOutputError } from "../ai/tool-output";
 import { getComputerPromptState } from "../ai/computer-context";
 import { buildRookSystemPromptParts } from "../ai/system-prompt";
@@ -742,6 +743,7 @@ async function runAccountedAgent(input: RookAgentInput) {
         if (terminal) return friendlyTurnEnd(terminal);
         rendered = await formatToolOutput({ ...input, name, value: executed.resultPayload,
           retrievalAllowed: !input.disallowedTools?.includes("read_tool_output"),
+          resource: retainedOutputResource(name, call.function.arguments),
           inlineLimit: Math.min(12_000, Math.max(2000, ROOK_TURN_TOOL_BUDGET_CHARS - toolPayloadChars)) });
       } catch (error) {
         if (input.durableTurn) throw error;
