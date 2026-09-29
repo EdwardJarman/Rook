@@ -505,7 +505,7 @@ async function runAccountedAgent(input: RookAgentInput) {
   let continuationsUsed = 0;
   let continuedText = "";
 
-  const emitTelemetry = (extra?: { error?: string }) => {
+  const emitTelemetry = (extra?: { error?: string; code?: string }) => {
     recordTurn({
       requestId,
       at: new Date().toISOString(),
@@ -523,6 +523,7 @@ async function runAccountedAgent(input: RookAgentInput) {
       codeTask,
       variants: activeVariantNames(variants),
       ...(extra?.error ? { error: extra.error } : {}),
+      ...(extra?.code ? { errorCode: extra.code } : {}),
     });
   };
 
@@ -846,7 +847,7 @@ async function runAccountedAgent(input: RookAgentInput) {
     if (input.durableTurn) throw error;
     const errorMessage =
       error instanceof Error ? error.message.slice(0, 300) : "unknown";
-    emitTelemetry({ error: errorMessage });
+    emitTelemetry({ error: errorMessage, code: error instanceof AgentLoopStop ? error.code : undefined });
     return {
       text: friendlyAgentError(error),
       model: resolvedModel,

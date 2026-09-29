@@ -165,7 +165,7 @@ async function runAccountedAgentStream(
   let continuedText = "";
   let turnFiles: RoundAnswer["files"];
 
-  const emitTelemetry = (extra?: { error?: string }) => {
+  const emitTelemetry = (extra?: { error?: string; code?: string }) => {
     recordTurn({
       requestId,
       at: new Date().toISOString(),
@@ -183,6 +183,7 @@ async function runAccountedAgentStream(
       codeTask,
       variants: activeVariantNames(variants),
       ...(extra?.error ? { error: extra.error } : {}),
+      ...(extra?.code ? { errorCode: extra.code } : {}),
     });
   };
 
@@ -254,7 +255,7 @@ async function runAccountedAgentStream(
   const friendlyTurnEnd = (error: unknown) => {
     const errorMessage =
       error instanceof Error ? error.message.slice(0, 300) : "unknown";
-    emitTelemetry({ error: errorMessage });
+    emitTelemetry({ error: errorMessage, code: error instanceof AgentLoopStop ? error.code : undefined });
     return {
       text: friendlyAgentError(error),
       model: resolvedModel,

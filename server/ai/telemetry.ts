@@ -34,6 +34,8 @@ export type TurnRecord = {
   variants?: string[];
   continuations?: number;
   error?: string;
+  /** Set when the turn ended on a deliberate loop stop (e.g. DOOM_LOOP), not a provider failure. */
+  errorCode?: string;
   /** Opaque process-local HMAC; never the user, Bot or task id. */
   taskKey?: string;
   modelRequests?: ModelRequestRecord[];
