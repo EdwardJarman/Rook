@@ -68,7 +68,8 @@ beforeEach(() => {
   });
 });
 
-const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+// Wait for the "killed" first attempt to reach the interesting point; no fixed sleeps.
+const reached = (condition: () => boolean) => vi.waitFor(() => { if (!condition()) throw new Error("not yet"); }, { timeout: 4000, interval: 5 });
 
 describe.each(["response", "stream"] as const)("foreground durable replay (%s loop)", (mode) => {
   const run = async (store: ForegroundTurnStore, overrides: Partial<RookAgentInput> = {}, turnId: string | null = "turn-00000001") => {
@@ -81,7 +82,7 @@ describe.each(["response", "stream"] as const)("foreground durable replay (%s lo
     const store = new MemoryForegroundTurnStore();
     steps = [answer([write()]), "hang"];
     void run(store); // simulated process death: the first attempt never finishes
-    await settle();
+    await reached(() => modelRequests >= 2);
     expect(effects).toBe(1);
 
     steps = [answer(), answer()];
@@ -97,7 +98,7 @@ describe.each(["response", "stream"] as const)("foreground durable replay (%s lo
     hangDispatch = true;
     steps = [answer([write()])];
     void run(store);
-    await settle();
+    await reached(() => releaseDispatch !== undefined);
     expect(effects).toBe(1);
 
     hangDispatch = false;
@@ -113,7 +114,7 @@ describe.each(["response", "stream"] as const)("foreground durable replay (%s lo
     hangDispatch = true;
     steps = [answer([write()]), answer()];
     const first = run(store);
-    await settle();
+    await reached(() => releaseDispatch !== undefined);
     steps = [answer()]; // the duplicate replays round 0, so only the first attempt asks for the final answer
     const second = await run(store);
     expect(second.text).toMatch(/may already be waiting/);
@@ -131,7 +132,7 @@ describe.each(["response", "stream"] as const)("foreground durable replay (%s lo
     };
     steps = [answer([call("computer_status")]), "hang"];
     void run(spy);
-    await settle();
+    await reached(() => modelRequests >= 2);
     steps = [answer(), answer()];
     await run(spy);
     expect(reads).toBe(2);
@@ -143,7 +144,7 @@ describe.each(["response", "stream"] as const)("foreground durable replay (%s lo
     vi.mocked(executeAgentTool).mockRejectedValueOnce(new Error("Sheet is locked"));
     steps = [answer([write()]), "hang"];
     void run(store);
-    await settle();
+    await reached(() => modelRequests >= 2);
     vi.mocked(executeAgentTool).mockClear();
     steps = [answer(), answer()];
     expect((await run(store)).text).toBe("Done");
