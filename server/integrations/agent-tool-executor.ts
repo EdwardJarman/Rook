@@ -62,6 +62,7 @@ import {
 import { makeExcelActionId } from "./microsoft-excel";
 import { checkToolPolicy, loadToolPolicyFromEnv, sniffPolicyHints } from "./tool-policy";
 import { runPreToolUse } from "../ai/hooks";
+import { OUTPUT_TOOLS, readToolOutputArgs, toolOutputStore, ToolOutputError } from "../ai/tool-output";
 
 const EXCEL_TOOL_SET = new Set(EXCEL_TOOLS.map((tool) => tool.function.name));
 
@@ -92,11 +93,12 @@ export const TOOL_RISK = {
   computer_run_command: "approval-gated",
   computer_write_file: "approval-gated",
   read_skill: "read-only",
+  read_tool_output: "read-only",
 } as const satisfies Record<string, "read-only" | "approval-gated">;
 
 export type ToolRisk = (typeof TOOL_RISK)[keyof typeof TOOL_RISK];
 
-export type ToolFamily = "excel" | "github" | "computer" | "cloud" | "skill";
+export type ToolFamily = "excel" | "github" | "computer" | "cloud" | "skill" | "output";
 
 /**
  * Grok `ToolRegistry` port (adapted): every offered tool resolves to one
@@ -113,9 +115,11 @@ const FAMILY_TIMEOUT_MS: Record<ToolFamily, number> = {
   cloud: 20_000,
   computer: 10_000,
   skill: 10_000,
+  output: 10_000,
 };
 
 const familyOfTool = (name: string): ToolFamily => {
+  if (name === "read_tool_output") return "output";
   if (EXCEL_TOOL_SET.has(name)) return "excel";
   if (GITHUB_TOOL_NAMES.has(name)) return "github";
   if (COMPUTER_TOOL_NAMES.has(name)) return "computer";
@@ -190,6 +194,7 @@ export function allOfferedToolNames(): string[] {
     ...COMPUTER_TOOLS.map((tool) => tool.function.name),
     ...CLOUD_TOOLS.map((tool) => tool.function.name),
     ...SKILL_TOOLS.map((tool) => tool.function.name),
+    ...OUTPUT_TOOLS.map((tool) => tool.function.name),
   ];
 }
 
@@ -207,6 +212,7 @@ export function orderToolset(input: {
   computer: Tool[];
   cloud?: Tool[];
   skills?: Tool[];
+  outputs?: Tool[];
 }): Tool[] {
   return [
     ...input.excel,
@@ -214,6 +220,7 @@ export function orderToolset(input: {
     ...input.computer,
     ...(input.cloud ?? []),
     ...(input.skills ?? []),
+    ...(input.outputs ?? []),
   ];
 }
 
@@ -284,6 +291,7 @@ export async function executeAgentTool(input: {
   taskId: string;
   name: string;
   rawArgs: string;
+  disallowedTools?: readonly string[];
   excelConnected: boolean;
   githubConnected: boolean;
   computerOnline: boolean;
@@ -294,6 +302,13 @@ export async function executeAgentTool(input: {
 }): Promise<AgentToolExecution> {
   const { userId, botId, taskId, name } = input;
   let rawArgs = input.rawArgs;
+  if (input.disallowedTools?.includes(name)) {
+    return {
+      traceStep: step("Blocked by Bot policy"),
+      resultPayload: { status: "denied", code: "POLICY_DENIED", retryable: false,
+        message: "This tool is disabled for this Bot." },
+    };
+  }
 
   // Static deny layer (grok compiled-deny port): evaluated before any family
   // branch, so deny wins over modes and grants. Empty by default (no-op).
@@ -336,6 +351,17 @@ export async function executeAgentTool(input: {
     if (pre.updatedArgs) rawArgs = JSON.stringify(pre.updatedArgs);
   } catch {
     // Fail open: hooks never break dispatch. Falls through to family branches.
+  }
+
+  if (name === "read_tool_output") {
+    try {
+      const args = readToolOutputArgs.parse(JSON.parse(rawArgs || "{}"));
+      return { traceStep: step("Read retained tool output"), resultPayload: { status: "completed", result: await toolOutputStore.read(input, args) } };
+    } catch (error) {
+      return { traceStep: step("Retained output unavailable"), resultPayload: { status: "error", retryable: false,
+        code: error instanceof ToolOutputError ? error.code : "INVALID_ARGUMENTS",
+        message: error instanceof ToolOutputError ? error.message : "Use a valid retained-output reference and character range." } };
+    }
   }
 
   if (GITHUB_TOOL_NAMES.has(name)) {

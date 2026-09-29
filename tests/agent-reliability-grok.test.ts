@@ -41,8 +41,8 @@ describe("grok sampler guards (pure)", () => {
     expect(classifyRetryDecision(new Error("503 boom"))).toBe("retry");
   });
 
-  it("max-tokens and idle streams are fatal, never retried", () => {
-    expect(classifyRetryDecision(new Error("max_tokens too large"))).toBe("fatal");
+  it("max-tokens allows a shrink while idle streams remain fatal", () => {
+    expect(classifyRetryDecision(new Error("max_tokens too large"))).toBe("shrink");
     expect(isIdleTimeoutError(new Error("Model stopped responding after 300s"))).toBe(true);
     expect(classifyRetryDecision(new Error("Model stopped responding after 300s"))).toBe("fatal");
     expect(classifyRetryDecision(new Error("some unknown config error"))).toBe("fatal");

@@ -132,6 +132,7 @@ async function deliver(detail: SendDetail) {
       message: text,
       userTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       botMemory: bot.memory.slice(0, 4000),
+      disallowedTools: bot.disallowedTools,
       recentContext: filterChatContext(state.messages, state.chatBotIds),
     })) as ReplyResult | undefined;
     const needsDecision = turnNeedsDecision(result);

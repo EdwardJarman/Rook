@@ -312,6 +312,10 @@ export class BackgroundRuntime {
       },
       execute: async (input, dispatch) => {
         await guard();
+        let current = await this.inspect(owner, id);
+        if (current.bot.disallowedTools?.includes(input.name) || input.disallowedTools?.includes(input.name)) {
+          throw new JobError("POLICY_DENIED", "This tool is disabled for this Bot.");
+        }
         const fingerprint = createHash("sha256")
           .update(toolCallFingerprint(input.name, input.rawArgs))
           .digest("hex");
@@ -341,7 +345,6 @@ export class BackgroundRuntime {
             },
           };
         };
-        let current = await this.inspect(owner, id);
         const cached = completed(current, fingerprint);
         if (cached?.output) return cached.output;
         let entry = current.attempt.tools.find(

@@ -34,6 +34,7 @@ export default function ScheduleJobScreen() {
           role: bot.role,
           purpose: bot.purpose,
           model: bot.model,
+          disallowedTools: bot.disallowedTools,
         },
         prompt: prompt.trim(),
         ...timing,

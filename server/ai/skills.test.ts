@@ -176,7 +176,9 @@ describe("skill turn wiring", () => {
       },
       "request-1",
     );
-    const system = String(turn.messages[0]?.content ?? "");
+    expect(turn.messages[1]?.role).toBe("user");
+    expect(String(turn.messages[0]?.content)).not.toContain("Verify by reading twice");
+    const system = String(turn.messages[1]?.content ?? "");
     expect(system).toContain("Verify by reading twice");
     expect(system).not.toContain("ghost-skill");
     expect(system).toContain("beta-skill: Does beta things quietly");
@@ -199,7 +201,8 @@ describe("skill turn wiring", () => {
       },
       "request-2",
     );
-    const system = String(turn.messages[0]?.content ?? "");
+    expect(turn.messages[1]?.role).toBe("user");
+    const system = String(turn.messages[1]?.content ?? "");
     expect(system).not.toContain("Verify by reading twice");
     expect(system).toContain("read_skill");
   });

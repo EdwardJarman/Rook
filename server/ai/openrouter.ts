@@ -10,6 +10,7 @@ import {
   responseFormatFor,
 } from "./openai-compat";
 import { isReasoningRejectedError } from "./agent-reliability";
+import { fetchModelCompletion, readModelJson } from "./request-accounting";
 
 export const OPENROUTER_API_BASE = "https://openrouter.ai/api/v1";
 export const OPENROUTER_AUTO_MODEL = "openrouter/free";
@@ -383,12 +384,12 @@ export async function invokeOpenRouter(
   let lastNetworkError: unknown;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      response = await fetch(`${OPENROUTER_API_BASE}/chat/completions`, {
+      response = await fetchModelCompletion(`${OPENROUTER_API_BASE}/chat/completions`, {
         method: "POST",
         headers: headers(true),
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      });
+      }, { provider: "openrouter", model, payload });
       lastNetworkError = undefined;
     } catch (error) {
       // AbortSignal.timeout throws + transient network blips: retry with
@@ -433,12 +434,12 @@ export async function invokeOpenRouter(
     ) {
       delete payload.reasoning;
       delete payload.thinking;
-      const retry = await fetch(`${OPENROUTER_API_BASE}/chat/completions`, {
+      const retry = await fetchModelCompletion(`${OPENROUTER_API_BASE}/chat/completions`, {
         method: "POST",
         headers: headers(true),
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      }).catch(() => undefined);
+      }, { provider: "openrouter", model, payload }).catch(() => undefined);
       if (retry?.ok) {
         response = retry;
       } else {
@@ -453,7 +454,7 @@ export async function invokeOpenRouter(
     }
   }
 
-  const result = (await response.json()) as InvokeResult & {
+  const result = (await readModelJson<InvokeResult>(response)) as InvokeResult & {
     choices?: Array<{
       message?: { tool_calls?: ToolCall[] };
     }>;

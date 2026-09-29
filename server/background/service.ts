@@ -187,6 +187,7 @@ export const backgroundRuntime = new BackgroundRuntime({
       botRole: job.bot.role,
       botPurpose: job.bot.purpose,
       model: job.bot.model,
+      disallowedTools: job.bot.disallowedTools,
       message: job.prompt,
       recentContext: [],
       durableTurn,

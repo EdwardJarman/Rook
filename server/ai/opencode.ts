@@ -26,6 +26,7 @@
 
 import type { InvokeParams, InvokeResult, Message } from "../_core/llm";
 import type { RookAiModel } from "./openrouter";
+import { observeManagedCall } from "./request-accounting";
 import {
   OPENCODE_DEFAULT_BASE,
   ensureManagedServer,
@@ -455,6 +456,14 @@ export async function invokeOpenCode(
   params: InvokeParams,
   opts?: InvokeOpenCodeOptions,
 ): Promise<InvokeResult> {
+  return observeManagedCall({ provider: "opencode", model: params.model ?? OPENCODE_DEFAULT_MODEL,
+    payload: params, scope: "managed-agent" }, () => invokeAccountedOpenCode(params, opts));
+}
+
+async function invokeAccountedOpenCode(
+  params: InvokeParams,
+  opts?: InvokeOpenCodeOptions,
+): Promise<InvokeResult> {
   const requested = params.model ?? OPENCODE_DEFAULT_MODEL;
   const modelId = upstreamModelId(requested);
   // Standing instruction (scoped to OpenCode turns only): files the agent
@@ -548,8 +557,8 @@ export async function invokeOpenCode(
       throw new Error(`OpenCode run failed: ${(text || "unknown error").slice(0, 300)}.`);
     }
     if (!text) throw new Error("OpenCode returned an empty reply.");
-    const input = message.data.tokens?.input ?? 0;
-    const output = message.data.tokens?.output ?? 0;
+    const input = message.data.tokens?.input;
+    const output = message.data.tokens?.output;
     return {
       id: assistantMessageId,
       created: Date.now(),
@@ -564,7 +573,7 @@ export async function invokeOpenCode(
       usage: {
         prompt_tokens: input,
         completion_tokens: output,
-        total_tokens: input + output,
+        total_tokens: input !== undefined && output !== undefined ? input + output : undefined,
       },
     };
   };

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../db", () => ({ listRookNodesForUser: vi.fn(async () => []) }));
 vi.mock("../ai/fallback-router", () => ({ invokeAiResilient: vi.fn() }));
-vi.mock("../ai/telemetry", () => ({ recordTurn: vi.fn() }));
+vi.mock("../ai/telemetry", () => ({ recordTurn: vi.fn(), recordInterruptedTurn: vi.fn() }));
 vi.mock("../integrations/agent-tool-executor", async (importOriginal) => {
   const actual =
     await importOriginal<

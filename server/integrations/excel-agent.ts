@@ -9,9 +9,11 @@ import {
   listSkills,
   skillCatalogBlock,
 } from "../ai/skills";
-import { recordTurn } from "../ai/telemetry";
+import { recordTurn, recordInterruptedTurn } from "../ai/telemetry";
+import { accountingTaskKey, setAccountingSections, withRequestAccounting } from "../ai/request-accounting";
+import { formatToolOutput, OUTPUT_TOOLS, serializeToolOutput, ToolOutputError } from "../ai/tool-output";
 import { getComputerPromptState } from "../ai/computer-context";
-import { buildRookSystemPrompt } from "../ai/system-prompt";
+import { buildRookSystemPromptParts } from "../ai/system-prompt";
 import {
   buildMemoryBlock,
   extractMemoryCandidates,
@@ -23,11 +25,15 @@ import {
   ROOK_AGENT_MAX_ROUNDS,
   ROOK_TURN_TOOL_BUDGET_CHARS,
   backoffSleep,
+  AgentLoopStop,
+  canRetryAgentRound,
+  DOOM_LOOP_ABORT_MESSAGE,
+  hasDoomLoop,
+  terminalToolError,
   filterRelevantContext,
   friendlyAgentError,
   isCodeLikeRequest,
-  isMaxTokensError,
-  isTransientAgentError,
+  classifyRetryDecision,
   maxTokensFor,
   parseRetryAfterMs,
   partitionRecentContext,
@@ -35,7 +41,6 @@ import {
   shouldSearchPublicWeb,
   stripScaffolding,
   toolCallFingerprint,
-  toolResultText,
   type ReasoningEffort,
 } from "../ai/agent-reliability";
 import { buildCheckpointLedger } from "../ai/compaction";
@@ -153,6 +158,8 @@ export type RookAgentInput = {
   skillIds?: string[];
   /** Free-text durable memory stored on the Bot (client workroom store). */
   botMemory?: string;
+  /** Owner-configured Bot restrictions, enforced again by the dispatcher. */
+  disallowedTools?: string[];
   /**
    * Deep-reasoning depth. "medium" (default) sends no reasoning params —
    * byte-identical to today's requests. "high"/"low" are forwarded where
@@ -192,6 +199,9 @@ export async function prepareAgentTurn(
   // picker; only a real catalog id may bypass it. Pure + pinned in
   // server/ai/turn-context.ts so both agent paths resolve identically.
   const requestedModel = resolveRequestedModel(input.model);
+  if (input.disallowedTools?.length && /^opencode:/i.test(requestedModel)) {
+    throw new AgentLoopStop("POLICY_DENIED", "This Bot restricts tools that the OpenCode managed route cannot enforce. Choose a server model for this Bot.");
+  }
   const clock = agentClockContext(new Date(), input.userTimeZone);
 
   // Parallelize the three capability probes so the slowest integration
@@ -259,8 +269,10 @@ export async function prepareAgentTurn(
     // immediately, run/write are approval-gated proposals like the rest.
     cloud: isCloudComputerConfigured() ? CLOUD_TOOLS : [],
     skills: registrySkills.length ? SKILL_TOOLS : [],
+    outputs: OUTPUT_TOOLS,
   });
-  const tools = toolset.length ? toolset : undefined;
+  const permittedTools = toolset.filter((tool) => !input.disallowedTools?.includes(tool.function.name));
+  const tools = permittedTools.length ? permittedTools : undefined;
   const excelSelected = input.connectors?.includes("microsoft-excel") === true;
   const githubSelected = input.connectors?.includes("github") === true;
   const connectionNote = connection.connected
@@ -353,11 +365,12 @@ export async function prepareAgentTurn(
     ? await skillCatalogBlock().catch(() => "")
     : "";
   const extraContext =
-    [memoryBlock, ledgerBlock, publicSearchContext, attachedBlock, catalogBlock]
+    [memoryBlock, ledgerBlock, publicSearchContext, attachedBlock, catalogBlock,
+      input.disallowedTools?.length ? `Bot tool restrictions: ${input.disallowedTools.join(", ")}. These tools are unavailable for this Bot.` : ""]
       .filter(Boolean)
       .join("\n") || undefined;
 
-  const systemPrompt = buildRookSystemPrompt({
+  const prompt = buildRookSystemPromptParts({
     botName: input.botName,
     botRole: input.botRole,
     botPurpose: input.botPurpose,
@@ -375,7 +388,8 @@ export async function prepareAgentTurn(
   });
 
   const messages: Message[] = [
-    { role: "system", content: systemPrompt },
+    { role: "system", content: prompt.stable },
+    { role: "user", content: prompt.setup },
     ...fittedHistory.map((entry) => ({
       role:
         entry.author === "bot"
@@ -387,6 +401,15 @@ export async function prepareAgentTurn(
     })),
     { role: "user", content: input.message },
   ];
+
+  setAccountingSections([
+    { source: "memory", text: memoryBlock },
+    { source: "ledger", text: ledgerBlock },
+    { source: "searchResults", text: publicSearchContext },
+    { source: "skills", text: attachedBlock },
+    { source: "skills", text: catalogBlock },
+    { source: "setup", text: prompt.setup },
+  ]);
 
   const outputBudget = maxTokensFor(input.message);
   const codeTask = isCodeLikeRequest(input.message);
@@ -410,6 +433,17 @@ export async function prepareAgentTurn(
 }
 
 export async function runRookAgent(input: RookAgentInput) {
+  return withRequestAccounting(accountingTaskKey(input.userId, input.botId, input.taskId), async () => {
+    const started = Date.now();
+    try { return await runAccountedAgent(input); }
+    catch (error) {
+      recordInterruptedTurn(randomUUID().slice(0, 8), resolveRequestedModel(input.model), started, error);
+      throw error;
+    }
+  });
+}
+
+async function runAccountedAgent(input: RookAgentInput) {
   await input.durableTurn?.guard();
   const requestId = randomUUID().slice(0, 8);
   const startedAt = Date.now();
@@ -432,6 +466,7 @@ export async function runRookAgent(input: RookAgentInput) {
   const usedTools: string[] = [];
   const computerProposals: ComputerProposal[] = [];
   const seenToolCalls = new Set<string>();
+  const toolFingerprints: string[] = [];
   let resolvedModel = requestedModel;
   let fellBackToAuto = false;
   let attemptedProviders: string[] = [];
@@ -478,7 +513,7 @@ export async function runRookAgent(input: RookAgentInput) {
           model: requestedModel,
           messages,
           tools,
-          toolChoice: tools ? "auto" : undefined,
+          toolChoice: tools ? (toolPayloadChars >= ROOK_TURN_TOOL_BUDGET_CHARS ? "none" : "auto") : undefined,
           maxTokens: effectiveBudget,
           ...(reasoning ? { reasoning } : {}),
         },
@@ -493,7 +528,7 @@ export async function runRookAgent(input: RookAgentInput) {
     } catch (error) {
       // A model rejecting max_tokens itself: halve the budget once and
       // retry rather than failing a turn over a too-ambitious request.
-      if (isMaxTokensError(error) && !budgetHalved) {
+      if (classifyRetryDecision(error) === "shrink" && !budgetHalved) {
         budgetHalved = true;
         effectiveBudget = Math.max(800, Math.floor(effectiveBudget / 2));
         console.warn("[RookAI] max_tokens rejected, retrying smaller", {
@@ -510,8 +545,7 @@ export async function runRookAgent(input: RookAgentInput) {
         // Transient provider wobble (429/5xx): one jittered retry inside the
         // turn before surfacing a friendly line. Auth/config errors surface
         // immediately — retrying those only burns latency.
-        const transient = isTransientAgentError(error);
-        if (transient && round === 0) {
+        if (canRetryAgentRound(error)) {
           await backoffSleep(0, parseRetryAfterMs(null));
           try {
             await invokeOnce();
@@ -637,9 +671,17 @@ export async function runRookAgent(input: RookAgentInput) {
 
     for (const call of calls) {
       const name = call.function.name;
+      if (toolPayloadChars >= ROOK_TURN_TOOL_BUDGET_CHARS) {
+        messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify({ status: "not_executed", message: "The turn's tool-output budget is reached. Answer from the retained results and identify remaining work." }) });
+        continue;
+      }
       // Loop guard: the same tool+args twice in one turn is a spin, not
       // progress (v1 let it repeat 6x). Break out with what we have.
       const fingerprint = toolCallFingerprint(name, call.function.arguments);
+      toolFingerprints.push(fingerprint);
+      if (hasDoomLoop(toolFingerprints)) {
+        return friendlyTurnEnd(new AgentLoopStop("DOOM_LOOP", DOOM_LOOP_ABORT_MESSAGE));
+      }
       if (seenToolCalls.has(fingerprint)) {
         messages.push({
           role: "tool",
@@ -665,6 +707,7 @@ export async function runRookAgent(input: RookAgentInput) {
           taskId: input.taskId,
           name,
           rawArgs: call.function.arguments,
+          disallowedTools: input.disallowedTools,
           excelConnected: connection.connected,
           githubConnected: github.connected && github.selectedRepos.length > 0,
           computerOnline: computer.online,
@@ -675,9 +718,14 @@ export async function runRookAgent(input: RookAgentInput) {
           ? await input.durableTurn.execute(toolInput, () => executeAgentTool(toolInput))
           : await executeAgentTool(toolInput);
         trace.push(executed.traceStep);
-        rendered = toolResultText(executed.resultPayload);
+        const terminal = terminalToolError(executed.resultPayload);
+        if (terminal) return friendlyTurnEnd(terminal);
+        rendered = await formatToolOutput({ ...input, name, value: executed.resultPayload,
+          retrievalAllowed: !input.disallowedTools?.includes("read_tool_output"),
+          inlineLimit: Math.min(12_000, Math.max(2000, ROOK_TURN_TOOL_BUDGET_CHARS - toolPayloadChars)) });
       } catch (error) {
         if (input.durableTurn) throw error;
+        if (error instanceof ToolOutputError) return friendlyTurnEnd(new AgentLoopStop("OUTPUT_UNAVAILABLE", error.message));
         const failure =
           error instanceof Error ? error.message : "Connected tool failed";
         trace.push({
@@ -685,26 +733,13 @@ export async function runRookAgent(input: RookAgentInput) {
           title: `Could not finish: ${name.replace(/_/g, " ")}`,
           detail: failure,
         });
-        rendered = toolResultText({
+        rendered = serializeToolOutput({
           status: "error",
           message:
             error instanceof Error ? error.message : "Connected tool failed",
         });
       }
       toolPayloadChars += rendered.length;
-      // Turn budget: stop feeding ever-larger tool dumps into the window.
-      if (toolPayloadChars > ROOK_TURN_TOOL_BUDGET_CHARS) {
-        messages.push({
-          role: "tool",
-          tool_call_id: call.id,
-          content: JSON.stringify({
-            status: "truncated",
-            message:
-              "Tool budget for this turn is exhausted. Summarize what you have so far and ask the user for a narrower next step instead of calling more tools.",
-          }),
-        });
-        break;
-      }
       messages.push({
         role: "tool",
         tool_call_id: call.id,

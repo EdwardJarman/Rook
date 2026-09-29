@@ -5,6 +5,7 @@ import { appRouter } from "../routers.js";
 import { getAiBackendStatus } from "../ai";
 import { handleChatGPTRoute } from "../ai/chatgpt";
 import { registerAgentStreamRoute } from "../agent-stream-route";
+import { registerBtwRoute } from "../btw-route";
 import { createContext } from "./context";
 import { registerOAuthRoutes } from "./oauth";
 import { registerNodeDownloadRoutes } from "../download-routes";
@@ -63,6 +64,7 @@ export function createApp() {
   registerCliAuthRoute(app);
   registerOAuthRoutes(app);
   registerAgentStreamRoute(app);
+  registerBtwRoute(app);
   registerNodeDownloadRoutes(app);
   registerOpenAiGatewayRoutes(app);
   registerNodeRelayRoutes(app, {

@@ -75,6 +75,7 @@ export type Job = {
     role: string;
     purpose: string;
     model?: string;
+    disallowedTools?: string[];
   };
   prompt: string;
   intervalMs?: number;

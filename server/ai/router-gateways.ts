@@ -9,6 +9,7 @@ import type {
 } from "../_core/llm";
 import type { RookAiModel } from "./openrouter";
 import { isReasoningRejectedError } from "./agent-reliability";
+import { fetchModelCompletion, readModelJson } from "./request-accounting";
 
 const REQUEST_TIMEOUT_MS = 90_000;
 const ORCAROUTER_API_BASE = "https://api.orcarouter.ai/v1";
@@ -297,7 +298,7 @@ async function invokeGateway(
 
   let response: Response | undefined;
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    response = await fetch(`${config.apiBase}/chat/completions`, {
+    response = await fetchModelCompletion(`${config.apiBase}/chat/completions`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${key}`,
@@ -305,7 +306,7 @@ async function invokeGateway(
       },
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
+    }, { provider: config.name.toLowerCase(), model: upstream, payload });
     if (
       response.ok ||
       ![429, 500, 502, 503, 504].includes(response.status) ||
@@ -333,7 +334,7 @@ async function invokeGateway(
     ) {
       delete payload.reasoning;
       delete payload.thinking;
-      const retry = await fetch(`${config.apiBase}/chat/completions`, {
+      const retry = await fetchModelCompletion(`${config.apiBase}/chat/completions`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${key}`,
@@ -341,9 +342,9 @@ async function invokeGateway(
         },
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      }).catch(() => undefined);
+      }, { provider: config.name.toLowerCase(), model: upstream, payload }).catch(() => undefined);
       if (retry?.ok) {
-        const retryResult = await readJson<InvokeResult>(retry);
+        const retryResult = await readModelJson<InvokeResult>(retry);
         if (!retryResult.choices?.length)
           throw new Error(`${config.name} did not return a response.`);
         return { ...retryResult, model: internalId(config, upstream) };
@@ -357,7 +358,7 @@ async function invokeGateway(
     throw failure;
   }
 
-  const result = await readJson<InvokeResult>(response);
+  const result = await readModelJson<InvokeResult>(response);
   if (!result.choices?.length)
     throw new Error(`${config.name} did not return a response.`);
 

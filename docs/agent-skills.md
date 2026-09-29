@@ -54,6 +54,14 @@ unchanged: copy it in, no conversion.
 - Executable skill `scripts/` do **not** run in general Rook turns:
   there is no shell there. They run on the OpenCode path, where the
   agent has a real command runtime.
-- New skills default to attach-only (off unless you tap them).
+- Skills can be attached explicitly or loaded by the model through `read_skill` unless their metadata disables model invocation.
 - Third-party skill text is untrusted input: it guides wording, while
   writes and computer actions still pass through Rook's approvals.
+
+## Coding and research procedures
+
+`plan-edit-verify` provides a short planning and verification procedure, including the literal trigger to inspect the diff and run relevant available validators after substantive edits. It distinguishes proposals from applied edits and commands from successful checks.
+
+`multi-hop-research` provides search → read → follow references → cross-check → cite behavior. It uses the capabilities actually available on the chosen route and labels snippet-only findings. A skill does not create a page-reading tool or bypass browser approvals; if full-page access is absent, the answer must state that limit.
+
+These procedures are invocable through the existing skill attachment/catalog/read paths. They are not a hardcoded agent workflow or a change to reasoning-effort defaults.

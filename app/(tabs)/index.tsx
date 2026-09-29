@@ -30,6 +30,8 @@ import {
 
 import { BotCreateSheet } from "@/components/bot-create-sheet";
 import { BackgroundStatusStrip } from "@/components/background-jobs";
+import { BtwPanel, type BtwPanelHandle } from "@/components/btw-panel";
+import { parseBtwCommand } from "@/shared/btw";
 import { AgentActivityTrace } from "@/components/agent-activity-trace";
 import { AiWorkingIndicator } from "@/components/ai-working-indicator";
 import { ComposerConnectorsSheet } from "@/components/composer-connectors-sheet";
@@ -123,6 +125,8 @@ export default function ChatScreen() {
     setDropActive,
   } = useBotDrag();
   const [composer, setComposer] = useState("");
+  const btwRef = useRef<BtwPanelHandle>(null);
+  const composerRef = useRef<TextInput>(null);
   const [composerFocused, setComposerFocused] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -160,7 +164,7 @@ export default function ChatScreen() {
     body: string;
     images: PastedImage[];
   } | null>(null);
-  const { getToken } = useClerkAuth();
+  const { getToken, userId } = useClerkAuth();
   const getTokenRef = useRef(getToken);
   getTokenRef.current = getToken;
   useEffect(
@@ -401,6 +405,12 @@ export default function ChatScreen() {
   }, [streamingDraft]);
 
   const handleSend = async () => {
+    const sideQuestion = parseBtwCommand(composer);
+    if (!sendOverrideRef.current && sideQuestion !== null && activeBot) {
+      btwRef.current?.open(sideQuestion);
+      setComposer("");
+      return;
+    }
     const override = sendOverrideRef.current;
     sendOverrideRef.current = null;
     const clean = (override?.body ?? composer).trim();
@@ -528,6 +538,7 @@ export default function ChatScreen() {
         ],
         skillIds: attachedSkills.length ? [...attachedSkills] : undefined,
         botMemory: clampReplyField(activeBot.memory, REPLY_LIMITS.botMemory),
+        disallowedTools: activeBot.disallowedTools,
         recentContext: toRecentContextEntries(visibleMessages.slice(-6)),
       };
       // Fast path: live token streaming. Any failure — endpoint missing,
@@ -889,7 +900,7 @@ export default function ChatScreen() {
     hasComposerContent &&
     Boolean(activeBot) &&
     !recorderState.isRecording &&
-    !replyMutation.isPending &&
+    (!replyMutation.isPending || parseBtwCommand(composer) !== null) &&
     !voiceMutation.isPending;
   /* The button looks armed once there's text, even with no Bot in the room
      yet — tapping it should prompt adding one instead of silently no-oping. */
@@ -1789,6 +1800,11 @@ export default function ChatScreen() {
                 paddingBottom: 10,
               }}
             >
+              {activeBot ? <BtwPanel ref={btwRef} key={`${userId}:${activeChatId}:${activeBot.id}`}
+                getToken={getToken} onClose={() => composerRef.current?.focus()}
+                context={{ botId: activeBot.id, botName: activeBot.name, model: resolvedModel?.id,
+                  context: toRecentContextEntries(visibleMessages.slice(-6)),
+                  activeWork: streamingDraft?.botId === activeBot.id ? streamingDraft.text.slice(-1000) : undefined }} /> : null}
               <View
                 {...composerImageDropProps}
                 style={{
@@ -1861,6 +1877,7 @@ export default function ChatScreen() {
 
                 <TextInput
                   nativeID="rook-composer-input"
+                  ref={composerRef}
                   value={composer}
                   onChangeText={setComposer}
                   onFocus={() => setComposerFocused(true)}
@@ -2016,6 +2033,8 @@ export default function ChatScreen() {
                       active={excelAttached || githubAttached || attachedSkills.length > 0}
                       onPress={() => setConnectorsOpen(true)}
                     />
+                    {activeBot ? <ComposerControl icon="chat-bubble-outline" label="Side question (/btw)"
+                      onPress={() => btwRef.current?.open()} /> : null}
                     <ComposerModelPicker
                       value={resolvedModel?.id || activeBot?.model || ""}
                       provider={activeProvider}
@@ -2049,7 +2068,7 @@ export default function ChatScreen() {
                       void handleVoice();
                     }}
                     disabled={
-                      replyMutation.isPending || voiceMutation.isPending
+                      (replyMutation.isPending && parseBtwCommand(composer) === null) || voiceMutation.isPending
                     }
                     style={({ pressed }) => ({
                       width: 42,
@@ -3200,7 +3219,7 @@ function ComposerControl({
   onPress,
   active = false,
 }: {
-  icon: "attach-file" | "add";
+  icon: "attach-file" | "add" | "chat-bubble-outline";
   label: string;
   onPress: () => void;
   active?: boolean;

@@ -44,6 +44,7 @@ export type Bot = {
   icon: string;
   status: "Ready" | "Working" | "Paused";
   memory: string;
+  disallowedTools?: string[];
   approvalRule: string;
   model: string;
   lastActive: string;

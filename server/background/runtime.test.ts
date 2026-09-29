@@ -87,6 +87,16 @@ async function approvalRun(_job: Job, turn: DurableTurn) {
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
+it("blocks a Bot-denied tool before dispatch, proposals or persisted approval resolution", async () => {
+  const dispatch = vi.fn(async () => output);
+  const h = harness({ run: async (_job, turn) => turn.execute(tool("excel_update_range"), dispatch) });
+  const job = await h.runtime.schedule("owner", { ...input, bot: { ...bot, disallowedTools: ["excel_update_range"] } });
+  await h.runtime.fire("owner", job.id);
+  const saved = await h.runtime.inspect("owner", job.id);
+  expect(saved.state).toBe("failed"); expect(saved.error?.code).toBe("POLICY_DENIED");
+  expect(saved.attempt.tools).toHaveLength(0); expect(dispatch).not.toHaveBeenCalled(); expect(h.deps.resolve).not.toHaveBeenCalled();
+});
+
 describe("detached state machine", () => {
   for (const from of STATES)
     for (const to of STATES)

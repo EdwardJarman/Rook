@@ -21,7 +21,8 @@
  *   and status code embedded, so `isTransientAgentError` keeps working.
  */
 
-import type { InvokeParams, ToolCall } from "../_core/llm";
+import type { InvokeParams, InvokeResult, ToolCall } from "../_core/llm";
+import { startModelRequest } from "./request-accounting";
 import { normalizeMessages, normalizeToolChoice, responseFormatFor } from "./openai-compat";
 import { isChatGPTModel } from "./chatgpt";
 import { collectOpenCodeFiles, invokeOpenCode, isOpenCodeModel } from "./opencode";
@@ -40,6 +41,7 @@ export const supportsModelStream = (model: string | undefined): boolean =>
   !isChatGPTModel(model);
 
 export type StreamedRound = {
+  usage?: InvokeResult["usage"];
   text: string;
   toolCalls: ToolCall[];
   model: string;
@@ -63,6 +65,7 @@ type DeltaChoice = {
 };
 
 type StreamChunk = {
+  usage?: InvokeResult["usage"];
   id?: string;
   model?: string;
   error?: { message?: string; code?: string | number };
@@ -105,7 +108,7 @@ export function streamTimeoutsFor(maxTokens: number | undefined): {
 }
 
 /** Collects one streaming chat completion, forwarding text deltas live. */
-export async function streamChatCompletion(input: {
+type StreamCompletionInput = {
   url: string;
   headers: Record<string, string>;
   payload: Record<string, unknown>;
@@ -113,7 +116,31 @@ export async function streamChatCompletion(input: {
   idleTimeoutMs?: number;
   signal?: AbortSignal;
   onToken?: (delta: string) => void;
-}): Promise<StreamedRound> {
+  provider?: string;
+};
+
+export async function streamChatCompletion(input: StreamCompletionInput): Promise<StreamedRound> {
+  // OpenRouter includes usage automatically; avoid adding unsupported options to other gateways.
+  const payload: Record<string, unknown> = { ...input.payload, stream: true };
+  const span = startModelRequest({
+    provider: input.provider ?? "openai-compatible",
+    model: String(payload.model ?? (Array.isArray(input.payload.models) ? input.payload.models[0] : "unknown")),
+    payload, streaming: true,
+  });
+  try {
+    const result = await streamChatCompletionImpl({ ...input, payload, onToken: (delta) => {
+      span.token();
+      input.onToken?.(delta);
+    } }, span);
+    span.end("completed");
+    return result;
+  } catch (error) {
+    span.end("failed");
+    throw error;
+  }
+}
+
+async function streamChatCompletionImpl(input: StreamCompletionInput, span: ReturnType<typeof startModelRequest>): Promise<StreamedRound> {
   const scaled = streamTimeoutsFor(input.payload.max_tokens as number | undefined);
   const timeoutMs = input.timeoutMs ?? scaled.overallMs;
   const idleMs = input.idleTimeoutMs ?? scaled.idleMs;
@@ -157,6 +184,7 @@ export async function streamChatCompletion(input: {
     // `stream: true` and answered with one JSON document: handle uniformly.
     const bodyText = await readErrorText(response);
     if (!response.ok) {
+      span.end("failed", response.status);
       let detail = "";
       try {
         const parsed = JSON.parse(bodyText) as { error?: { message?: string } };
@@ -184,6 +212,7 @@ export async function streamChatCompletion(input: {
     if (bodyText) {
       try {
         const parsed = JSON.parse(bodyText) as {
+          usage?: InvokeResult["usage"];
           model?: string;
           choices?: Array<{
             message?: { content?: unknown; tool_calls?: ToolCall[] };
@@ -191,10 +220,12 @@ export async function streamChatCompletion(input: {
           }>;
         };
         const message = parsed.choices?.[0]?.message;
+        span.usage(parsed.usage, parsed.model);
         const text =
           typeof message?.content === "string" ? message.content : "";
         if (text) input.onToken?.(text);
         return {
+          usage: parsed.usage,
           text,
           toolCalls: message?.tool_calls ?? [],
           model: parsed.model ?? "",
@@ -213,6 +244,7 @@ export async function streamChatCompletion(input: {
   let text = "";
   let model = "";
   let finishReason: string | null = null;
+  let usage: InvokeResult["usage"];
   const toolAcc = new Map<number, { id: string; name: string; args: string }>();
 
   const processEvent = (raw: string): void => {
@@ -233,6 +265,11 @@ export async function streamChatCompletion(input: {
       throw new Error(chunk.error.message.slice(0, 300));
     }
     if (chunk.model && !model) model = chunk.model;
+    // Usage-only final chunks have no choices. Cumulative snapshots replace, never sum.
+    if (chunk.usage) {
+      usage = chunk.usage;
+      span.usage(usage, chunk.model || model);
+    }
     for (const choice of chunk.choices ?? []) {
       if (choice.finish_reason) finishReason = choice.finish_reason;
       const delta = choice.delta;
@@ -289,6 +326,7 @@ export async function streamChatCompletion(input: {
   }
 
   return {
+    usage,
     text,
     toolCalls: [...toolAcc.entries()]
       .sort(([a], [b]) => a - b)
@@ -356,6 +394,7 @@ export async function invokeAiStream(
     // a failed read leaves the text answer (with its paths) untouched.
     const files = await collectOpenCodeFiles(text).catch(() => []);
     return {
+      usage: invoked.usage,
       text,
       toolCalls: answer?.tool_calls ?? [],
       model: invoked.model || params.model,
@@ -368,6 +407,7 @@ export async function invokeAiStream(
     const target = gatewayStreamTarget(params.model);
     if (!target) throw new Error("That model is not available in Rook.");
     return streamChatCompletion({
+      provider: isOrcaRouterModel(params.model) ? "orcarouter" : "tokenrouter",
       url: target.url,
       headers: { Authorization: `Bearer ${target.apiKey}`, "Content-Type": "application/json" },
       payload: {
@@ -389,6 +429,7 @@ export async function invokeAiStream(
     const needsTools = Boolean(params.tools?.length);
     const { resolved } = await resolveOpenRouterModel(params.model, needsTools);
     return streamChatCompletion({
+      provider: "openrouter",
       url: `${OPENROUTER_API_BASE}/chat/completions`,
       headers: openRouterHeaders(true) as Record<string, string>,
       payload: {

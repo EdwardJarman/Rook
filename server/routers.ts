@@ -12,13 +12,14 @@ import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { systemRouter } from "./_core/systemRouter";
 import { getAiBackendStatus, listAiModels } from "./ai";
 import { listSkills } from "./ai/skills";
+import { AgentLoopStop } from "./ai/agent-reliability";
 import { mintCliToken } from "./cli-tokens";
 import {
   approveDeviceChallenge,
   pollDeviceChallenge,
   requestDeviceChallenge,
 } from "./cli-device";
-import { recentTurns, turnStats } from "./ai/telemetry";
+import { recentTurns, turnStats, taskUsageStats } from "./ai/telemetry";
 import { transcribeOpenRouterAudio } from "./ai/openrouter";
 import { deleteChatGPTSession } from "./ai/chatgpt";
 import * as db from "./db";
@@ -96,6 +97,7 @@ export const appRouter = router({
             .max(6)
             .optional(),
           botMemory: z.string().max(4000).optional(),
+          disallowedTools: z.array(z.string().regex(/^[a-z][a-z0-9_]{0,79}$/)).max(100).optional(),
           reasoningEffort: z.enum(["low", "medium", "high"]).optional(),
           recentContext: z
             .array(
@@ -128,7 +130,7 @@ export const appRouter = router({
             errorMessage: message.slice(0, 200),
           });
           result = {
-            text: "I hit a temporary snag on my side before I could answer. Please try again — your message is safe.",
+            text: error instanceof AgentLoopStop ? error.message : "I hit a temporary snag on my side before I could answer. Please try again — your message is safe.",
             model: input.model?.trim() || "openrouter/free",
             requestedModel: input.model?.trim() || "openrouter/free",
             fellBack: false,
@@ -213,6 +215,7 @@ export const appRouter = router({
       .query(({ input }) => ({
         recent: recentTurns(input?.limit ?? 20),
         stats: turnStats(),
+        taskUsage: taskUsageStats(),
       })),
   }),
   voice: router({

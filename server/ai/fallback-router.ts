@@ -23,7 +23,7 @@ import type { InvokeParams, InvokeResult } from "../_core/llm";
 import { invokeAi } from "./index";
 import { isOrcaRouterConfigured, isTokenRouterConfigured, listOrcaRouterModels, listTokenRouterModels } from "./router-gateways";
 import { isOpenRouterConfigured } from "./openrouter";
-import { classifyRetryDecision, isTransientAgentError } from "./agent-reliability";
+import { canRetryAgentRound } from "./agent-reliability";
 
 export type ResilientInvokeResult = {
   result: InvokeResult;
@@ -158,8 +158,7 @@ export async function invokeAiResilient(
       lastError = error;
       // Error-class split (grok retry.rs order): auth/config surfaces
       // honestly and never counts toward the breaker; only wobbles do.
-      if (classifyRetryDecision(error) === "emit") throw error;
-      if (!isTransientAgentError(error)) throw error;
+      if (!canRetryAgentRound(error)) throw error;
       recordFailure(provider);
       console.warn("[RookAI] provider wobble, trying fallback", {
         provider,

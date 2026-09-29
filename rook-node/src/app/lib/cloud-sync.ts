@@ -76,6 +76,7 @@ export function mapCloudBot(raw: unknown): Bot | null {
     model: str(b.model, "auto"),
     lastActive: str(b.lastActive, ""),
     memory: str(b.memory, ""),
+    disallowedTools: Array.isArray(b.disallowedTools) ? b.disallowedTools.filter((name): name is string => typeof name === "string") : undefined,
     approvalRule: str(b.approvalRule, "Ask before risky actions"),
   };
 }
@@ -160,6 +161,7 @@ export function unmapDesktopBot(bot: Bot): Record<string, unknown> {
     icon: bot.icon,
     status: bot.status,
     memory: bot.memory,
+    disallowedTools: bot.disallowedTools,
     approvalRule: bot.approvalRule,
     model: bot.model,
     lastActive: bot.lastActive,

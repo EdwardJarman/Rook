@@ -33,6 +33,7 @@ export function createBackgroundRouter(runtime: BackgroundRuntime) {
             role: z.string().max(120),
             purpose: z.string().max(500),
             model: z.string().max(180).optional(),
+            disallowedTools: z.array(z.string().regex(/^[a-z][a-z0-9_]{0,79}$/)).max(100).optional(),
           }),
           prompt: z.string().min(1).max(4000),
           at: z.number().int().optional(),
