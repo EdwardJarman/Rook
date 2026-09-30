@@ -25,7 +25,14 @@ vi.mock("../../server/integrations/github", async (original) => (await import(".
 vi.mock("../../server/integrations/cloud-computer", async (original) => (await import("./mocks")).cloudComputer(await original()));
 vi.mock("../../server/integrations/web-research", async () => (await import("./mocks")).webResearch());
 vi.mock("../../server/integrations/agent-tool-executor", async (original) => (await import("./mocks")).agentToolExecutor(await original()));
+// Every model request of the probe goes through the spend meter; with none installed the router refuses to call out.
+vi.mock("../../server/ai/fallback-router", async (original) => {
+  const actual = await original<typeof import("../../server/ai/fallback-router")>();
+  const { meteredInvoke } = await import("./meter");
+  return { ...actual, invokeAiResilient: meteredInvoke(actual.invokeAiResilient) };
+});
 
+import { FileLedger, meterHolder, parseBudget, parseRates, SpendMeter } from "./meter";
 import { assertNumbersOnly, createTokenSource, looksLikeJwt, parseEnvOptions, preflightProblems, renderSummary, runProbe, sessionRequest } from "./harness";
 import { TASKS } from "./tasks";
 
@@ -48,16 +55,19 @@ describe.skipIf(process.env.ROOK_EVAL_CONFIRM !== "run")("probe (real ChatGPT se
 
     const tasks = options.taskIds ? TASKS.filter((task) => options.taskIds!.includes(task.id)) : TASKS;
     if (!tasks.length) throw new Error("ROOK_EVAL_TASKS matched no task.");
+    const folder = path.join(process.cwd(), ".cache", "harness-evaluation");
+    mkdirSync(folder, { recursive: true });
+    const meter = new SpendMeter({ capUsd: parseBudget(env), rates: parseRates(env), ledger: new FileLedger(options.ledger ?? path.join(folder, "probe-spend.json")) });
+    meterHolder.current = meter;
+    if (meter.remainingUsd() <= 0) throw new Error("The spend ledger already reaches the cap. Raise nothing: delete the ledger deliberately only if you know it is stale.");
     const { runRookAgent } = await import("../../server/integrations/excel-agent");
     const { recentTurns } = await import("../../server/ai/telemetry");
-    const report = await runProbe({ model: options.model, tasks, arms: options.arms, reps: options.reps, seed: options.seed,
+    const report = await runProbe({ model: options.model, tasks, arms: options.arms, reps: options.reps, maxReps: options.maxReps, seed: options.seed, meter,
       maxRequests: options.maxRequests, minIntervalMs: options.minIntervalMs, maxInvalidRate: 0.2, margin: 0.05, minPairs: 30,
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)), session, run: runRookAgent, telemetry: () => recentTurns(1)[0],
       log: (line) => console.info(line) });
 
     assertNumbersOnly(report, [options.model, ...TASKS.map((task) => task.id)]);
-    const folder = path.join(process.cwd(), ".cache", "harness-evaluation");
-    mkdirSync(folder, { recursive: true });
     const file = options.out ?? path.join(folder, `probe-${new Date().toISOString().replace(/[:.]/g, "-")}.json`);
     writeFileSync(file, JSON.stringify(report, null, 2));
     console.info(`\n${renderSummary(report)}\n\nNumbers-only report: ${file}`);
