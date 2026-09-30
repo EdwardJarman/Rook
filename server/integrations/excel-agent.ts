@@ -17,6 +17,7 @@ import { retainedOutputResource } from "./retained-output-scope";
 import { formatToolOutput, OUTPUT_TOOLS, serializeToolOutput, ToolOutputError } from "../ai/tool-output";
 import { getComputerPromptState } from "../ai/computer-context";
 import { buildRookSystemPromptParts } from "../ai/system-prompt";
+import { activeVariantNames, resolveVariants } from "../ai/variants";
 import {
   buildMemoryBlock,
   extractMemoryCandidates,
@@ -148,6 +149,8 @@ export type RookAgentInput = {
   durableTurn?: import("../background/runtime").DurableTurn;
   /** Server-owned foreground crash-replay log, opened from a client `turnId`. */
   foregroundReplay?: import("../ai/foreground-replay").ForegroundReplay;
+  /** Server-owned experiment override; chat routes strip unknown fields. Defaults come from ROOK_VARIANT_* env. */
+  variants?: Partial<import("../ai/variants").VariantFlags>;
   userId: string;
   request?: Request;
   botId: string;
@@ -188,6 +191,7 @@ export type PreparedAgentTurn = {
   outputBudget: number;
   codeTask: boolean;
   reasoning: { effort: "low" | "high" } | undefined;
+  variants: import("../ai/variants").VariantFlags;
 };
 
 /**
@@ -375,6 +379,7 @@ export async function prepareAgentTurn(
       .filter(Boolean)
       .join("\n") || undefined;
 
+  const variants = resolveVariants(input.variants);
   const prompt = buildRookSystemPromptParts({
     botName: input.botName,
     botRole: input.botRole,
@@ -390,7 +395,7 @@ export async function prepareAgentTurn(
       web: "Public web search runs automatically when the question needs fresh external facts (news, prices, versions, docs). Results arrive as snippets with source titles — never claim you opened a page unless a tool confirms it.",
     },
     extraContext,
-  });
+  }, { lean: variants.leanPrompt });
 
   const messages: Message[] = [
     { role: "system", content: prompt.stable },
@@ -434,6 +439,7 @@ export async function prepareAgentTurn(
     outputBudget,
     codeTask,
     reasoning,
+    variants,
   };
 }
 
@@ -465,6 +471,7 @@ async function runAccountedAgent(input: RookAgentInput) {
     outputBudget,
     codeTask,
     reasoning,
+    variants,
   } = await prepareAgentTurn(input, requestId);
 
   const approvals: ExcelAgentApproval[] = [];
@@ -498,6 +505,7 @@ async function runAccountedAgent(input: RookAgentInput) {
       continuations: continuationsUsed,
       webSearched: Boolean(publicSearchQuery),
       codeTask,
+      variants: activeVariantNames(variants),
       ...(extra?.error ? { error: extra.error } : {}),
     });
   };
