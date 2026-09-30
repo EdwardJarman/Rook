@@ -19,7 +19,7 @@ import {
   pollDeviceChallenge,
   requestDeviceChallenge,
 } from "./cli-device";
-import { recentTurns, turnStats, taskUsageStats } from "./ai/telemetry";
+import { recentTurns, turnStats, taskUsageStats, toolStats } from "./ai/telemetry";
 import { transcribeOpenRouterAudio } from "./ai/openrouter";
 import { deleteChatGPTSession } from "./ai/chatgpt";
 import * as db from "./db";
@@ -220,6 +220,7 @@ export const appRouter = router({
         recent: recentTurns(input?.limit ?? 20),
         stats: turnStats(),
         taskUsage: taskUsageStats(),
+        toolUsage: toolStats(),
       })),
   }),
   voice: router({

@@ -10,6 +10,7 @@ import {
   skillCatalogBlock,
 } from "../ai/skills";
 import { recordTurn, recordInterruptedTurn } from "../ai/telemetry";
+import { outcomeFromError, outcomeFromPayload, skippedOutcome, type ToolOutcomeRecord } from "../ai/tool-metrics";
 import { ForegroundOutcomeUnknown } from "../ai/foreground-replay";
 import { accountingTaskKey, setAccountingSections, withRequestAccounting } from "../ai/request-accounting";
 import { retainedOutputResource } from "./retained-output-scope";
@@ -468,6 +469,7 @@ async function runAccountedAgent(input: RookAgentInput) {
 
   const approvals: ExcelAgentApproval[] = [];
   const usedTools: string[] = [];
+  const toolOutcomes: ToolOutcomeRecord[] = [];
   const computerProposals: ComputerProposal[] = [];
   const seenToolCalls = new Set<string>();
   const toolFingerprints: string[] = [];
@@ -490,6 +492,7 @@ async function runAccountedAgent(input: RookAgentInput) {
       fellBack: fellBackToAuto,
       providers: [...attemptedProviders],
       tools: [...usedTools],
+      toolOutcomes: [...toolOutcomes],
       approvals: approvals.length,
       computerProposals: computerProposals.length,
       continuations: continuationsUsed,
@@ -691,6 +694,7 @@ async function runAccountedAgent(input: RookAgentInput) {
     for (const call of calls) {
       const name = call.function.name;
       if (toolPayloadChars >= ROOK_TURN_TOOL_BUDGET_CHARS) {
+        toolOutcomes.push(skippedOutcome(name, "OUTPUT_BUDGET"));
         messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify({ status: "not_executed", message: "The turn's tool-output budget is reached. Answer from the retained results and identify remaining work." }) });
         continue;
       }
@@ -702,6 +706,7 @@ async function runAccountedAgent(input: RookAgentInput) {
         return friendlyTurnEnd(new AgentLoopStop("DOOM_LOOP", DOOM_LOOP_ABORT_MESSAGE));
       }
       if (seenToolCalls.has(fingerprint)) {
+        toolOutcomes.push(skippedOutcome(name, "DUPLICATE_CALL"));
         messages.push({
           role: "tool",
           tool_call_id: call.id,
@@ -718,6 +723,8 @@ async function runAccountedAgent(input: RookAgentInput) {
       usedTools.push(name);
       // Single source of truth for tool behavior, shared with the
       // streaming turn (see agent-tool-executor.ts).
+      let recorded = false;
+      const record = (entry: ToolOutcomeRecord) => { if (!recorded) { recorded = true; toolOutcomes.push(entry); } };
       let rendered: string;
       try {
         const toolInput = {
@@ -740,13 +747,15 @@ async function runAccountedAgent(input: RookAgentInput) {
             : await executeAgentTool(toolInput);
         trace.push(executed.traceStep);
         const terminal = terminalToolError(executed.resultPayload);
-        if (terminal) return friendlyTurnEnd(terminal);
+        if (terminal) { record(outcomeFromPayload(name, executed.resultPayload)); return friendlyTurnEnd(terminal); }
         rendered = await formatToolOutput({ ...input, name, value: executed.resultPayload,
           retrievalAllowed: !input.disallowedTools?.includes("read_tool_output"),
           resource: retainedOutputResource(name, call.function.arguments),
           inlineLimit: Math.min(12_000, Math.max(2000, ROOK_TURN_TOOL_BUDGET_CHARS - toolPayloadChars)) });
+        record(outcomeFromPayload(name, executed.resultPayload));
       } catch (error) {
         if (input.durableTurn) throw error;
+        record(outcomeFromError(name, error));
         if (error instanceof ForegroundOutcomeUnknown) return friendlyTurnEnd(new AgentLoopStop("OUTCOME_UNKNOWN", error.message));
         if (error instanceof ToolOutputError) return friendlyTurnEnd(new AgentLoopStop("OUTPUT_UNAVAILABLE", error.message));
         const failure =
