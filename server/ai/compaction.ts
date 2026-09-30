@@ -121,3 +121,34 @@ export function applyFocusNote(dropped: LedgerEntry[], focusNote: string): Ledge
   };
   return [...dropped.filter(matches), ...dropped.filter((entry) => !matches(entry))];
 }
+
+export const PLAN_HISTORY_BUDGET_TOKENS = 1500;
+const MAX_PLAN_CHARS = 1600;
+const COMMITMENT = /\b(?:i'll|i will|next[, ]|todo|plan is|will do|decided|agreed)\b/i;
+
+/**
+ * Flagged plan ledger (`ROOK_VARIANT_COMPACT_PLAN`). Deterministic, no model call.
+ * Unlike the extractive ledger it keeps what the user asked for (oldest request
+ * first, since it usually states the goal), the newest asks, and a few bot
+ * commitments, then points at the full retained transcript when one exists.
+ */
+export function buildPlanLedger(dropped: LedgerEntry[], transcriptReference?: string): string {
+  if (!dropped.length) return "";
+  const header = "Earlier in this conversation (condensed so this turn fits; the newest messages follow verbatim, use them first):";
+  const pointer = transcriptReference
+    ? `Full earlier messages are retained as ${transcriptReference}; read the parts you need with read_tool_output.`
+    : "";
+  const users = dropped.filter((entry) => entry.author === "user" && oneLine(entry.body));
+  const asks = [...new Set([...users.slice(0, 1), ...users.slice(-4)])].map((entry) => `- ${oneLine(entry.body)}`);
+  const commitments = dropped.filter((entry) => entry.author === "bot" && COMMITMENT.test(entry.body)).slice(-3)
+    .map((entry) => `- ${oneLine(entry.body)}`);
+  const sections = [
+    asks.length ? `User asks (goal first, then most recent):\n${asks.join("\n")}` : "",
+    commitments.length ? `Bot commitments:\n${commitments.join("\n")}` : "",
+  ].filter(Boolean);
+  if (!sections.length && !pointer) return "";
+  let body = sections.join("\n");
+  const room = MAX_PLAN_CHARS - header.length - pointer.length - 2;
+  if (body.length > room) body = body.slice(0, Math.max(0, room - 1)).trimEnd() + "…";
+  return [header, body, pointer].filter(Boolean).join("\n");
+}

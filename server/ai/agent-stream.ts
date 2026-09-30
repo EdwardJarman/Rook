@@ -37,6 +37,7 @@ import { recordTurn, recordInterruptedTurn } from "./telemetry";
 import { outcomeFromError, outcomeFromPayload, skippedOutcome, type ToolOutcomeRecord } from "./tool-metrics";
 import { ForegroundOutcomeUnknown } from "./foreground-replay";
 import { activeVariantNames } from "./variants";
+import { ToolActivation } from "./tool-offload";
 import { accountingTaskKey, withRequestAccounting } from "./request-accounting";
 import { retainedOutputResource } from "../integrations/retained-output-scope";
 import { formatToolOutput, serializeToolOutput, ToolOutputError } from "./tool-output";
@@ -135,6 +136,9 @@ async function runAccountedAgentStream(
     variants,
   } = setup;
   const messages: Message[] = setup.messages;
+  const offloaded = setup.offloaded;
+  const activation = offloaded.length ? new ToolActivation(tools ?? [], offloaded, messages) : undefined;
+  let liveTools = activation ? activation.current() : tools;
   const trace: AgentTraceStep[] = [];
   // The prepared trace is static ([context, search?, response]): emit the
   // setup steps now, hold the closing "response" step for the end.
@@ -291,8 +295,8 @@ async function runAccountedAgentStream(
           {
             model: requestedModel,
             messages,
-            tools,
-            toolChoice: tools ? (toolPayloadChars >= ROOK_TURN_TOOL_BUDGET_CHARS ? "none" : "auto") : undefined,
+            tools: liveTools,
+            toolChoice: liveTools ? (toolPayloadChars >= ROOK_TURN_TOOL_BUDGET_CHARS ? "none" : "auto") : undefined,
             maxTokens: effectiveBudget,
             ...(reasoning ? { reasoning } : {}),
           },
@@ -358,8 +362,8 @@ async function runAccountedAgentStream(
         {
           model: requestedModel,
           messages,
-          tools,
-          toolChoice: tools ? (toolPayloadChars >= ROOK_TURN_TOOL_BUDGET_CHARS ? "none" : "auto") : undefined,
+          tools: liveTools,
+          toolChoice: liveTools ? (toolPayloadChars >= ROOK_TURN_TOOL_BUDGET_CHARS ? "none" : "auto") : undefined,
           maxTokens: effectiveBudget,
           ...(reasoning ? { reasoning } : {}),
         },
@@ -410,8 +414,8 @@ async function runAccountedAgentStream(
       {
         model: requestedModel,
         messages,
-        tools,
-        toolChoice: tools ? (toolPayloadChars >= ROOK_TURN_TOOL_BUDGET_CHARS ? "none" : "auto") : undefined,
+        tools: liveTools,
+        toolChoice: liveTools ? (toolPayloadChars >= ROOK_TURN_TOOL_BUDGET_CHARS ? "none" : "auto") : undefined,
         maxTokens: effectiveBudget,
         ...(reasoning ? { reasoning } : {}),
       },
@@ -531,10 +535,12 @@ async function runAccountedAgentStream(
           computerOnline: computer.online,
           approvals,
           computerProposals,
+          offloadedTools: offloaded.map((tool) => tool.function.name),
         };
         const executed = input.foregroundReplay
           ? await input.foregroundReplay.execute(toolInput, () => executeAgentTool(toolInput))
           : await executeAgentTool(toolInput);
+        if (activation) { activation.observe(name, call.function.arguments); liveTools = activation.current(); }
         trace.push(executed.traceStep);
         emit({ type: "trace", step: executed.traceStep });
         const terminal = terminalToolError(executed.resultPayload);
