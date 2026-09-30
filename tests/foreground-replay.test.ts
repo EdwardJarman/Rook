@@ -217,3 +217,63 @@ describe("foreground replay scope and retention", () => {
     expect((await two!.recordRound(0, round("second"))).toolCalls[0].id).toBe("first");
   });
 });
+
+describe("a slow or failing store never stalls chat or repeats a side effect", () => {
+  const ids = { userId: "a", botId: "b", taskId: "t", turnId: "turn-00000003" };
+  const never = () => new Promise<never>(() => {});
+  const round = { content: "", toolCalls: [{ id: "c", type: "function" as const, function: { name: "x", arguments: "{}" } }], finishReason: null, model: "m" };
+
+  it("open() gives up at the read deadline and the turn proceeds without durability", async () => {
+    vi.useFakeTimers();
+    try {
+      const slow: ForegroundTurnStore = { list: never, create: never };
+      const opened = ForegroundReplay.open(ids, { store: slow, deadlines: { read: 1500, write: 3000 } });
+      await vi.advanceTimersByTimeAsync(1499);
+      let settled = false; void opened.then(() => { settled = true; });
+      await Promise.resolve(); expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await opened).toBeUndefined();
+    } finally { vi.useRealTimers(); }
+  });
+  it("a hung round write returns the model's own round at the write deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const replay = await ForegroundReplay.open(ids, { store: { list: async () => [], create: never }, deadlines: { read: 1500, write: 3000 } });
+      const recording = replay!.recordRound(0, round);
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(await recording).toEqual(round);
+    } finally { vi.useRealTimers(); }
+  });
+  it("a hung claim write fails open exactly like a store error (dispatches once)", async () => {
+    vi.useFakeTimers();
+    try {
+      const replay = await ForegroundReplay.open(ids, { store: { list: async () => [], create: never }, deadlines: { read: 1500, write: 3000 } });
+      const dispatch = vi.fn(async () => ({ traceStep: { kind: "tool" as const, title: "ok" }, resultPayload: { status: "approval_required" } }));
+      const running = replay!.execute({ name: "excel_update_range", rawArgs: "{}", approvals: [], computerProposals: [] }, dispatch);
+      await vi.advanceTimersByTimeAsync(3000);
+      await running;
+      expect(dispatch).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
+  });
+  it("when another attempt owns the step and the follow-up read fails, it is never dispatched", async () => {
+    let reads = 0;
+    const store: ForegroundTurnStore = {
+      list: async () => { reads += 1; if (reads > 1) throw new Error("db down"); return []; },
+      create: async (): Promise<CreateResult> => ({ created: false, existing: { key: "k", kind: "intent", at: 0, expiresAt: 1e15, payload: {} } }),
+    };
+    const replay = await ForegroundReplay.open(ids, { store });
+    const dispatch = vi.fn();
+    await expect(replay!.execute({ name: "excel_update_range", rawArgs: "{}", approvals: [], computerProposals: [] }, dispatch)).rejects.toMatchObject({ code: "OUTCOME_UNKNOWN" });
+    expect(dispatch).not.toHaveBeenCalled();
+    reads = 0;
+    const hung: ForegroundTurnStore = { ...store, list: async () => { reads += 1; return reads > 1 ? never() : []; } };
+    vi.useFakeTimers();
+    try {
+      const again = await ForegroundReplay.open(ids, { store: hung, deadlines: { read: 1500, write: 3000 } });
+      const running = expect(again!.execute({ name: "excel_update_range", rawArgs: "{}", approvals: [], computerProposals: [] }, dispatch)).rejects.toMatchObject({ code: "OUTCOME_UNKNOWN" });
+      await vi.advanceTimersByTimeAsync(1500);
+      await running;
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+});

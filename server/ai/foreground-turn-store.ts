@@ -12,7 +12,11 @@ const toEvent = (row: Row): TurnEvent => ({
 });
 
 /** InstantDB-backed log. Requires the `foregroundTurnEvents` entity (`pnpm db:push`). */
+export const PRUNE_INTERVAL_MS = 10 * 60_000;
+
 export class InstantForegroundTurnStore implements ForegroundTurnStore {
+  private lastPrune = Number.NEGATIVE_INFINITY;
+
   private async database() {
     const db = await getDb();
     if (!db) throw new Error("Foreground replay persistence is unavailable.");
@@ -24,7 +28,11 @@ export class InstantForegroundTurnStore implements ForegroundTurnStore {
     const data = await db.query({ foregroundTurnEvents: { $: { where: { owner, turn } } } });
     const rows = data.foregroundTurnEvents as Row[];
     const live = rows.filter((row) => row.expiresAt > now);
-    await this.prune(owner, now).catch(() => undefined);
+    // Housekeeping stays off the chat path: throttled per process, never awaited.
+    if (now - this.lastPrune >= PRUNE_INTERVAL_MS) {
+      this.lastPrune = now;
+      void this.prune(owner, now).catch(() => undefined);
+    }
     return live.map(toEvent);
   }
 

@@ -4,9 +4,14 @@ type Row = { id: string; eventKey: string; owner: string; turn: string; kind: st
 type Op = { op: string; id: string; data?: Omit<Row, "id"> };
 const rows: Row[] = [];
 let failNextTransact = false;
+let hangPrune = false;
+let queries = 0;
+let pruneQueries = 0;
 const fakeDb = {
   query: async (q: { foregroundTurnEvents: { $: { where: Record<string, unknown> } } }) => {
     const where = q.foregroundTurnEvents.$.where;
+    queries += 1;
+    if ("expiresAt" in where) { pruneQueries += 1; if (hangPrune) return new Promise<never>(() => {}); }
     return { foregroundTurnEvents: rows.filter((row) => Object.entries(where).every(([key, value]) =>
       value && typeof value === "object" && "$lt" in value
         ? ((row as Record<string, unknown>)[key] as number) < (value as { $lt: number }).$lt
@@ -47,9 +52,27 @@ describe("InstantForegroundTurnStore", () => {
     await expect(store.create("alice", "t3", event("t3:intent:a"))).rejects.toThrow("network");
   });
 
-  it("hides expired events and prunes them", async () => {
-    await store.create("alice", "t4", event("t4:intent:old", 50));
-    expect(await store.list("alice", "t4", 100)).toHaveLength(0);
-    expect(rows.some((row) => row.eventKey === "t4:intent:old")).toBe(false);
+  it("hides expired events and prunes them in the background", async () => {
+    const pruning = new InstantForegroundTurnStore();
+    await pruning.create("alice", "t4", event("t4:intent:old", 50));
+    expect(await pruning.list("alice", "t4", 100)).toHaveLength(0);
+    await vi.waitFor(() => expect(rows.some((row) => row.eventKey === "t4:intent:old")).toBe(false));
+  });
+
+  it("never waits on housekeeping and prunes at most once per interval", async () => {
+    const throttled = new InstantForegroundTurnStore();
+    pruneQueries = 0;
+    const before = queries;
+    await throttled.create("alice", "t5", event("t5:intent:a"));
+    hangPrune = true;
+    const started = await Promise.race([throttled.list("alice", "t5", 0).then(() => "listed"), new Promise((resolve) => setTimeout(() => resolve("stalled"), 200))]);
+    expect(started).toBe("listed");
+    await vi.waitFor(() => expect(pruneQueries).toBe(1));
+    await throttled.list("alice", "t5", 1000); await throttled.list("alice", "t5", 60_000);
+    expect(pruneQueries).toBe(1);
+    await throttled.list("alice", "t5", 10 * 60_000);
+    await vi.waitFor(() => expect(pruneQueries).toBe(2));
+    expect(queries).toBeGreaterThan(before);
+    hangPrune = false;
   });
 });
