@@ -8,6 +8,7 @@ import type { Request } from "express";
 import { ROOK_AGENT_MAX_ROUNDS } from "../../server/ai/agent-reliability";
 import type { TurnRecord } from "../../server/ai/telemetry";
 import type { RookAgentInput } from "../../server/integrations/excel-agent";
+import { parseBudget, parseRates } from "./meter";
 import { mean, pairedBootstrap, seededRng, shuffle, verdictFor, wilson, type Interval, type Verdict } from "./stats";
 import type { Task } from "./tasks";
 import { setWorld, probeWorld } from "./world";
@@ -36,6 +37,9 @@ export function preflightProblems(env: Record<string, string | undefined>, model
   }
   if (!env.CLERK_SECRET_KEY?.trim()) problems.push("CLERK_SECRET_KEY is required: the existing ChatGPT session path verifies the Clerk token and decrypts the stored session with it.");
   if (!env.ROOK_EVAL_SESSION_TOKEN?.trim() && !env.ROOK_EVAL_SESSION_TOKEN_CMD?.trim()) problems.push("Set ROOK_EVAL_SESSION_TOKEN (a Clerk session JWT) or ROOK_EVAL_SESSION_TOKEN_CMD (a command that prints one).");
+  for (const check of [() => parseRates(env), () => parseBudget(env)]) {
+    try { check(); } catch (error) { problems.push(error instanceof Error ? error.message : "Invalid spend settings."); }
+  }
   return problems;
 }
 
@@ -67,7 +71,7 @@ export const sessionRequest = (source: TokenSource): Request => ({
 }) as unknown as Request;
 
 export type RunResult = { text: string; approvals: unknown[]; computerProposals?: unknown[]; requestId: string; error?: string };
-export const INVALID_REASONS = ["exception", "no_telemetry", "fallback_used", "provider_error"] as const;
+export const INVALID_REASONS = ["exception", "no_telemetry", "fallback_used", "provider_error", "budget"] as const;
 export type InvalidReason = (typeof INVALID_REASONS)[number];
 export type Tokens = { input: number | null; cachedInput: number | null; output: number | null; reasoning: number | null };
 export type Trial = {
@@ -76,10 +80,26 @@ export type Trial = {
   success: boolean; checksPassed: number; checksTotal: number;
   requests: number; toolCalls: number; toolErrors: number; invalidArguments: number; skippedCalls: number; loadToolsCalls: number;
   approvals: number; tokens: Tokens; latencyMs: number; answerChars: number;
+  /** Charged by the spend meter (actual usage x 1.1, estimates for missing usage). */
+  costUsd: number; costEstimated: boolean;
+  /** Total characters of the first model request, from accounting. A variant is "exposed" on a pair when this differs from the baseline trial. */
+  firstRequestChars: number;
+};
+
+/** The slice of the spend meter the harness reads. */
+export type MeterLike = {
+  capUsd: number; ceilingUsd: number;
+  spentUsd(): number; remainingUsd(): number; estimatedCharges(): number; tripped(): boolean; clearTrip(): void;
 };
 
 export type ProbeOptions = {
-  model: string; tasks: readonly Task[]; arms: readonly ArmId[]; reps: number; seed: number;
+  model: string; tasks: readonly Task[]; arms: readonly ArmId[]; seed: number;
+  /** Repetitions every arm starts with. */
+  reps: number;
+  /** Escalate up to this many repetitions, but only when `decide` shows the extra data would be decisive. Defaults to `reps` (no escalation). */
+  maxReps?: number;
+  decide?: typeof decideEscalation;
+  meter: MeterLike;
   maxRequests: number; minIntervalMs: number; maxInvalidRate: number; margin: number; minPairs: number;
   sleep: (ms: number) => Promise<void>;
   session: TokenSource;
@@ -94,20 +114,23 @@ const token = (turn: TurnRecord, key: "input" | "cachedInput" | "output" | "reas
 async function runTrial(o: ProbeOptions, task: Task, arm: ArmId, rep: number): Promise<Trial> {
   setWorld(task.world);
   const blank = { requests: 0, toolCalls: 0, toolErrors: 0, invalidArguments: 0, skippedCalls: 0, loadToolsCalls: 0, approvals: 0,
-    tokens: { input: null, cachedInput: null, output: null, reasoning: null }, latencyMs: 0, answerChars: 0 };
+    tokens: { input: null, cachedInput: null, output: null, reasoning: null }, latencyMs: 0, answerChars: 0, costUsd: 0, costEstimated: false, firstRequestChars: 0 };
+  const spentBefore = o.meter.spentUsd(), estimatedBefore = o.meter.estimatedCharges();
   const invalid = (reason: InvalidReason, extra: Partial<Trial> = {}): Trial => ({ task: task.id, arm, rep, valid: false, invalid: reason,
     success: false, checksPassed: 0, checksTotal: task.checks.length, ...blank, ...extra });
   let result: RunResult;
+  const settle = (): Pick<Trial, "costUsd" | "costEstimated"> => ({ costUsd: o.meter.spentUsd() - spentBefore, costEstimated: o.meter.estimatedCharges() > estimatedBefore });
   try {
     result = await o.run({ userId: "eval-user", botId: `eval-${task.id}`, taskId: `eval-${task.id}-${arm}-${rep}`, botName: "Scout",
       botRole: "Helpful teammate", botPurpose: "Help the user get their work done.", model: o.model, message: task.message,
       userTimeZone: "UTC", recentContext: task.recentContext ?? [], ...(task.disallowedTools ? { disallowedTools: task.disallowedTools } : {}),
       request: sessionRequest(o.session), variants: { ...ARM_FLAGS[arm] } });
   } catch {
-    return invalid("exception");
+    return o.meter.tripped() ? invalid("budget", settle()) : invalid("exception", settle());
   }
+  if (o.meter.tripped()) return invalid("budget", settle());
   const turn = o.telemetry();
-  if (!turn || turn.requestId !== result.requestId) return invalid("no_telemetry");
+  if (!turn || turn.requestId !== result.requestId) return invalid("no_telemetry", settle());
   const requests = turn.modelRequests?.length ?? 0;
   const outcomes = turn.toolOutcomes ?? [];
   const measured = {
@@ -118,7 +141,8 @@ async function runTrial(o: ProbeOptions, task: Task, arm: ArmId, rep: number): P
     loadToolsCalls: probeWorld.calls.filter((call) => call.tool === "load_tools").length,
     approvals: result.approvals.length,
     tokens: { input: token(turn, "input"), cachedInput: token(turn, "cachedInput"), output: token(turn, "output"), reasoning: token(turn, "reasoningOutput") },
-    latencyMs: turn.latencyMs, answerChars: result.text.length,
+    latencyMs: turn.latencyMs, answerChars: result.text.length, ...settle(),
+    firstRequestChars: Object.values(turn.modelRequests?.[0]?.inputCharacters ?? {}).reduce((sum, n) => sum + n, 0),
   };
   if (turn.fellBack || turn.providers.some((provider) => provider !== "chatgpt")) return invalid("fallback_used", measured);
   if (result.error && !turn.errorCode) return invalid("provider_error", measured);
@@ -127,8 +151,8 @@ async function runTrial(o: ProbeOptions, task: Task, arm: ArmId, rep: number): P
   return { task: task.id, arm, rep, valid: true, invalid: null, success: passed === task.checks.length, checksPassed: passed, checksTotal: task.checks.length, ...measured };
 }
 
-export type Truncation = "none" | "request_cap" | "provider_failures" | "invalid_rate";
-export const METRICS = ["success", "requests", "toolCalls", "toolErrors", "inputTokens", "outputTokens", "latencyMs"] as const;
+export type Truncation = "none" | "request_cap" | "provider_failures" | "invalid_rate" | "budget_cap";
+export const METRICS = ["success", "requests", "toolCalls", "toolErrors", "inputTokens", "outputTokens", "latencyMs", "costUsd"] as const;
 export type MetricName = (typeof METRICS)[number];
 const metricOf = (trial: Trial, metric: MetricName): number | null => {
   switch (metric) {
@@ -139,28 +163,53 @@ const metricOf = (trial: Trial, metric: MetricName): number | null => {
     case "inputTokens": return trial.tokens.input;
     case "outputTokens": return trial.tokens.output;
     case "latencyMs": return trial.latencyMs;
+    case "costUsd": return trial.costUsd;
   }
 };
 
 export type ArmSummary = { trials: number; valid: number; successes: number; successRate: number; successLo: number; successHi: number;
-  meanRequests: number; meanToolCalls: number; meanToolErrors: number; meanInputTokens: number | null; meanOutputTokens: number | null; meanLatencyMs: number };
+  meanRequests: number; meanToolCalls: number; meanToolErrors: number; meanInputTokens: number | null; meanOutputTokens: number | null; meanLatencyMs: number; meanCostUsd: number };
+
+export const ESCALATION_REASONS = ["go", "disabled", "max_reps_reached", "phase1_truncated", "noise_unmeasured", "no_undecided_variant", "noise_cannot_resolve", "over_budget"] as const;
+export type EscalationReason = (typeof ESCALATION_REASONS)[number];
+export type Escalation = {
+  decision: "go" | "stop"; reason: EscalationReason; repsRun: number; maxReps: number;
+  undecidedArms: ArmId[]; resolvableArms: ArmId[];
+  observedDisagreement: number; repsNeededForPass: number; projectedCostUsd: number; remainingUsd: number;
+};
+export const SCOREBOARD_REASONS = ["success_regression", "success_parity_not_shown", "insufficient_data", "saving_not_demonstrated", "tool_errors_increased", "cost_mostly_estimated"] as const;
+export type ScoreboardReason = (typeof SCOREBOARD_REASONS)[number];
+export type ScoreboardRow = {
+  arm: ArmId; verdict: Verdict; decision: "ship" | "no-ship"; reasons: ScoreboardReason[];
+  /** All matched valid pairs, and the subset the variant changed (the basis of every field below except `suite*`). */
+  pairs: number; exposedPairs: number;
+  matchedSuccessBaseline: number; matchedSuccessVariant: number; successDiff: Interval; suiteSuccessDiff: Interval;
+  costPerTaskBaseline: number; costPerTaskVariant: number; costSavingPct: number; costDiff: Interval; suiteCostSavingPct: number;
+  inputTokenSavingPct: number | null; inputTokensDiff: Interval; outputTokensDiff: Interval; requestsDiff: Interval; toolErrorsDiff: Interval;
+  estimatedCostShare: number;
+};
 export type Report = {
-  kind: "rook-probe-report"; version: 1; model: string; seed: number; reps: number; tasks: number;
+  kind: "rook-probe-report"; version: 2; model: string; seed: number; reps: number; maxReps: number; tasks: number;
   requestsUsed: number; truncated: Truncation;
+  budget: { capUsd: number; ceilingUsd: number; spentUsd: number; runSpentUsd: number; estimatedCharges: number };
+  escalation: Escalation | null;
   arms: Partial<Record<ArmId, ArmSummary>>;
   noise: Partial<Record<MetricName, Interval>> | null;
   variants: Partial<Record<ArmId, { verdict: Verdict; paired: Partial<Record<MetricName, Interval>> }>>;
+  scoreboard: ScoreboardRow[];
   perTask: Record<string, Partial<Record<ArmId, { valid: number; successes: number }>>>;
   trials: Trial[];
 };
 
-function pairedIntervals(trials: readonly Trial[], arm: ArmId, base: ArmId, seed: number): Partial<Record<MetricName, Interval>> {
-  const byKey = (which: ArmId) => new Map(trials.filter((t) => t.arm === which && t.valid).map((t) => [`${t.task}|${t.rep}`, t]));
-  const a = byKey(arm), b = byKey(base);
+const pairMap = (trials: readonly Trial[], arm: ArmId) => new Map(trials.filter((t) => t.arm === arm && t.valid).map((t) => [`${t.task}|${t.rep}`, t]));
+
+function pairedIntervals(trials: readonly Trial[], arm: ArmId, base: ArmId, seed: number, only?: ReadonlySet<string>): Partial<Record<MetricName, Interval>> {
+  const a = pairMap(trials, arm), b = pairMap(trials, base);
   const out: Partial<Record<MetricName, Interval>> = {};
   for (const metric of METRICS) {
     const diffs: number[] = [];
     for (const [key, trial] of a) {
+      if (only && !only.has(key)) continue;
       const other = b.get(key);
       const x = other && metricOf(trial, metric), y = other && metricOf(other, metric);
       if (typeof x === "number" && typeof y === "number") diffs.push(x - y);
@@ -170,12 +219,61 @@ function pairedIntervals(trials: readonly Trial[], arm: ArmId, base: ArmId, seed
   return out;
 }
 
+/** Share of matched pairs whose success differs between two arms. */
+export function disagreement(trials: readonly Trial[], arm: ArmId, base: ArmId, only?: ReadonlySet<string>): number {
+  const a = pairMap(trials, arm), b = pairMap(trials, base);
+  let pairs = 0, differ = 0;
+  for (const [key, trial] of a) { const other = b.get(key); if (!other || (only && !only.has(key))) continue; pairs += 1; if (trial.success !== other.success) differ += 1; }
+  return pairs ? differ / pairs : 0;
+}
+
 const meanOrNull = (values: Array<number | null>): number | null => {
   const known = values.filter((value): value is number => value !== null);
   return known.length ? mean(known) : null;
 };
 
-export function buildReport(trials: Trial[], meta: { model: string; seed: number; reps: number; tasks: number; requestsUsed: number; truncated: Truncation; margin: number; minPairs: number }): Report {
+/** Keys of matched valid pairs where the variant actually changed the first request. */
+export function exposedKeys(trials: readonly Trial[], arm: ArmId): Set<string> {
+  const a = pairMap(trials, arm), b = pairMap(trials, "baseline");
+  return new Set([...a.keys()].filter((key) => b.has(key) && a.get(key)!.firstRequestChars !== b.get(key)!.firstRequestChars));
+}
+
+/**
+ * One variant's row. Success parity, savings and every decision input use EXPOSED pairs
+ * (those the variant changed), because averaging in tasks it never touches dilutes both a
+ * regression and a saving. Suite-wide figures are reported beside them, unfiltered.
+ */
+function scoreRow(trials: readonly Trial[], arm: ArmId, global: Partial<Record<MetricName, Interval>>, exposed: Partial<Record<MetricName, Interval>>, verdict: Verdict, exposure: ReadonlySet<string>): ScoreboardRow {
+  const a = pairMap(trials, arm), b = pairMap(trials, "baseline");
+  const keys = [...exposure].sort();
+  const mine = keys.map((key) => a.get(key)!), base = keys.map((key) => b.get(key)!);
+  const zero: Interval = { n: 0, mean: 0, lo: 0, hi: 0 };
+  const costBase = mean(base.map((t) => t.costUsd)), costVar = mean(mine.map((t) => t.costUsd));
+  const inBase = meanOrNull(base.map((t) => t.tokens.input)), inDiff = exposed.inputTokens ?? zero;
+  const costDiff = exposed.costUsd ?? zero, toolErrors = exposed.toolErrors ?? zero;
+  const estimatedCostShare = mine.length ? mine.filter((t) => t.costEstimated).length / mine.length : 0;
+  const allPairs = [...a.keys()].filter((key) => b.has(key));
+  const suiteBase = mean(allPairs.map((key) => b.get(key)!.costUsd)), suiteVar = mean(allPairs.map((key) => a.get(key)!.costUsd));
+  const reasons: ScoreboardReason[] = [];
+  if (verdict === "kill") reasons.push("success_regression");
+  else if (verdict === "inconclusive") reasons.push("success_parity_not_shown");
+  else if (verdict === "insufficient") reasons.push("insufficient_data");
+  if (verdict === "pass" && !(costDiff.n > 0 && costDiff.hi < 0)) reasons.push("saving_not_demonstrated");
+  if (toolErrors.n > 0 && toolErrors.lo > 0) reasons.push("tool_errors_increased");
+  if (estimatedCostShare > 0.1) reasons.push("cost_mostly_estimated");
+  return { arm, verdict, decision: reasons.length ? "no-ship" : "ship", reasons, pairs: allPairs.length, exposedPairs: keys.length,
+    matchedSuccessBaseline: mean(base.map((t) => (t.success ? 1 : 0))), matchedSuccessVariant: mean(mine.map((t) => (t.success ? 1 : 0))),
+    successDiff: exposed.success ?? zero, suiteSuccessDiff: global.success ?? zero,
+    costPerTaskBaseline: costBase, costPerTaskVariant: costVar, costSavingPct: costBase > 0 ? (costBase - costVar) / costBase : 0, costDiff,
+    suiteCostSavingPct: suiteBase > 0 ? (suiteBase - suiteVar) / suiteBase : 0,
+    inputTokenSavingPct: inBase ? -inDiff.mean / inBase : null, inputTokensDiff: inDiff,
+    outputTokensDiff: exposed.outputTokens ?? zero, requestsDiff: exposed.requests ?? zero, toolErrorsDiff: toolErrors, estimatedCostShare };
+}
+
+export type ReportMeta = { model: string; seed: number; reps: number; maxReps: number; tasks: number; requestsUsed: number; truncated: Truncation; margin: number; minPairs: number;
+  budget: Report["budget"]; escalation: Escalation | null };
+
+export function buildReport(trials: Trial[], meta: ReportMeta): Report {
   const arms: Report["arms"] = {};
   const perTask: Report["perTask"] = {};
   for (const arm of Object.keys(ARM_FLAGS) as ArmId[]) {
@@ -188,7 +286,7 @@ export function buildReport(trials: Trial[], meta: { model: string; seed: number
       meanRequests: mean(valid.map((t) => t.requests)), meanToolCalls: mean(valid.map((t) => t.toolCalls)),
       meanToolErrors: mean(valid.map((t) => t.toolErrors + t.invalidArguments)),
       meanInputTokens: meanOrNull(valid.map((t) => t.tokens.input)), meanOutputTokens: meanOrNull(valid.map((t) => t.tokens.output)),
-      meanLatencyMs: mean(valid.map((t) => t.latencyMs)) };
+      meanLatencyMs: mean(valid.map((t) => t.latencyMs)), meanCostUsd: mean(valid.map((t) => t.costUsd)) };
     for (const t of own) {
       const row = (perTask[t.task] ??= {});
       const cell = (row[arm] ??= { valid: 0, successes: 0 });
@@ -197,20 +295,70 @@ export function buildReport(trials: Trial[], meta: { model: string; seed: number
   }
   const noise = arms.baseline && arms.baseline_repeat ? pairedIntervals(trials, "baseline_repeat", "baseline", meta.seed) : null;
   const variants: Report["variants"] = {};
+  const scoreboard: ScoreboardRow[] = [];
   if (arms.baseline) {
     for (const arm of VARIANT_ARMS) {
       if (!arms[arm]) continue;
-      const paired = pairedIntervals(trials, arm, "baseline", meta.seed);
-      variants[arm] = { paired, verdict: verdictFor({ diff: paired.success!, noise: noise?.success, margin: meta.margin, minPairs: meta.minPairs }) };
+      const global = pairedIntervals(trials, arm, "baseline", meta.seed);
+      const exposure = exposedKeys(trials, arm);
+      const exposed = pairedIntervals(trials, arm, "baseline", meta.seed, exposure);
+      // Noise is measured on the same tasks the variant touched.
+      const noiseHere = arms.baseline_repeat ? pairedIntervals(trials, "baseline_repeat", "baseline", meta.seed, exposure).success : undefined;
+      const verdict = verdictFor({ diff: exposed.success!, noise: noiseHere, margin: meta.margin, minPairs: meta.minPairs });
+      variants[arm] = { paired: exposed, verdict };
+      scoreboard.push(scoreRow(trials, arm, global, exposed, verdict, exposure));
     }
   }
-  return { kind: "rook-probe-report", version: 1, model: meta.model, seed: meta.seed, reps: meta.reps, tasks: meta.tasks,
-    requestsUsed: meta.requestsUsed, truncated: meta.truncated, arms, noise, variants, perTask, trials };
+  return { kind: "rook-probe-report", version: 2, model: meta.model, seed: meta.seed, reps: meta.reps, maxReps: meta.maxReps, tasks: meta.tasks,
+    requestsUsed: meta.requestsUsed, truncated: meta.truncated, budget: meta.budget, escalation: meta.escalation, arms, noise, variants, scoreboard, perTask, trials };
 }
+
+export type EscalationInput = {
+  enabled: boolean; truncated: Truncation; repsRun: number; maxReps: number; margin: number; minPairs: number; tasks: number;
+  noise: Interval | undefined;
+  /** Undecided variants are the ones whose verdict is `inconclusive`; killed and passed arms stop receiving data. */
+  variants: Array<{ arm: ArmId; verdict: Verdict; diff: Interval; disagreement: number }>;
+  costPerTrialUsd: number; armsInNextPhase: (arms: ArmId[]) => number; remainingUsd: number;
+};
+
+/**
+ * More repetitions are justified only when they would be decisive: an undecided
+ * variant's interval, shrunk by sqrt(repsRun / maxReps) with its mean held
+ * fixed, must reach a pass (lower bound within the margin) or a kill (upper
+ * bound below zero). If even that optimistic projection cannot decide, more
+ * data is noise-chasing and is not bought. The projection must also fit in the
+ * remaining budget with a 25% safety margin.
+ */
+export function decideEscalation(input: EscalationInput): Escalation {
+  const base = { repsRun: input.repsRun, maxReps: input.maxReps, undecidedArms: [] as ArmId[], resolvableArms: [] as ArmId[],
+    observedDisagreement: 0, repsNeededForPass: 0, projectedCostUsd: 0, remainingUsd: input.remainingUsd };
+  const stop = (reason: EscalationReason, extra: Partial<Escalation> = {}): Escalation => ({ ...base, ...extra, decision: "stop", reason });
+  if (!input.enabled) return stop("disabled");
+  if (input.repsRun >= input.maxReps) return stop("max_reps_reached");
+  if (input.truncated !== "none") return stop("phase1_truncated");
+  if (!input.noise || input.noise.n < input.minPairs) return stop("noise_unmeasured");
+  const undecided = input.variants.filter((v) => v.verdict === "inconclusive");
+  if (!undecided.length) return stop("no_undecided_variant");
+  const observedDisagreement = Math.max(...undecided.map((v) => v.disagreement));
+  const repsNeededForPass = Math.ceil((3.8416 * observedDisagreement) / (input.margin * input.margin) / input.tasks);
+  const shrink = Math.sqrt(input.repsRun / input.maxReps);
+  const resolvable = undecided.filter((v) => {
+    const half = ((v.diff.hi - v.diff.lo) / 2) * shrink;
+    return v.diff.mean - half >= -input.margin || v.diff.mean + half < 0;
+  }).map((v) => v.arm);
+  const extra = { undecidedArms: undecided.map((v) => v.arm), observedDisagreement, repsNeededForPass };
+  if (!resolvable.length) return stop("noise_cannot_resolve", extra);
+  const extraTrials = (input.maxReps - input.repsRun) * input.tasks * input.armsInNextPhase(resolvable);
+  const projectedCostUsd = extraTrials * input.costPerTrialUsd * 1.25;
+  if (projectedCostUsd > input.remainingUsd) return stop("over_budget", { ...extra, resolvableArms: resolvable, projectedCostUsd });
+  return { ...base, ...extra, decision: "go", reason: "go", resolvableArms: resolvable, projectedCostUsd };
+}
+
+export const REPORT_LABELS = [...ESCALATION_REASONS, ...SCOREBOARD_REASONS, "ship", "no-ship", "go", "stop", "neither"] as const;
 
 /** Throws unless every string in the report is a known label. Keys and numbers are checked for shape. */
 export function assertNumbersOnly(report: unknown, labels: Iterable<string>): void {
-  const allowed = new Set([...labels, "rook-probe-report", ...Object.keys(ARM_FLAGS), ...INVALID_REASONS, "none", "request_cap", "provider_failures", "invalid_rate",
+  const allowed = new Set([...labels, ...REPORT_LABELS, "rook-probe-report", ...Object.keys(ARM_FLAGS), ...INVALID_REASONS, "none", "request_cap", "provider_failures", "invalid_rate", "budget_cap",
     "kill", "inconclusive", "pass", "insufficient"]);
   const walk = (value: unknown, path: string): void => {
     if (value === null || typeof value === "boolean") return;
@@ -230,48 +378,90 @@ export function assertNumbersOnly(report: unknown, labels: Iterable<string>): vo
 }
 
 export async function runProbe(o: ProbeOptions): Promise<Report> {
-  const rng = seededRng(o.seed);
-  const schedule: Array<{ task: Task; arm: ArmId; rep: number }> = [];
-  for (let rep = 1; rep <= o.reps; rep += 1) {
-    for (const task of shuffle(o.tasks, rng)) for (const arm of shuffle(o.arms, rng)) schedule.push({ task, arm, rep });
-  }
+  const maxReps = Math.max(o.reps, o.maxReps ?? o.reps);
+  const decide = o.decide ?? decideEscalation;
+  const startSpend = o.meter.spentUsd();
   const trials: Trial[] = [];
   let requestsUsed = 0, infraStreak = 0, truncated: Truncation = "none";
-  for (const [index, item] of schedule.entries()) {
-    if (requestsUsed + ROOK_AGENT_MAX_ROUNDS > o.maxRequests) { truncated = "request_cap"; break; }
-    await o.session.refresh();
-    const trial = await runTrial(o, item.task, item.arm, item.rep);
-    trials.push(trial);
-    requestsUsed += trial.requests;
-    infraStreak = trial.invalid === "provider_error" || trial.invalid === "exception" ? infraStreak + 1 : 0;
-    o.log?.(`trial ${index + 1}/${schedule.length} arm=${item.arm} valid=${trial.valid} success=${trial.success} requests=${requestsUsed}/${o.maxRequests}`);
-    if (infraStreak >= 3) { truncated = "provider_failures"; break; }
-    if (trials.length >= 10 && trials.filter((t) => !t.valid).length / trials.length > o.maxInvalidRate) { truncated = "invalid_rate"; break; }
-    await o.sleep(o.minIntervalMs * (infraStreak ? 10 : 1));
+  let escalation: Escalation | null = null;
+  let arms: ArmId[] = [...o.arms];
+
+  const meta = (): ReportMeta => ({ model: o.model, seed: o.seed, reps: o.reps, maxReps, tasks: o.tasks.length, requestsUsed, truncated, margin: o.margin, minPairs: o.minPairs,
+    budget: { capUsd: o.meter.capUsd, ceilingUsd: o.meter.ceilingUsd, spentUsd: o.meter.spentUsd(), runSpentUsd: o.meter.spentUsd() - startSpend, estimatedCharges: o.meter.estimatedCharges() }, escalation });
+
+  const runReps = async (from: number, to: number): Promise<void> => {
+    for (let rep = from; rep <= to && truncated === "none"; rep += 1) {
+      // Each repetition is shuffled from its own seed, so a rep's order never depends on how many reps were planned.
+      const rng = seededRng(o.seed + rep * 7919);
+      const schedule = shuffle(o.tasks, rng).flatMap((task) => shuffle(arms, rng).map((arm) => ({ task, arm })));
+      for (const item of schedule) {
+        const valid = trials.filter((t) => t.valid);
+        const typical = valid.length ? mean(valid.map((t) => t.costUsd)) : 0;
+        if (requestsUsed + ROOK_AGENT_MAX_ROUNDS > o.maxRequests) { truncated = "request_cap"; return; }
+        if (o.meter.remainingUsd() < typical * 1.5) { truncated = "budget_cap"; return; }
+        await o.session.refresh();
+        const trial = await runTrial(o, item.task, item.arm, rep);
+        trials.push(trial);
+        requestsUsed += trial.requests;
+        const hitBudget = o.meter.tripped(); o.meter.clearTrip();
+        infraStreak = trial.invalid === "provider_error" || trial.invalid === "exception" ? infraStreak + 1 : 0;
+        o.log?.(`trial ${trials.length} rep=${rep} arm=${item.arm} valid=${trial.valid} success=${trial.success} spent=$${o.meter.spentUsd().toFixed(2)}/$${o.meter.capUsd}`);
+        if (hitBudget) { truncated = "budget_cap"; return; }
+        if (infraStreak >= 3) { truncated = "provider_failures"; return; }
+        if (trials.length >= 10 && trials.filter((t) => !t.valid).length / trials.length > o.maxInvalidRate) { truncated = "invalid_rate"; return; }
+        await o.sleep(o.minIntervalMs * (infraStreak ? 10 : 1));
+      }
+    }
+  };
+
+  await runReps(1, o.reps);
+  if (maxReps > o.reps) {
+    const interim = buildReport(trials, meta());
+    const valid = trials.filter((t) => t.valid);
+    escalation = decide({ enabled: true, truncated, repsRun: o.reps, maxReps, margin: o.margin, minPairs: o.minPairs, tasks: o.tasks.length,
+      noise: interim.noise?.success,
+      variants: interim.scoreboard.map((row) => ({ arm: row.arm, verdict: row.verdict, diff: row.successDiff, disagreement: disagreement(trials, row.arm, "baseline", exposedKeys(trials, row.arm)) })),
+      costPerTrialUsd: valid.length ? mean(valid.map((t) => t.costUsd)) : 0, armsInNextPhase: (resolvable) => resolvable.length + 2, remainingUsd: o.meter.remainingUsd() });
+    o.log?.(`escalation: ${escalation.decision} (${escalation.reason})`);
+    if (escalation.decision === "go") {
+      const next: ArmId[] = ["baseline", "baseline_repeat", ...escalation.resolvableArms];
+      arms = next.filter((arm) => o.arms.includes(arm));
+      await runReps(o.reps + 1, maxReps);
+    }
   }
-  return buildReport(trials, { model: o.model, seed: o.seed, reps: o.reps, tasks: o.tasks.length, requestsUsed, truncated, margin: o.margin, minPairs: o.minPairs });
+  return buildReport(trials, meta());
 }
 
 const pct = (value: number) => `${(value * 100).toFixed(0)}%`;
 const num = (value: number | null, digits = 1) => (value === null ? "n/a" : value.toFixed(digits));
 const signed = (interval: Interval | undefined, digits = 2) =>
   interval && interval.n ? `${interval.mean >= 0 ? "+" : ""}${interval.mean.toFixed(digits)} [${interval.lo.toFixed(digits)}, ${interval.hi.toFixed(digits)}] n=${interval.n}` : "n/a";
+const usd = (value: number) => `$${value.toFixed(4)}`;
 
-/** Human-readable table (numbers and arm names only) for the operator's terminal. */
+/** Human-readable scoreboard (numbers and fixed labels only) for the operator's terminal. */
 export function renderSummary(report: Report): string {
-  const lines = [`probe: ${report.tasks} tasks x ${report.reps} reps, ${report.requestsUsed} model requests, truncated=${report.truncated}`,
-    "arm              valid/trials  success (95% CI)      req  toolcalls  toolerr  in-tok  out-tok"];
-  for (const [arm, s] of Object.entries(report.arms) as Array<[ArmId, ArmSummary]>) {
-    lines.push(`${arm.padEnd(16)} ${`${s.valid}/${s.trials}`.padEnd(13)} ${`${pct(s.successRate)} (${pct(s.successLo)}-${pct(s.successHi)})`.padEnd(21)} ${num(s.meanRequests).padEnd(4)} ${num(s.meanToolCalls).padEnd(10)} ${num(s.meanToolErrors, 2).padEnd(8)} ${num(s.meanInputTokens, 0).padEnd(7)} ${num(s.meanOutputTokens, 0)}`);
+  const b = report.budget;
+  const lines = [`probe: ${report.tasks} tasks, reps ${report.reps}${report.maxReps > report.reps ? `..${report.maxReps}` : ""}, ${report.requestsUsed} model requests, truncated=${report.truncated}`,
+    `spend: $${b.runSpentUsd.toFixed(2)} this run, $${b.spentUsd.toFixed(2)} cumulative of $${b.capUsd} cap (stops at $${b.ceilingUsd.toFixed(2)}); ${b.estimatedCharges} charges estimated from missing usage`];
+  if (report.escalation) {
+    const e = report.escalation;
+    lines.push(`escalation: ${e.decision} (${e.reason}); disagreement ${pct(e.observedDisagreement)}, reps needed for a pass at that disagreement ${e.repsNeededForPass}, projected extra $${e.projectedCostUsd.toFixed(2)} vs remaining $${e.remainingUsd.toFixed(2)}`);
   }
-  lines.push(`noise (baseline_repeat - baseline) success: ${signed(report.noise?.success)}`);
-  for (const [arm, v] of Object.entries(report.variants) as Array<[ArmId, NonNullable<Report["variants"][ArmId]>]>) {
-    lines.push(`${arm}: verdict=${v.verdict} success ${signed(v.paired.success)} requests ${signed(v.paired.requests)} toolerr ${signed(v.paired.toolErrors)} in-tok ${signed(v.paired.inputTokens, 0)}`);
+  lines.push("", "arm              valid/trials  success (95% CI)      req  toolerr  in-tok  out-tok  $/task");
+  for (const [arm, s] of Object.entries(report.arms) as Array<[ArmId, ArmSummary]>) {
+    lines.push(`${arm.padEnd(16)} ${`${s.valid}/${s.trials}`.padEnd(13)} ${`${pct(s.successRate)} (${pct(s.successLo)}-${pct(s.successHi)})`.padEnd(21)} ${num(s.meanRequests).padEnd(4)} ${num(s.meanToolErrors, 2).padEnd(8)} ${num(s.meanInputTokens, 0).padEnd(7)} ${num(s.meanOutputTokens, 0).padEnd(8)} ${usd(s.meanCostUsd)}`);
+  }
+  lines.push(`noise (baseline_repeat - baseline) success: ${signed(report.noise?.success)}`, "", "SCOREBOARD (matched pairs; ship only with measured success parity and a demonstrated saving)");
+  for (const row of report.scoreboard) {
+    lines.push(`${row.arm}: ${row.decision.toUpperCase()}${row.reasons.length ? ` [${row.reasons.join(", ")}]` : ""}`,
+      `  exposed pairs ${row.exposedPairs} of ${row.pairs}; success ${pct(row.matchedSuccessBaseline)} -> ${pct(row.matchedSuccessVariant)} diff ${signed(row.successDiff)} verdict=${row.verdict} (suite-wide diff ${signed(row.suiteSuccessDiff)})`,
+      `  cost/task ${usd(row.costPerTaskBaseline)} -> ${usd(row.costPerTaskVariant)} (${row.costSavingPct >= 0 ? "-" : "+"}${pct(Math.abs(row.costSavingPct))}) diff ${signed(row.costDiff, 5)}; suite-wide saving ${pct(row.suiteCostSavingPct)}`,
+      `  input tokens saving ${row.inputTokenSavingPct === null ? "n/a" : pct(row.inputTokenSavingPct)}; requests ${signed(row.requestsDiff)}; tool errors ${signed(row.toolErrorsDiff)}; output tokens ${signed(row.outputTokensDiff, 0)}`);
   }
   return lines.join("\n");
 }
 
-export type EnvOptions = { model: string; arms: ArmId[]; reps: number; seed: number; maxRequests: number; minIntervalMs: number; taskIds: string[] | null; out: string | null };
+export type EnvOptions = { model: string; arms: ArmId[]; reps: number; maxReps: number; seed: number; maxRequests: number; minIntervalMs: number; taskIds: string[] | null; out: string | null; ledger: string | null };
 
 /** Validated ROOK_EVAL_* settings. Throws with the variable name, never a value. */
 export function parseEnvOptions(env: Record<string, string | undefined>): EnvOptions {
@@ -286,11 +476,19 @@ export function parseEnvOptions(env: Record<string, string | undefined>): EnvOpt
     const raw = env[name]?.trim();
     return raw ? raw.split(",").map((part) => part.trim()).filter(Boolean) : null;
   };
+  const path = (name: string): string | null => {
+    const raw = env[name]?.trim() || null;
+    if (raw && !/^[A-Za-z0-9_./\\:-]{1,200}\.json$/.test(raw)) throw new Error(`${name} must be a simple .json path.`);
+    return raw;
+  };
   const armNames = list("ROOK_EVAL_ARMS");
   const arms = (armNames ?? DEFAULT_ARMS) as ArmId[];
   for (const arm of arms) if (!(arm in ARM_FLAGS)) throw new Error("ROOK_EVAL_ARMS contains an unknown arm.");
-  const out = env.ROOK_EVAL_OUT?.trim() || null;
-  if (out && !/^[A-Za-z0-9_./\\:-]{1,200}\.json$/.test(out)) throw new Error("ROOK_EVAL_OUT must be a simple .json path.");
-  return { model: env.ROOK_EVAL_MODEL?.trim() ?? "", arms, reps: int("ROOK_EVAL_REPS", 3, 1, 20), seed: int("ROOK_EVAL_SEED", 20260930, 0, 2 ** 31),
-    maxRequests: int("ROOK_EVAL_MAX_REQUESTS", 900, 6, 5000), minIntervalMs: int("ROOK_EVAL_MIN_INTERVAL_MS", 1500, 0, 60_000), taskIds: list("ROOK_EVAL_TASKS"), out };
+  const escalate = (env.ROOK_EVAL_ESCALATE?.trim() || "auto").toLowerCase();
+  if (escalate !== "auto" && escalate !== "off") throw new Error("ROOK_EVAL_ESCALATE must be auto or off.");
+  const reps = int("ROOK_EVAL_REPS", 5, 1, 20);
+  const maxReps = escalate === "off" ? reps : int("ROOK_EVAL_MAX_REPS", 10, reps, 20);
+  return { model: env.ROOK_EVAL_MODEL?.trim() ?? "", arms, reps, maxReps, seed: int("ROOK_EVAL_SEED", 20260930, 0, 2 ** 31),
+    maxRequests: int("ROOK_EVAL_MAX_REQUESTS", 3000, 6, 20_000), minIntervalMs: int("ROOK_EVAL_MIN_INTERVAL_MS", 1500, 0, 60_000),
+    taskIds: list("ROOK_EVAL_TASKS"), out: path("ROOK_EVAL_OUT"), ledger: path("ROOK_EVAL_LEDGER") };
 }

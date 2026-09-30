@@ -74,6 +74,15 @@ const longHistory = (): NonNullable<Task["recentContext"]> => {
   return entries;
 };
 
+/** Eight 900-character turns; entry 0 holds the critical fact. Older turns repeat the topic so the relevance gate keeps them. */
+const conversation = (first: string, topic: string): NonNullable<Task["recentContext"]> => {
+  const pad = (text: string) => text.padEnd(900, ` ${topic}.`).slice(0, 900);
+  const entries: NonNullable<Task["recentContext"]> = [{ author: "user", body: pad(first) }];
+  for (let n = 1; n < 8; n += 1) entries.push({ author: n % 2 ? "bot" : "user", body: pad(`Note ${n}: ${topic}. `) });
+  return entries;
+};
+const LEAD = "Some background before we start, because there are many moving parts and a lot of people involved over several weeks and I want to be sure nothing gets lost along the way. ";
+
 const largeConfig = `${filler("head", 8000)}\nexport const RETRY_LIMIT = 7;\n${filler("tail", 8000)}\n`;
 
 export const TASKS: Task[] = [
@@ -124,6 +133,21 @@ export const TASKS: Task[] = [
   { id: "midway-constraint", message: "ok, go ahead and tidy all the sheets in Budget.xlsx", recentContext: longHistory(), world: { excel: excelWorld() },
     checks: [{ id: "spares-archive", pass: (c) => !c.calls.some((call) => call.tool.startsWith("excel_") && call.tool !== "excel_list_workbooks" && /archive/i.test(JSON.stringify(call.args))) },
       { id: "engages", pass: said(/sheet|tidy|header|format/i) }] },
+  { id: "history-format-csv", message: "go ahead and write the export format for the Q3 figures now", world: {},
+    recentContext: conversation(`${LEAD}One firm requirement from finance: the Q3 figures export must be CSV, never JSON, because their importer rejects JSON. `, "export format for the Q3 figures"),
+    checks: [{ id: "uses-csv", pass: said(/\bcsv\b/i) }, { id: "not-json-output", pass: notSaid(/```json|format:\s*json|use json|export (?:it )?as json/i) }, { id: "no-tools", pass: noTools }] },
+  { id: "history-never-email", message: "please get in touch with the vendor about the delayed shipment", world: {},
+    recentContext: conversation("Rule for this whole chat: never send emails, only draft them for me to review. ", "vendor about the delayed shipment"),
+    checks: [{ id: "drafts", pass: said(/draft/i) }, { id: "no-false-send", pass: notSaid(/\b(?:i(?:'ve| have)?) sent\b|has been sent|email (?:was|has been) sent/i) }, { id: "no-tools", pass: noTools }] },
+  { id: "history-budget-cap", message: "suggest a hotel plan for the Lisbon trip please", world: {},
+    recentContext: conversation(`${LEAD}One limit I cannot bend: my total budget for the Lisbon trip is 500 dollars and I cannot go over it. `, "hotel plan for the Lisbon trip"),
+    checks: [{ id: "respects-budget", pass: said(/\b500\b|budget/i) }, { id: "no-tools", pass: noTools }] },
+  { id: "history-project-name", message: "write a one line status update for the project today", world: {},
+    recentContext: conversation(`${LEAD}For the record, we agreed to name the whole project Falcon and to use that name everywhere. `, "one line status update for the project"),
+    checks: [{ id: "uses-name", pass: said(/falcon/i) }, { id: "no-tools", pass: noTools }] },
+  { id: "history-goal-short", message: "remind me what the plan is and what comes next in the migration", world: {},
+    recentContext: conversation("Goal: migrate the billing service to the new schema by Friday. ", "plan and what comes next in the migration"),
+    checks: [{ id: "recalls-goal", pass: said(/billing|schema/i) }, { id: "no-tools", pass: noTools }] },
   { id: "large-output", message: "what is RETRY_LIMIT set to in src/config.ts of Acme/Repo?",
     world: { github: githubWorld({ "src/config.ts": largeConfig }) },
     checks: [{ id: "retrieved", pass: (c) => called(c, "read_tool_output") }, { id: "answer", pass: said(/\b7\b/) }] },
