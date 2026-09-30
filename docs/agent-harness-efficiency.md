@@ -160,5 +160,5 @@ The app sends a `turnId` on every turn, so replay storage sits on the chat path.
 
 ## Decision probe runner (follow-up chunk 5)
 
-The matched quality/cost comparison is implemented as an operator-run probe over `chatgpt:` models through the existing authenticated session path, returning numbers only. Protocol, requirements, decision rule and statistical limits (notably that a `pass` verdict needs about 8 to 16 repetitions) are in [eval-probe.md](eval-probe.md). No real numbers exist yet: the runner is verified offline with a scripted model only.
+The matched quality/cost comparison is implemented as an operator-run probe over `chatgpt:` models through the existing authenticated session path, returning numbers only. It enforces a $25 cap per model request (operator-supplied rates, persistent ledger), starts at 5 repetitions and escalates to 10 only when a computed projection shows more data would be decisive, judges each variant on the pairs it actually changed, and prints a ship/no-ship scoreboard. Protocol, requirements, decision rule and statistical limits (notably that plan compaction can only `pass` with near-zero disagreement on its 30 to 60 exposed pairs) are in [eval-probe.md](eval-probe.md). No real numbers exist yet: the runner is verified offline with a scripted model only.
 
