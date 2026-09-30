@@ -30,8 +30,12 @@ export type TurnRecord = {
   computerProposals: number;
   webSearched: boolean;
   codeTask: boolean;
+  /** Enabled experimental variants (names only) for eval attribution. */
+  variants?: string[];
   continuations?: number;
   error?: string;
+  /** Set when the turn ended on a deliberate loop stop (e.g. DOOM_LOOP), not a provider failure. */
+  errorCode?: string;
   /** Opaque process-local HMAC; never the user, Bot or task id. */
   taskKey?: string;
   modelRequests?: ModelRequestRecord[];

@@ -14,9 +14,11 @@ import { outcomeFromError, outcomeFromPayload, skippedOutcome, type ToolOutcomeR
 import { ForegroundOutcomeUnknown } from "../ai/foreground-replay";
 import { accountingTaskKey, setAccountingSections, withRequestAccounting } from "../ai/request-accounting";
 import { retainedOutputResource } from "./retained-output-scope";
-import { formatToolOutput, OUTPUT_TOOLS, serializeToolOutput, ToolOutputError } from "../ai/tool-output";
+import { formatToolOutput, OUTPUT_TOOLS, redactOutputText, serializeToolOutput, ToolOutputError, toolOutputStore } from "../ai/tool-output";
 import { getComputerPromptState } from "../ai/computer-context";
 import { buildRookSystemPromptParts } from "../ai/system-prompt";
+import { activeVariantNames, resolveVariants } from "../ai/variants";
+import { offloadTools, ToolActivation } from "../ai/tool-offload";
 import {
   buildMemoryBlock,
   extractMemoryCandidates,
@@ -46,7 +48,7 @@ import {
   toolCallFingerprint,
   type ReasoningEffort,
 } from "../ai/agent-reliability";
-import { buildCheckpointLedger } from "../ai/compaction";
+import { buildCheckpointLedger, buildPlanLedger, PLAN_HISTORY_BUDGET_TOKENS } from "../ai/compaction";
 import { resolveRequestedModel } from "../ai/turn-context";
 import { githubConnectionStatus, isGithubConfigured } from "./github";
 import { GITHUB_TOOLS } from "./github-tools";
@@ -148,6 +150,8 @@ export type RookAgentInput = {
   durableTurn?: import("../background/runtime").DurableTurn;
   /** Server-owned foreground crash-replay log, opened from a client `turnId`. */
   foregroundReplay?: import("../ai/foreground-replay").ForegroundReplay;
+  /** Server-owned experiment override; chat routes strip unknown fields. Defaults come from ROOK_VARIANT_* env. */
+  variants?: Partial<import("../ai/variants").VariantFlags>;
   userId: string;
   request?: Request;
   botId: string;
@@ -181,6 +185,8 @@ export type PreparedAgentTurn = {
   github: GithubStatus;
   computer: { paired: boolean; online: boolean; block: string };
   tools: Tool[] | undefined;
+  /** Tools withheld from `tools` by the offload variant; empty otherwise. */
+  offloaded: Tool[];
   messages: Message[];
   trace: AgentTraceStep[];
   publicSearchQuery: string;
@@ -188,6 +194,7 @@ export type PreparedAgentTurn = {
   outputBudget: number;
   codeTask: boolean;
   reasoning: { effort: "low" | "high" } | undefined;
+  variants: import("../ai/variants").VariantFlags;
 };
 
 /**
@@ -277,7 +284,9 @@ export async function prepareAgentTurn(
     outputs: OUTPUT_TOOLS,
   });
   const permittedTools = toolset.filter((tool) => !input.disallowedTools?.includes(tool.function.name));
-  const tools = permittedTools.length ? permittedTools : undefined;
+  const permitted = permittedTools.length ? permittedTools : undefined;
+  const variants = resolveVariants(input.variants);
+  const { tools, offloaded } = variants.toolOffload ? offloadTools(permitted) : { tools: permitted, offloaded: [] as Tool[] };
   const excelSelected = input.connectors?.includes("microsoft-excel") === true;
   const githubSelected = input.connectors?.includes("github") === true;
   const connectionNote = connection.connected
@@ -357,9 +366,19 @@ export async function prepareAgentTurn(
   // turns are condensed into a checkpoint ledger (never silently lost).
   const { kept: fittedHistory, dropped: droppedHistory } = partitionRecentContext(
     freshContext,
-    6000,
+    variants.compactPlan ? PLAN_HISTORY_BUDGET_TOKENS : 6000,
   );
-  const ledgerBlock = buildCheckpointLedger(droppedHistory);
+  let ledgerBlock: string;
+  if (variants.compactPlan) {
+    let reference: string | undefined;
+    if (droppedHistory.length && !input.disallowedTools?.includes("read_tool_output")) {
+      try {
+        const transcript = redactOutputText(droppedHistory.map((entry) => `[${entry.author}] ${entry.body}`).join("\n\n"));
+        reference = (await toolOutputStore.put({ userId: input.userId, botId: input.botId }, transcript, { tool: "conversation_transcript" })).reference;
+      } catch { /* No pointer; the ledger still stands on its own. */ }
+    }
+    ledgerBlock = buildPlanLedger(droppedHistory, reference);
+  } else ledgerBlock = buildCheckpointLedger(droppedHistory);
 
   const memoryBlock = buildMemoryBlock(input.botMemory);
   const suggestedMemories: MemoryCandidate[] = extractMemoryCandidates(input.message);
@@ -390,7 +409,7 @@ export async function prepareAgentTurn(
       web: "Public web search runs automatically when the question needs fresh external facts (news, prices, versions, docs). Results arrive as snippets with source titles — never claim you opened a page unless a tool confirms it.",
     },
     extraContext,
-  });
+  }, { lean: variants.leanPrompt });
 
   const messages: Message[] = [
     { role: "system", content: prompt.stable },
@@ -427,6 +446,7 @@ export async function prepareAgentTurn(
     github,
     computer,
     tools,
+    offloaded,
     messages,
     trace,
     publicSearchQuery,
@@ -434,6 +454,7 @@ export async function prepareAgentTurn(
     outputBudget,
     codeTask,
     reasoning,
+    variants,
   };
 }
 
@@ -458,6 +479,7 @@ async function runAccountedAgent(input: RookAgentInput) {
     github,
     computer,
     tools,
+    offloaded,
     messages,
     trace,
     publicSearchQuery,
@@ -465,6 +487,7 @@ async function runAccountedAgent(input: RookAgentInput) {
     outputBudget,
     codeTask,
     reasoning,
+    variants,
   } = await prepareAgentTurn(input, requestId);
 
   const approvals: ExcelAgentApproval[] = [];
@@ -482,7 +505,7 @@ async function runAccountedAgent(input: RookAgentInput) {
   let continuationsUsed = 0;
   let continuedText = "";
 
-  const emitTelemetry = (extra?: { error?: string }) => {
+  const emitTelemetry = (extra?: { error?: string; code?: string }) => {
     recordTurn({
       requestId,
       at: new Date().toISOString(),
@@ -498,7 +521,9 @@ async function runAccountedAgent(input: RookAgentInput) {
       continuations: continuationsUsed,
       webSearched: Boolean(publicSearchQuery),
       codeTask,
+      variants: activeVariantNames(variants),
       ...(extra?.error ? { error: extra.error } : {}),
+      ...(extra?.code ? { errorCode: extra.code } : {}),
     });
   };
 
@@ -509,6 +534,8 @@ async function runAccountedAgent(input: RookAgentInput) {
     continuationsUsed = saved.continuation?.used ?? 0;
     toolPayloadChars = saved.toolPayloadChars ?? 0;
   }
+  const activation = offloaded.length ? new ToolActivation(tools ?? [], offloaded, messages) : undefined;
+  let liveTools = activation ? activation.current() : tools;
   for (let round = saved?.round ?? 0; round < ROOK_AGENT_MAX_ROUNDS; round += 1) {
     await input.durableTurn?.guard();
     let response: InvokeResult | undefined;
@@ -526,8 +553,8 @@ async function runAccountedAgent(input: RookAgentInput) {
         {
           model: requestedModel,
           messages,
-          tools,
-          toolChoice: tools ? (toolPayloadChars >= ROOK_TURN_TOOL_BUDGET_CHARS ? "none" : "auto") : undefined,
+          tools: liveTools,
+          toolChoice: liveTools ? (toolPayloadChars >= ROOK_TURN_TOOL_BUDGET_CHARS ? "none" : "auto") : undefined,
           maxTokens: effectiveBudget,
           ...(reasoning ? { reasoning } : {}),
         },
@@ -739,12 +766,14 @@ async function runAccountedAgent(input: RookAgentInput) {
           computerOnline: computer.online,
           approvals,
           computerProposals,
+          offloadedTools: offloaded.map((tool) => tool.function.name),
         };
         const executed = input.durableTurn
           ? await input.durableTurn.execute(toolInput, () => executeAgentTool(toolInput))
           : input.foregroundReplay
             ? await input.foregroundReplay.execute(toolInput, () => executeAgentTool(toolInput))
             : await executeAgentTool(toolInput);
+        if (activation) { activation.observe(name, call.function.arguments); liveTools = activation.current(); }
         trace.push(executed.traceStep);
         const terminal = terminalToolError(executed.resultPayload);
         if (terminal) { record(outcomeFromPayload(name, executed.resultPayload)); return friendlyTurnEnd(terminal); }
@@ -818,7 +847,7 @@ async function runAccountedAgent(input: RookAgentInput) {
     if (input.durableTurn) throw error;
     const errorMessage =
       error instanceof Error ? error.message.slice(0, 300) : "unknown";
-    emitTelemetry({ error: errorMessage });
+    emitTelemetry({ error: errorMessage, code: error instanceof AgentLoopStop ? error.code : undefined });
     return {
       text: friendlyAgentError(error),
       model: resolvedModel,

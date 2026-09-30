@@ -62,6 +62,7 @@ import {
 import { makeExcelActionId } from "./microsoft-excel";
 import { checkToolPolicy, loadToolPolicyFromEnv, sniffPolicyHints } from "./tool-policy";
 import { runPreToolUse } from "../ai/hooks";
+import { DISCOVERY_TOOLS, LOAD_TOOLS_NAME, loadToolsResult } from "../ai/tool-offload";
 import { retainedOutputAuthorizer } from "./retained-output-scope";
 import { OUTPUT_TOOLS, readToolOutputArgs, toolOutputStore, ToolOutputError } from "../ai/tool-output";
 
@@ -95,6 +96,7 @@ export const TOOL_RISK = {
   computer_write_file: "approval-gated",
   read_skill: "read-only",
   read_tool_output: "read-only",
+  load_tools: "read-only",
 } as const satisfies Record<string, "read-only" | "approval-gated">;
 
 export type ToolRisk = (typeof TOOL_RISK)[keyof typeof TOOL_RISK];
@@ -120,7 +122,7 @@ const FAMILY_TIMEOUT_MS: Record<ToolFamily, number> = {
 };
 
 const familyOfTool = (name: string): ToolFamily => {
-  if (name === "read_tool_output") return "output";
+  if (name === "read_tool_output" || name === LOAD_TOOLS_NAME) return "output";
   if (EXCEL_TOOL_SET.has(name)) return "excel";
   if (GITHUB_TOOL_NAMES.has(name)) return "github";
   if (COMPUTER_TOOL_NAMES.has(name)) return "computer";
@@ -196,6 +198,7 @@ export function allOfferedToolNames(): string[] {
     ...CLOUD_TOOLS.map((tool) => tool.function.name),
     ...SKILL_TOOLS.map((tool) => tool.function.name),
     ...OUTPUT_TOOLS.map((tool) => tool.function.name),
+    ...DISCOVERY_TOOLS.map((tool) => tool.function.name),
   ];
 }
 
@@ -298,6 +301,8 @@ export async function executeAgentTool(input: {
   computerOnline: boolean;
   approvals: ExcelAgentApproval[];
   computerProposals: ComputerProposal[];
+  /** Tools the offload variant withheld this turn; `load_tools` may serve only these. */
+  offloadedTools?: readonly string[];
   /** Detached runs persist the validated proposal with their fenced attempt. */
   prepareBackgroundApproval?: (name: string, args: Record<string, unknown>, summary: string) => AgentToolExecution;
 }): Promise<AgentToolExecution> {
@@ -363,6 +368,10 @@ export async function executeAgentTool(input: {
         code: error instanceof ToolOutputError ? error.code : "INVALID_ARGUMENTS",
         message: error instanceof ToolOutputError ? error.message : "Use a valid retained-output reference and character range." } };
     }
+  }
+
+  if (name === LOAD_TOOLS_NAME) {
+    return { traceStep: step("Loaded tool definitions"), resultPayload: loadToolsResult(input.offloadedTools ?? [], rawArgs) };
   }
 
   if (GITHUB_TOOL_NAMES.has(name)) {
