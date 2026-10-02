@@ -15,7 +15,7 @@ import {
 import { Avatar, Button, Spinner } from "@/components/primitives";
 import { Markdown } from "@/components/markdown";
 import { BtwPanel, type BtwPanelHandle } from "@/components/btw-panel";
-import { parseBtwCommand } from "../../../../shared/btw";
+import { btwTrigger, parseBtwCommand } from "../../../../shared/btw";
 import { useSafeAuth } from "@/lib/safe-auth";
 import { useTheme } from "@/lib/theme";
 import { useWorkroom, type Message, type Bot } from "@/lib/workroom";
@@ -176,7 +176,13 @@ export function WorkroomPage() {
               context: messages.filter((m) => m.botId === activeBot?.id).slice(-6).map(({ author, body }) => ({ author, body })) }} />
           <Composer
             value={composer}
-            onChange={setComposer}
+            onChange={(text) => {
+              const seed = btwTrigger(text);
+              if (seed !== null) {
+                btwRef.current?.open(seed, false);
+                setComposer("");
+              } else setComposer(text);
+            }}
             onSubmit={submit}
             onAttach={onAttach}
             onBtw={() => btwRef.current?.open()}

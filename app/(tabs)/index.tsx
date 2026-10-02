@@ -31,7 +31,7 @@ import {
 import { BotCreateSheet } from "@/components/bot-create-sheet";
 import { BackgroundStatusStrip } from "@/components/background-jobs";
 import { BtwPanel, type BtwPanelHandle } from "@/components/btw-panel";
-import { parseBtwCommand } from "@/shared/btw";
+import { btwTrigger, parseBtwCommand } from "@/shared/btw";
 import { AgentActivityTrace } from "@/components/agent-activity-trace";
 import { AiWorkingIndicator } from "@/components/ai-working-indicator";
 import { ComposerConnectorsSheet } from "@/components/composer-connectors-sheet";
@@ -405,6 +405,16 @@ export default function ChatScreen() {
     if (streamingDraft && streamingDraft.text.length > 0)
       threadRef.current?.scrollToEnd({ animated: false });
   }, [streamingDraft]);
+
+  const onComposerChange = (text: string) => {
+    const seed = activeBot ? btwTrigger(text) : null;
+    if (seed !== null) {
+      btwRef.current?.open(seed, false);
+      setComposer("");
+      return;
+    }
+    setComposer(text);
+  };
 
   const handleSend = async () => {
     const sideQuestion = parseBtwCommand(composer);
@@ -1887,7 +1897,7 @@ export default function ChatScreen() {
                   nativeID="rook-composer-input"
                   ref={composerRef}
                   value={composer}
-                  onChangeText={setComposer}
+                  onChangeText={onComposerChange}
                   onFocus={() => setComposerFocused(true)}
                   onBlur={() => setComposerFocused(false)}
                   {...composerPasteProps(addPendingImages)}
