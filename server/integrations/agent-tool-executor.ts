@@ -60,6 +60,8 @@ import {
   type SkillToolName,
 } from "../ai/skills";
 import { makeExcelActionId } from "./microsoft-excel";
+import { resolveGate, type GateDecision, type PermissionContext } from "./permission-gate";
+import { approveAndRunCommand, resolveExcelPendingAction } from "./approval-resolve";
 import { checkToolPolicy, loadToolPolicyFromEnv, sniffPolicyHints } from "./tool-policy";
 import { runPreToolUse } from "../ai/hooks";
 import { DISCOVERY_TOOLS, LOAD_TOOLS_NAME, loadToolsResult } from "../ai/tool-offload";
@@ -284,6 +286,8 @@ async function withToolTimeout<T>(promise: Promise<T>, ms: number, label: string
 export type AgentToolExecution = {
   traceStep: AgentTraceStep;
   resultPayload: unknown;
+  /** Why a gated tool ran or asked; surfaced in the activity trail. */
+  permission?: GateDecision;
 };
 
 const step = (title: string, detail?: string): AgentTraceStep =>
@@ -303,6 +307,8 @@ export async function executeAgentTool(input: {
   computerProposals: ComputerProposal[];
   /** Tools the offload variant withheld this turn; `load_tools` may serve only these. */
   offloadedTools?: readonly string[];
+  /** Server-owned view of the user's permission level. Absent means Always ask. */
+  permission?: PermissionContext;
   /** Detached runs persist the validated proposal with their fenced attempt. */
   prepareBackgroundApproval?: (name: string, args: Record<string, unknown>, summary: string) => AgentToolExecution;
 }): Promise<AgentToolExecution> {
@@ -321,7 +327,11 @@ export async function executeAgentTool(input: {
   const verdict = checkToolPolicy(sniffPolicyHints(rawArgs), loadToolPolicyFromEnv());
   if (!verdict.allowed) {
     return {
-      traceStep: { kind: "tool", title: "Blocked by policy" },
+      traceStep: {
+        kind: "tool",
+        title: "Blocked by policy",
+        detail: "The static deny policy applies at every permission level.",
+      },
       resultPayload: {
         status: "denied",
         code: verdict.code,
@@ -430,8 +440,10 @@ export async function executeAgentTool(input: {
       ...(proposalArgs.detail ? { detail: proposalArgs.detail } : {}),
     };
     input.computerProposals.push(proposal);
+    const gate = await resolveGate(input.permission, computerTool, proposalArgs as Record<string, unknown>);
     return {
       traceStep: step(computerToolTraceTitle(computerTool), proposal.title),
+      permission: gate,
       resultPayload: {
         status: "approval_required",
         proposal_id: proposal.proposalId,
@@ -461,7 +473,9 @@ export async function executeAgentTool(input: {
       }
       const summary = excelWriteSummary(excelTool, args);
       if (input.prepareBackgroundApproval) return input.prepareBackgroundApproval(name, args, summary);
-      const actionId = makeExcelActionId();      await db.createExcelPendingAction({
+      const gate = await resolveGate(input.permission, excelTool, args as unknown as Record<string, unknown>);
+      const actionId = makeExcelActionId();
+      await db.createExcelPendingAction({
         id: actionId,
         userId,
         botClientId: botId,
@@ -472,6 +486,27 @@ export async function executeAgentTool(input: {
         state: "pending",
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
       });
+      if (gate.decision === "run") {
+        try {
+          const outcome = await resolveExcelPendingAction(userId, actionId, "approve");
+          return {
+            traceStep: step("Applied an Excel update", summary),
+            permission: gate,
+            resultPayload: { status: "completed", auto_approved: true, summary, result: outcome.result },
+          };
+        } catch (error) {
+          return {
+            traceStep: step("Excel update failed", summary),
+            permission: gate,
+            resultPayload: {
+              status: "error",
+              code: "FAILED",
+              retryable: false,
+              message: error instanceof Error ? error.message : "The Excel update failed.",
+            },
+          };
+        }
+      }
       input.approvals.push({
         actionId,
         title: "Approve Excel change",
@@ -480,6 +515,7 @@ export async function executeAgentTool(input: {
       });
       return {
         traceStep: step("Prepared an Excel update for approval", summary),
+        permission: gate,
         resultPayload: {
           status: "approval_required",
           action_id: actionId,
@@ -527,6 +563,36 @@ export async function executeAgentTool(input: {
         name: cloudTool as "computer_run_command" | "computer_write_file",
         args: args as { command?: string; cwd?: string; path?: string; content?: string },
       });
+      const gate = await resolveGate(input.permission, cloudTool, argRecord);
+      if (gate.decision === "run") {
+        try {
+          const outcome = await approveAndRunCommand(userId, proposal.commandId);
+          return {
+            traceStep: step(cloudTraceTitle(cloudTool, argRecord), proposal.summary),
+            permission: gate,
+            resultPayload: outcome.dispatched
+              ? {
+                  status: "approved",
+                  auto_approved: true,
+                  command_id: proposal.commandId,
+                  summary: proposal.summary,
+                  note: "Released to the user's computer; the result is reported there, not here.",
+                }
+              : { status: "completed", auto_approved: true, summary: proposal.summary, result: outcome.result },
+          };
+        } catch (error) {
+          return {
+            traceStep: step(cloudTraceTitle(cloudTool, argRecord), proposal.summary),
+            permission: gate,
+            resultPayload: {
+              status: "error",
+              code: "FAILED",
+              retryable: false,
+              message: error instanceof Error ? error.message : "The computer command failed.",
+            },
+          };
+        }
+      }
       input.computerProposals.push({
         proposalId: proposal.commandId,
         title: proposal.summary,
@@ -537,6 +603,7 @@ export async function executeAgentTool(input: {
       });
       return {
         traceStep: step(cloudTraceTitle(cloudTool, argRecord), proposal.summary),
+        permission: gate,
         resultPayload: {
           status: "approval_required",
           command_id: proposal.commandId,

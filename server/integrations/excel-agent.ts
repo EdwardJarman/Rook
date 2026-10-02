@@ -60,6 +60,7 @@ import {
 import { CLOUD_TOOLS } from "./cloud-tools";
 import { isCloudComputerConfigured } from "./cloud-computer";
 import { executeAgentTool, orderToolset } from "./agent-tool-executor";
+import { permissionContextForTurn, permissionTraceStep, type PermissionContext } from "./permission-gate";
 import {
   isMicrosoftExcelConfigured,
   makeExcelActionId,
@@ -154,6 +155,8 @@ export type RookAgentInput = {
   variants?: Partial<import("../ai/variants").VariantFlags>;
   userId: string;
   request?: Request;
+  /** Server-owned permission view; defaults to the user's stored level, never chat-supplied. */
+  permission?: PermissionContext;
   botId: string;
   taskId: string;
   botName: string;
@@ -491,6 +494,7 @@ async function runAccountedAgent(input: RookAgentInput) {
   } = await prepareAgentTurn(input, requestId);
 
   const approvals: ExcelAgentApproval[] = [];
+  const permission = input.permission ?? permissionContextForTurn(input);
   const usedTools: string[] = [];
   const toolOutcomes: ToolOutcomeRecord[] = [];
   const computerProposals: ComputerProposal[] = [];
@@ -767,6 +771,7 @@ async function runAccountedAgent(input: RookAgentInput) {
           approvals,
           computerProposals,
           offloadedTools: offloaded.map((tool) => tool.function.name),
+          permission,
         };
         const executed = input.durableTurn
           ? await input.durableTurn.execute(toolInput, () => executeAgentTool(toolInput))
@@ -775,6 +780,7 @@ async function runAccountedAgent(input: RookAgentInput) {
             : await executeAgentTool(toolInput);
         if (activation) { activation.observe(name, call.function.arguments); liveTools = activation.current(); }
         trace.push(executed.traceStep);
+        if (executed.permission) trace.push(permissionTraceStep(executed.permission));
         const terminal = terminalToolError(executed.resultPayload);
         if (terminal) { record(outcomeFromPayload(name, executed.resultPayload)); return friendlyTurnEnd(terminal); }
         rendered = await formatToolOutput({ ...input, name, value: executed.resultPayload,

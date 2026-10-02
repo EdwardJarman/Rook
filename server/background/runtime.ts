@@ -5,6 +5,8 @@ import type {
   executeAgentTool,
 } from "../integrations/agent-tool-executor";
 import { TOOL_REGISTRY } from "../integrations/agent-tool-executor";
+import { decideGate } from "../integrations/permission-gate";
+import { minPermissionLevel, parsePermissionLevel, type PermissionLevel } from "../../shared/permission-level";
 import {
   ACTIVE_CAP,
   APPROVAL_TTL,
@@ -49,12 +51,16 @@ export type RuntimeDeps = {
     guard: () => Promise<void>,
   ): Promise<AgentToolExecution>;
   notify(job: Job): Promise<boolean>;
+  /** Owner's current level, read fresh at every gate. Absent means Always ask. */
+  userLevel?(owner: string): Promise<PermissionLevel>;
 };
 export type ScheduleInput = {
   bot: Job["bot"];
   prompt: string;
   at?: number;
   intervalMs?: number;
+  /** Level captured at schedule time by the server from the owner's setting; never chat-supplied. */
+  permissionLevel?: PermissionLevel;
 };
 
 export class BackgroundRuntime {
@@ -76,6 +82,13 @@ export class BackgroundRuntime {
       "Another runtime updated this job. Retry shortly.",
       true,
     );
+  }
+  private async currentLevel(owner: string): Promise<PermissionLevel> {
+    try {
+      return parsePermissionLevel(await this.deps.userLevel?.(owner));
+    } catch {
+      return "always_ask";
+    }
   }
   private find(jobs: Job[], id: string) {
     const job = jobs.find((j) => j.id === id);
@@ -120,6 +133,7 @@ export class BackgroundRuntime {
         id,
         owner,
         bot: input.bot,
+        permissionLevel: parsePermissionLevel(input.permissionLevel),
         prompt: input.prompt.trim(),
         intervalMs: input.intervalMs,
         state: "queued",
@@ -359,7 +373,7 @@ export class BackgroundRuntime {
             "OUTCOME_UNKNOWN",
             "The server stopped during a tool step. Its outcome needs review; it was not repeated.",
           );
-        if (entry?.phase === "approval") {
+        const consume = async (entry: ToolOutcome): Promise<AgentToolExecution> => {
           if (
             !entry.approval?.grantUntil ||
             entry.approval.grantUntil <= this.deps.now()
@@ -399,7 +413,8 @@ export class BackgroundRuntime {
             );
           });
           return output;
-        }
+        };
+        if (entry?.phase === "approval") return consume(entry);
         assertNoSecrets(input.rawArgs);
         await write((j, now) => {
           if (j.attempt.tools.length >= 80)
@@ -427,6 +442,45 @@ export class BackgroundRuntime {
           proposal_id?: string;
         };
         if (payload?.status === "approval_required") {
+          const action = (output.resultPayload as { background_action?: { name: string; args: Record<string, unknown> } }).background_action;
+          if (action) {
+            // Re-checked on every tool call: the stricter of the level captured at
+            // schedule time and the owner's current level. Never elevates.
+            const level = minPermissionLevel(
+              parsePermissionLevel(current.permissionLevel),
+              await this.currentLevel(owner),
+            );
+            const gate = decideGate({ level, tool: action.name, args: action.args });
+            if (gate.decision === "run") {
+              const approvalId = payload.approval_id ?? payload.action_id ?? payload.command_id ?? payload.proposal_id;
+              if (!approvalId)
+                throw new JobError("INVALID_APPROVAL", "The tool did not provide an approval identifier.");
+              const granted: ToolOutcome = {
+                fingerprint,
+                name: input.name,
+                arguments: input.rawArgs,
+                phase: "approval",
+                output,
+                approval: { id: approvalId, expiresAt: 0 },
+              };
+              await write((j, now) => {
+                granted.approval = {
+                  id: approvalId,
+                  expiresAt: Math.min(now + APPROVAL_TTL, j.expiresAt),
+                  decidedAt: now,
+                  grantUntil: Math.min(now + GRANT_TTL, j.expiresAt),
+                };
+                Object.assign(j.attempt.tools.find((t) => t.fingerprint === fingerprint)!, {
+                  phase: "approval",
+                  output,
+                  approval: granted.approval,
+                });
+                audit(j, now, "permission", `${input.name}: ${gate.reason}`);
+              });
+              return consume(granted);
+            }
+            await write((j, now) => audit(j, now, "permission", `${input.name}: ${gate.reason}`));
+          }
           const approvalId =
             payload.approval_id ??
             payload.action_id ??

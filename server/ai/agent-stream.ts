@@ -27,6 +27,7 @@ import {
   type RookAgentInput,
 } from "../integrations/excel-agent";
 import { executeAgentTool } from "../integrations/agent-tool-executor";
+import { permissionContextForTurn, permissionTraceStep } from "../integrations/permission-gate";
 import {
   invokeAiStream,
   isStreamUnsupportedError,
@@ -149,6 +150,7 @@ async function runAccountedAgentStream(
   const closingStep = setup.trace[setup.trace.length - 1];
 
   const approvals: ExcelAgentApproval[] = [];
+  const permission = input.permission ?? permissionContextForTurn(input);
   const usedTools: string[] = [];
   const toolOutcomes: ToolOutcomeRecord[] = [];
   const computerProposals: ComputerProposal[] = [];
@@ -537,6 +539,7 @@ async function runAccountedAgentStream(
           approvals,
           computerProposals,
           offloadedTools: offloaded.map((tool) => tool.function.name),
+          permission,
         };
         const executed = input.foregroundReplay
           ? await input.foregroundReplay.execute(toolInput, () => executeAgentTool(toolInput))
@@ -544,6 +547,7 @@ async function runAccountedAgentStream(
         if (activation) { activation.observe(name, call.function.arguments); liveTools = activation.current(); }
         trace.push(executed.traceStep);
         emit({ type: "trace", step: executed.traceStep });
+        if (executed.permission) { const journal = permissionTraceStep(executed.permission); trace.push(journal); emit({ type: "trace", step: journal }); }
         const terminal = terminalToolError(executed.resultPayload);
         if (terminal) { record(outcomeFromPayload(name, executed.resultPayload)); return friendlyTurnEnd(terminal); }
         for (const approval of approvals.slice(approvalsBefore)) {

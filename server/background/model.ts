@@ -78,6 +78,8 @@ export type Job = {
     disallowedTools?: string[];
   };
   prompt: string;
+  /** Level captured when scheduled; the effective level is never higher than the owner's current one. */
+  permissionLevel?: import("../../shared/permission-level").PermissionLevel;
   intervalMs?: number;
   state: JobState;
   createdAt: number;
