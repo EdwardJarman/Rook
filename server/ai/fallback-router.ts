@@ -7,9 +7,11 @@
  * the next healthy configured provider instead of failing the chat turn.
  *
  * Rules (deliberately conservative):
- * - Fallback happens ONLY on transient errors (see `isTransientAgentError`).
- *   Auth/config/unknown-model errors surface honestly — silently switching
- *   providers there would hide broken keys or surprise billing.
+ * - Fallback happens on transient errors (see `isTransientAgentError`).
+ *   Shared-provider auth/config errors surface honestly — silently switching
+ *   there would hide broken keys. The one exception is a user's own ChatGPT
+ *   model: a dead model, expired session or empty reply falls back to the
+ *   free shared route (never the reverse) and the turn says so (`shouldFallBack`).
  * - The result always reports which model actually answered (`model`) plus
  *   whether a fallback happened (`fellBack`, `attemptedProviders`), so the
  *   system prompt's model-route transparency stays truthful.
@@ -24,12 +26,22 @@ import { invokeAi } from "./index";
 import { isOrcaRouterConfigured, isTokenRouterConfigured, listOrcaRouterModels, listTokenRouterModels } from "./router-gateways";
 import { isOpenRouterConfigured } from "./openrouter";
 import { canRetryAgentRound } from "./agent-reliability";
+import { modelHealth } from "./model-health";
+import {
+  aiDebug,
+  describeErrorForLog,
+  fallbackReasonText,
+  ProviderError,
+  toProviderError,
+} from "./provider-error";
 
 export type ResilientInvokeResult = {
   result: InvokeResult;
   /** Providers tried in order, e.g. ["openrouter", "orcarouter"]. */
   attemptedProviders: string[];
   fellBack: boolean;
+  /** Why the requested model was left; set only when `fellBack` is true. */
+  fallbackReason?: string;
 };
 
 type BreakerState = {
@@ -130,44 +142,92 @@ export function fallbackCandidates(requestedModel: string | undefined): string[]
   return candidates;
 }
 
+/**
+ * Whether an error from the *requested* model should move the turn to the
+ * next provider. Transient wobbles always do. For a user's own ChatGPT model
+ * a dead model, an expired/missing session or an empty reply also do — the
+ * documented OpenRouter fallback — because the alternative is a dead chat.
+ * Shared-provider auth/config errors still surface (a bad key must be seen).
+ */
+export function shouldFallBack(error: unknown, requestedProvider: string): boolean {
+  if (canRetryAgentRound(error)) return true;
+  return (
+    requestedProvider === "chatgpt" &&
+    error instanceof ProviderError &&
+    (error.kind === "model-unavailable" || error.kind === "auth" || error.kind === "empty")
+  );
+}
+
 export async function invokeAiResilient(
   params: InvokeParams,
   request?: Request,
 ): Promise<ResilientInvokeResult> {
   const attemptedProviders: string[] = [];
   const candidates = fallbackCandidates(params.model);
+  const requestedProvider = providerOf(params.model);
   let lastError: unknown;
+  let lastFailure: ProviderError | undefined;
+  let primaryError: unknown;
+  aiDebug("dispatch", { requestedModel: params.model, candidates });
 
   for (const candidate of candidates) {
     const provider = providerOf(candidate);
     if (attemptedProviders.includes(provider)) continue;
+    const isPrimary = candidate === params.model;
     // The explicitly requested provider is always attempted once — it was
     // the user's choice and its error (if any) must surface honestly.
     // Only *fallback* candidates honor the circuit breaker.
-    if (candidate !== params.model && inCooldown(provider)) continue;
+    if (!isPrimary && inCooldown(provider)) continue;
     attemptedProviders.push(provider);
     try {
       const result = await invokeAi({ ...params, model: candidate }, request);
       recordSuccess(provider);
+      modelHealth.record({ provider, model: candidate, ok: true });
+      if (!isPrimary) {
+        console.warn("[RookAI] fallback answered", {
+          requestedModel: params.model,
+          answeredBy: candidate,
+          attempted: attemptedProviders.join(","),
+          ...(primaryError ? { reason: describeErrorForLog(primaryError) } : {}),
+        });
+      }
       return {
         result,
         attemptedProviders,
-        fellBack: candidate !== params.model,
+        fellBack: !isPrimary,
+        ...(!isPrimary && primaryError ? { fallbackReason: fallbackReasonText(primaryError) } : {}),
       };
     } catch (error) {
       lastError = error;
-      // Error-class split (grok retry.rs order): auth/config surfaces
-      // honestly and never counts toward the breaker; only wobbles do.
-      if (!canRetryAgentRound(error)) throw error;
-      recordFailure(provider);
-      console.warn("[RookAI] provider wobble, trying fallback", {
-        provider,
+      if (isPrimary) primaryError = error;
+      const failure = toProviderError(error, { layer: "router", provider, model: candidate });
+      lastFailure = failure;
+      modelHealth.record({ provider, model: candidate, ok: false, kind: failure.kind, status: failure.info.status, code: failure.info.code });
+      const eligible = isPrimary ? shouldFallBack(error, requestedProvider) : canRetryAgentRound(error);
+      console.warn(eligible ? "[RookAI] provider failed, trying fallback" : "[RookAI] provider failed, not falling back", {
+        requestedModel: params.model,
         attempted: attemptedProviders.join(","),
-        errorName: error instanceof Error ? error.name : "UnknownError",
+        fallbackAvailable: candidates.length > attemptedProviders.length,
+        ...describeErrorForLog(error instanceof ProviderError ? error : failure),
       });
+      if (!eligible) {
+        // A failed fallback must not hide why the user's own choice failed.
+        if (!isPrimary && primaryError instanceof ProviderError) {
+          primaryError.fallbackFailure = { provider, model: candidate, kind: failure.kind, message: failure.info.providerMessage };
+          throw primaryError;
+        }
+        throw error;
+      }
+      if (canRetryAgentRound(error)) recordFailure(provider);
     }
   }
 
+  if (primaryError instanceof ProviderError && lastError !== primaryError) {
+    if (lastFailure) {
+      primaryError.fallbackFailure = { provider: lastFailure.info.provider, model: lastFailure.info.model, kind: lastFailure.kind, message: lastFailure.info.providerMessage };
+    }
+    throw primaryError;
+  }
   throw lastError ?? new Error("All configured AI providers failed.");
 }
 

@@ -11,6 +11,8 @@
  * - friendly error mapping (raw provider errors -> user-readable lines)
  */
 
+import { ProviderError, providerLabelFor } from "./provider-error";
+
 export const ROOK_AGENT_MAX_ROUNDS = 6;
 /** Per-tool-result cap fed back to the model (v1 used 24k -> context blowup). */
 export const ROOK_TOOL_RESULT_CHAR_LIMIT = 12_000;
@@ -261,6 +263,7 @@ export const OUTPUT_LIMIT_TAIL =
  * errors where retrying only burns latency or surprises billing.
  */
 export function isTransientAgentError(error: unknown): boolean {
+  if (error instanceof ProviderError) return error.kind === "transient" || error.kind === "rate-limit";
   const message = error instanceof Error ? error.message : String(error ?? "");
   return /429|rate.?limit|capacity.*full|temporarily|503|502|504|timed out|timeout|abort|network|fetch failed|did not return a response|empty response|empty reply/i.test(
     message,
@@ -275,8 +278,28 @@ export function isMaxTokensError(error: unknown): boolean {
   );
 }
 
+const providerFailureLine = (error: ProviderError): string | undefined => {
+  const { provider, model, kind, providerMessage } = error.info;
+  const label = providerLabelFor(provider);
+  const detail = providerMessage.slice(0, 160);
+  const also = error.fallbackFailure
+    ? ` I also tried ${providerLabelFor(error.fallbackFailure.provider)} as a backup and that failed too (${error.fallbackFailure.kind}).`
+    : "";
+  if (kind === "model-unavailable")
+    return `${label} can't run ${model ?? "that model"} on your account right now (it said: ${detail}). Pick a different model from the model chooser.${also}`;
+  if (kind === "auth" && provider === "chatgpt")
+    return `Your ChatGPT connection needs to be reconnected — open Account → ChatGPT and connect again, or switch to another model.${also}`;
+  if (kind === "bad-request" || kind === "unknown" || kind === "empty")
+    return `${label} couldn't answer${error.info.status ? ` (${error.info.status})` : ""}: ${detail}. Try again, or pick a different model.${also}`;
+  return undefined;
+};
+
 export function friendlyAgentError(error: unknown): string {
   if (error instanceof AgentLoopStop) return error.message;
+  if (error instanceof ProviderError) {
+    const specific = providerFailureLine(error);
+    if (specific) return specific;
+  }
   const message = error instanceof Error ? error.message : String(error ?? "");
   if (/rate.?limit|429|capacity.*full|temporarily full/i.test(message))
     return "Free AI capacity is temporarily full — I kept your message. Please try again in a few seconds.";
@@ -358,6 +381,7 @@ export type RetryDecisionKind =
 
 /** Auth/config errors: surface, never retry. Mirrors retry.rs auth + encrypted-content arms. */
 export function isAuthAgentError(error: unknown): boolean {
+  if (error instanceof ProviderError) return error.kind === "auth";
   const message = error instanceof Error ? error.message : String(error ?? "");
   return /401|403|unauthorized|forbidden|api key|apikey|invalid key|oauth|sign.?in|credential|needs attention|not configured|could not decrypt|encrypted_content/i.test(
     message,
@@ -366,6 +390,7 @@ export function isAuthAgentError(error: unknown): boolean {
 
 /** 429 / capacity errors. Mirrors retry.rs rate-limit arm (Retry-After honored by the caller). */
 export function isRateLimitedError(error: unknown): boolean {
+  if (error instanceof ProviderError) return error.kind === "rate-limit";
   const message = error instanceof Error ? error.message : String(error ?? "");
   return /429|rate.?limit|capacity.*full|temporarily.*(full|unavailable)|too many requests/i.test(
     message,
@@ -429,6 +454,7 @@ export function classifyRetryDecision(error: unknown): RetryDecisionKind {
   if (error instanceof AgentLoopStop || (error instanceof Error && error.name === "AbortError")) return "fatal";
   const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
   if (code === "UNKNOWN_TOOL" || code === "POLICY_DENIED" || code === "HOOK_DENIED") return "fatal";
+  if (error instanceof ProviderError && error.kind === "model-unavailable") return "fatal";
   if (isAuthAgentError(error)) return "emit";
   if (isPayloadTooLargeError(error) || isImageProcessingError(error))
     return "image-strip";

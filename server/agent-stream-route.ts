@@ -17,6 +17,7 @@ import type { Express, Request, Response } from "express";
 import { authenticateClerkRequest } from "./clerk-auth";
 import { runRookAgentStream } from "./ai/agent-stream";
 import { friendlyAgentError } from "./ai/agent-reliability";
+import { describeErrorForLog } from "./ai/provider-error";
 import { ForegroundReplay, TURN_ID_PATTERN } from "./ai/foreground-replay";
 
 const streamBodySchema = z.object({
@@ -110,7 +111,7 @@ export function registerAgentStreamRoute(app: Express): void {
     } catch (error) {
       console.warn("[agent/stream] turn failed", {
         userId: user.id,
-        errorName: error instanceof Error ? error.name : "UnknownError",
+        ...describeErrorForLog(error),
       });
       send({ kind: "error", message: friendlyAgentError(error) });
     } finally {

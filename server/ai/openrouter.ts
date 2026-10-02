@@ -30,6 +30,9 @@ export type RookAiModel = {
   automatic: boolean;
   free: boolean;
   usageLabel: string;
+  /** Set when the provider has rejected this model for the account; the picker shows it disabled. */
+  unavailable?: boolean;
+  unavailableReason?: string;
 };
 
 export type RookAiStatus = {

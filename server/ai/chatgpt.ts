@@ -10,6 +10,15 @@ import type { ModelMessage } from "ai";
 import type { InvokeParams, InvokeResult, Message, ToolCall } from "../_core/llm";
 import { extractClerkBearerToken } from "../clerk-auth";
 import type { AiModel } from "./index";
+import { modelHealth } from "./model-health";
+import {
+  aiDebug,
+  debugBody,
+  describeErrorForLog,
+  ProviderError,
+  toProviderError,
+  type ProviderFailureKind,
+} from "./provider-error";
 import { observeManagedCall } from "./request-accounting";
 
 const CHATGPT_PREFIX = "chatgpt:";
@@ -28,6 +37,8 @@ type ChatGPTHandlerLike = {
 };
 
 type ChatGPTRuntime = {
+  /** Opaque per-account key (never the raw Clerk id) for per-account model health. */
+  scope: string;
   handler: ChatGPTHandlerLike;
   sourceRequest: Request;
   signedSession: string;
@@ -182,6 +193,7 @@ async function runtimeFor(
     textVerbosity: "medium",
   });
   return {
+    scope: userSessionKey(clerkUserId),
     handler,
     sourceRequest: await createInternalRequest(request, signedSession),
     signedSession,
@@ -232,23 +244,49 @@ export async function handleChatGPTRoute(request: ExpressRequest, response: Expr
   }
 }
 
-export async function listChatGPTModels(request: ExpressRequest): Promise<AiModel[]> {
+const verifyOnListing = () => /^(1|true|on)$/i.test(process.env.ROOK_CHATGPT_VERIFY_MODELS ?? "");
+const UNAVAILABLE_NOTE = "ChatGPT rejected this model for your account. Pick another one.";
+
+export type ListChatGPTOptions = {
+  /** Probe every listed slug with a tiny real request (spends a little of the user's plan). Defaults to ROOK_CHATGPT_VERIFY_MODELS. */
+  verify?: boolean;
+  invoke?: ChatGPTInvoke;
+  concurrency?: number;
+};
+
+export async function listChatGPTModels(
+  request: ExpressRequest,
+  options: ListChatGPTOptions = {},
+): Promise<AiModel[]> {
   try {
     const runtime = await runtimeFor(request);
-    const models = await runtime.handler.getModels(runtime.sourceRequest);
-    return (models ?? []).map((slug) => ({
-      id: `${CHATGPT_PREFIX}${slug}`,
-      name: slug.replace(/-/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase()),
-      provider: "ChatGPT",
-      description: "Uses this user's connected ChatGPT plan instead of Rook's shared OpenRouter allowance.",
-      contextLength: 0,
-      supportsTools: true,
-      supportsVision: false,
-      automatic: false,
-      free: false,
-      usageLabel: "Your ChatGPT plan",
-    }));
-  } catch {
+    const slugs = (await runtime.handler.getModels(runtime.sourceRequest)) ?? [];
+    aiDebug("chatgpt models listed", { slugs });
+    if (options.verify ?? verifyOnListing()) {
+      await probeChatGPTModels(request, slugs, { scope: runtime.scope, invoke: options.invoke, concurrency: options.concurrency });
+    }
+    return slugs.map((slug) => {
+      const state = modelHealth.stateOf(runtime.scope, slug);
+      const unavailable = state?.state === "unavailable";
+      return {
+        id: `${CHATGPT_PREFIX}${slug}`,
+        name: slug.replace(/-/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase()),
+        provider: "ChatGPT",
+        description: unavailable
+          ? UNAVAILABLE_NOTE
+          : "Uses this user's connected ChatGPT plan instead of Rook's shared OpenRouter allowance.",
+        contextLength: 0,
+        supportsTools: true,
+        supportsVision: false,
+        automatic: false,
+        free: false,
+        usageLabel: unavailable ? "Unavailable on your account" : "Your ChatGPT plan",
+        ...(unavailable ? { unavailable: true, unavailableReason: state?.reason ?? UNAVAILABLE_NOTE } : {}),
+      };
+    });
+  } catch (error) {
+    const failure = toProviderError(error, { layer: "chatgpt-models", provider: "chatgpt" });
+    console.warn("[ChatGPT models] listing failed", describeErrorForLog(failure));
     return [];
   }
 }
@@ -321,6 +359,8 @@ function toModelMessages(messages: Message[]): { system?: string; messages: Mode
   return { system: system.filter(Boolean).join("\n\n") || undefined, messages: converted };
 }
 
+type ChatGPTInvoke = (params: InvokeParams, request: ExpressRequest) => Promise<InvokeResult>;
+
 export async function invokeChatGPT(
   params: InvokeParams,
   request: ExpressRequest,
@@ -328,6 +368,89 @@ export async function invokeChatGPT(
   return observeManagedCall({ provider: "chatgpt", model: params.model ?? "chatgpt", payload: params,
     scope: "sdk-call" }, () => invokeAccountedChatGPT(params, request));
 }
+
+export type ModelProbeResult = {
+  slug: string;
+  status: "ok" | "unavailable" | "unknown";
+  kind?: ProviderFailureKind;
+  detail?: string;
+};
+
+export type ProbeOptions = {
+  scope: string;
+  invoke?: ChatGPTInvoke;
+  concurrency?: number;
+  timeoutMs?: number;
+};
+
+const withDeadline = <T,>(work: Promise<T>, ms: number): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`probe timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([work, deadline]).finally(() => clearTimeout(timer));
+};
+
+/**
+ * Sequential by default: each probe refreshes the shared session tokens, and
+ * concurrent refreshes of a rotating refresh token can invalidate the session.
+ *
+ * Asks the provider whether each slug is actually usable with one tiny real
+ * request. Only a definitive "model unavailable" answer marks a slug dead;
+ * auth, rate-limit and transient failures prove nothing about the model.
+ */
+export async function probeChatGPTModels(
+  request: ExpressRequest,
+  slugs: string[],
+  options: ProbeOptions,
+): Promise<ModelProbeResult[]> {
+  const invoke = options.invoke ?? invokeChatGPT;
+  const results: ModelProbeResult[] = new Array(slugs.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < slugs.length) {
+      const index = next++;
+      const slug = slugs[index]!;
+      const known = modelHealth.stateOf(options.scope, slug);
+      if (known) {
+        results[index] = known.state === "ok"
+          ? { slug, status: "ok" }
+          : { slug, status: "unavailable", kind: "model-unavailable", detail: known.reason };
+        continue;
+      }
+      try {
+        await withDeadline(
+          invoke({
+            model: `${CHATGPT_PREFIX}${slug}`,
+            messages: [{ role: "user", content: "Reply with the single word OK." }],
+            reasoning: { effort: "low" },
+          } as InvokeParams, request),
+          options.timeoutMs ?? 20_000,
+        );
+        modelHealth.mark(options.scope, slug, "ok");
+        results[index] = { slug, status: "ok" };
+      } catch (error) {
+        const failure = toProviderError(error, { layer: "chatgpt-probe", provider: "chatgpt", model: slug });
+        if (failure.kind === "model-unavailable") {
+          modelHealth.mark(options.scope, slug, "unavailable", failure.info.providerMessage);
+          results[index] = { slug, status: "unavailable", kind: failure.kind, detail: failure.info.providerMessage };
+        } else {
+          results[index] = { slug, status: "unknown", kind: failure.kind, detail: failure.info.providerMessage };
+        }
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(options.concurrency ?? 1, slugs.length || 1)) }, worker));
+  return results;
+}
+
+const sessionFailure = (error: unknown, model: string): ProviderError => {
+  const failure = toProviderError(error, { layer: "chatgpt-session", provider: "chatgpt", model });
+  if (failure.kind === "unknown" && /sign in|session|not configured|authenticat/i.test(failure.info.providerMessage)) {
+    return new ProviderError({ ...failure.info, kind: "auth" }, { cause: error });
+  }
+  return failure;
+};
 
 async function invokeAccountedChatGPT(
   params: InvokeParams,
@@ -338,7 +461,13 @@ async function invokeAccountedChatGPT(
   const requestedEffort = (params.reasoning as { effort?: unknown } | undefined)?.effort;
   const effort =
     requestedEffort === "low" || requestedEffort === "high" ? requestedEffort : "medium";
-  const runtime = await runtimeFor(request, effort);
+  aiDebug("chatgpt dispatch", { requestedModel: params.model, slug: model, effort, tools: params.tools?.length ?? 0 });
+  let runtime: ChatGPTRuntime;
+  try {
+    runtime = await runtimeFor(request, effort);
+  } catch (error) {
+    throw sessionFailure(error, model);
+  }
   const [{ createChatGPTProxyProvider }, { streamText, jsonSchema, tool }] = await Promise.all([
     import("@opencoredev/loginwithchatgpt-ai"),
     import("ai"),
@@ -359,6 +488,9 @@ async function invokeAccountedChatGPT(
   // The ChatGPT Codex endpoint emits a richer server-sent-event stream than
   // its one-shot response. Consuming that stream keeps the actual assistant
   // text separate from internal safety records such as `User Safety: safe`.
+  // `await result.text` rejects with a generic "No output generated" error;
+  // the real provider failure (status + body) is only delivered here.
+  let streamError: unknown;
   const result = streamText({
     model: chatgpt(model),
     system: prompt.system,
@@ -366,16 +498,36 @@ async function invokeAccountedChatGPT(
     tools: Object.keys(tools).length ? tools : undefined,
     toolChoice: params.toolChoice === "none" || params.tool_choice === "none" ? "none" : "auto",
     maxRetries: 1,
+    onError: ({ error }) => {
+      streamError = error;
+    },
   });
-  const [rawText, calls, finishReason, usage] = await Promise.all([
-    result.text,
-    result.toolCalls,
-    result.finishReason,
-    result.usage,
-  ]);
+  let rawText: string, calls: Awaited<typeof result.toolCalls>, finishReason: Awaited<typeof result.finishReason>, usage: Awaited<typeof result.usage>;
+  try {
+    [rawText, calls, finishReason, usage] = await Promise.all([
+      result.text,
+      result.toolCalls,
+      result.finishReason,
+      result.usage,
+    ]);
+  } catch (error) {
+    const failure = toProviderError(streamError ?? error, { layer: "chatgpt-responses", provider: "chatgpt", model });
+    if (failure.kind === "model-unavailable") {
+      modelHealth.mark(runtime.scope, model, "unavailable", failure.info.providerMessage);
+    }
+    aiDebug("chatgpt provider failure", { slug: model, ...describeErrorForLog(failure), rawBody: debugBody(streamError ?? error) });
+    throw failure;
+  }
+  modelHealth.mark(runtime.scope, model, "ok");
   const text = userFacingChatGPTText(rawText);
   if (!text && !calls.length) {
-    throw new Error("ChatGPT returned status metadata without an assistant reply.");
+    throw new ProviderError({
+      layer: "chatgpt-responses",
+      provider: "chatgpt",
+      model,
+      kind: "empty",
+      providerMessage: "ChatGPT returned status metadata without an assistant reply.",
+    });
   }
   const toolCalls: ToolCall[] = calls.map((call) => ({
     id: call.toolCallId,

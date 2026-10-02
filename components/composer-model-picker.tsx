@@ -44,7 +44,7 @@ export function ComposerModelPicker({
   }, [catalog.data?.models]);
   const selected = useMemo(
     () =>
-      models.find((model) => model.id === value) ??
+      models.find((model) => model.id === value && !model.unavailable) ??
       defaultModelForProvider(models, provider) ??
       models[0],
     [models, provider, value],
@@ -213,8 +213,9 @@ export function ComposerModelPicker({
                   <Pressable
                     key={model.id}
                     accessibilityRole="radio"
-                    accessibilityState={{ checked: active }}
-                    accessibilityLabel={`Use ${model.name}`}
+                    accessibilityState={{ checked: active, disabled: Boolean(model.unavailable) }}
+                    accessibilityLabel={model.unavailable ? `${model.name} (unavailable)` : `Use ${model.name}`}
+                    disabled={Boolean(model.unavailable)}
                     onPress={() => {
                       onChange(model.id);
                       setOpen(false);
@@ -233,6 +234,7 @@ export function ComposerModelPicker({
                           : "transparent",
                       },
                       pressed && { opacity: 0.66 },
+                      model.unavailable && { opacity: 0.5 },
                     ]}
                   >
                     <View
@@ -262,7 +264,7 @@ export function ComposerModelPicker({
                           marginTop: 2,
                         }}
                       >
-                        {model.provider} · {model.usageLabel}
+                        {model.provider} · {model.unavailable ? "Unavailable on your account" : model.usageLabel}
                       </Text>
                     </View>
                     {active ? (

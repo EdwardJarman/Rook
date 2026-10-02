@@ -34,6 +34,7 @@ import {
   supportsModelStream,
 } from "./openai-stream";
 import { invokeAiResilient } from "./fallback-router";
+import { describeErrorForLog, fallbackTraceStep } from "./provider-error";
 import { recordTurn, recordInterruptedTurn } from "./telemetry";
 import { outcomeFromError, outcomeFromPayload, skippedOutcome, type ToolOutcomeRecord } from "./tool-metrics";
 import { ForegroundOutcomeUnknown } from "./foreground-replay";
@@ -283,6 +284,13 @@ async function runAccountedAgentStream(
     };
   };
 
+  const noteFallback = (invoked: Parameters<typeof fallbackTraceStep>[0]) => {
+    const step = fallbackTraceStep(invoked);
+    if (!step || trace.some((existing) => existing.title === step.title && existing.detail === step.detail)) return;
+    trace.push(step);
+    emit({ type: "trace", step });
+  };
+
   /** One model round: streaming first, honest fallbacks on failure. */
   const invokeRound = async (round: number): Promise<RoundAnswer> => {
     const replayed = input.foregroundReplay?.savedRound(round);
@@ -374,6 +382,7 @@ async function runAccountedAgentStream(
       );
       attemptedProviders = invoked.attemptedProviders;
       fellBackToAuto = fellBackToAuto || invoked.fellBack;
+      noteFallback(invoked);
       const answer = invoked.result.choices[0]?.message;
       if (!answer) throw new Error("The model did not return a response");
       resolvedModel = invoked.result.model || resolvedModel;
@@ -426,6 +435,7 @@ async function runAccountedAgentStream(
     );
     attemptedProviders = invoked.attemptedProviders;
     fellBackToAuto = fellBackToAuto || invoked.fellBack;
+    noteFallback(invoked);
     const answer = invoked.result.choices[0]?.message;
     if (!answer) throw new Error("The model did not return a response");
     resolvedModel = invoked.result.model || resolvedModel;
@@ -458,7 +468,9 @@ async function runAccountedAgentStream(
       console.warn("[RookAI] streamed turn failed", {
         requestId,
         round,
-        errorName: error instanceof Error ? error.name : "UnknownError",
+        requestedModel,
+        attempted: attemptedProviders.join(","),
+        ...describeErrorForLog(error),
       });
       return friendlyTurnEnd(error);
     }

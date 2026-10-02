@@ -6,7 +6,7 @@ Rook supports an optional **Login with ChatGPT** connection that lets an authent
 
 A user opens **Account → AI backend → ChatGPT**, reviews explicit consent text, and chooses **Connect ChatGPT**. Rook requests a short-lived device code and opens OpenAI’s verification page. The user authorizes Rook directly with OpenAI; Rook never receives the user’s password. Once connected, the model selector lists the model slugs currently returned for that specific account and plan.
 
-ChatGPT models use the `chatgpt:` prefix internally. OpenRouter models remain available as Rook’s shared fallback. If a ChatGPT session is missing, expires, or is disconnected, a Bot request falls back to `openrouter/free` rather than becoming unusable.
+ChatGPT models use the `chatgpt:` prefix internally. OpenRouter models remain available as Rook’s shared fallback. If a ChatGPT session is missing, expires, or is disconnected — or ChatGPT rejects the chosen model, returns nothing, or has a transient failure — `invokeAiResilient` (the only fallback owner) retries on `openrouter/free` when OpenRouter is configured, and the reply carries an “Answered with a backup model” trace step naming why. Without a configured fallback, the true reason is shown to the user (see below).
 
 ## Security model
 
@@ -31,3 +31,13 @@ The integration requires Rook’s existing `CLERK_SECRET_KEY`. Rook derives a do
 ## Verification checklist
 
 Before release, verify that an authenticated user can start device authorization, complete the OpenAI code flow, list models, select a `chatgpt:` model, receive a Bot response, disconnect, and observe the Bot fall back to OpenRouter. Also confirm that an unauthenticated request receives `401`, tokens never appear in response bodies or logs, and a second Clerk user cannot read the first user’s session.
+
+## Failure handling and diagnostics
+
+Every ChatGPT failure becomes a typed `ProviderError` (`server/ai/provider-error.ts`) carrying the layer, HTTP status, provider code and a redacted provider message. Kinds: `model-unavailable` (404/`model_not_found`, “not supported when using Codex with a ChatGPT account”), `auth` (401, `not_authenticated`, `token_refresh_failed`), `rate-limit`, `transient`, `bad-request`, `empty`, `unknown`.
+
+- **Why this matters:** the AI SDK's `streamText().text` rejects with `No output generated` and hides the real failure; it is only delivered to `onError`, which `invokeChatGPT` now captures. Retried failures (429/5xx) arrive wrapped in a `RetryError`, which is unwrapped.
+- **Fallback** (ChatGPT → OpenRouter) triggers on `model-unavailable`, `auth`, `empty`, `rate-limit` and `transient`; a plain `bad-request` is surfaced, not swapped. If the fallback also fails, the original error is thrown with the fallback failure attached.
+- **Dead models:** when the provider rejects a slug, the model is labelled `unavailable` for that account for 30 minutes (in-memory, per process) — the picker shows it disabled and never auto-selects it; a later success clears it. Set `ROOK_CHATGPT_VERIFY_MODELS=1` to probe every listed slug (one tiny sequential request each, spends a little plan allowance) when the list is built.
+- **Logs:** every failure logs `layer`, `provider`, `model`, `kind`, `status`, `code` and the redacted message (`[RookAI] provider failed…`, `[RookAI] streamed turn failed`, `[ChatGPT models] listing failed`). `ROOK_AI_DEBUG=1` additionally logs the slug sent and the raw (redacted, 1 kB) provider body. Search `model failing repeatedly` (console.error, every 3rd consecutive failure of a model) to alert on a dying model; `trpc.ai.turns` also returns `modelHealth` counters.
+- **Live drill:** `CLERK_SECRET_KEY=… ROOK_EVAL_SESSION_TOKEN=<Clerk JWT of a ChatGPT-connected user> pnpm drill:chatgpt-models` probes every offered slug, then sends “hey” through the router (set `ROOK_DRILL_MODEL=chatgpt:gpt-5.5` to target a slug, `OPENROUTER_API_KEY` to see the fallback) and prints per-model health.

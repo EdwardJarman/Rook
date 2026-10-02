@@ -16,6 +16,7 @@
     "lint": "expo lint",
     "format": "prettier --write .",
     "test": "vitest run",
+    "drill:chatgpt-models": "tsx scripts/chatgpt-model-drill.ts",
     "eval:probe": "vitest run --config vitest.eval.config.ts",
     "db:push": "node scripts/db-push.mjs",
     "db:smoke": "tsx scripts/instantdb-smoke.ts",
