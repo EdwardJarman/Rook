@@ -18,6 +18,7 @@
  * - A cumulative ledger on disk survives crashes and re-runs: the reserve is
  *   written before the call, so a killed process still counts it.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { InvokeParams, InvokeResult } from "../../server/_core/llm";
@@ -29,6 +30,36 @@ const CHARGE_FACTOR = 1.1;
 const RESERVE_RETRY_FACTOR = 2;
 const CHARS_PER_TOKEN_ESTIMATE = 3;
 const PRIOR_OUTPUT_TOKENS = 6000;
+
+/** One model request is abandoned after this long. The ChatGPT path has no timeout of its own. */
+export const DEFAULT_REQUEST_TIMEOUT_MS = 180_000;
+
+export class RequestTimeout extends Error {
+  constructor(ms: number) { super(`A model request ran longer than ${Math.round(ms / 1000)}s and was abandoned.`); this.name = "RequestTimeout"; }
+}
+export class TrialCancelled extends Error {
+  constructor() { super("The trial was cancelled; no further model requests are sent for it."); this.name = "TrialCancelled"; }
+}
+
+/**
+ * Cancellation handle for one trial. It travels with the trial's async call
+ * chain (AsyncLocalStorage), so an abandoned trial that is still unwinding can
+ * neither send another model request nor leave one in flight.
+ */
+export class TrialScope {
+  cancelled = false;
+  private listeners = new Set<() => void>();
+  cancel(): void {
+    if (this.cancelled) return;
+    this.cancelled = true;
+    for (const listener of [...this.listeners]) listener();
+  }
+  onCancel(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
+}
+export const trialScope = new AsyncLocalStorage<TrialScope>();
 
 export type Rates = { input: number; cachedInput: number; output: number };
 export type LedgerState = { spentUsd: number; pendingUsd: number; requests: number };
@@ -83,7 +114,8 @@ export function parseBudget(env: Record<string, string | undefined>): number {
   return positive("ROOK_EVAL_BUDGET_USD", env.ROOK_EVAL_BUDGET_USD, HARD_CAP_USD, false) ?? HARD_CAP_USD;
 }
 
-export type MeterOptions = { capUsd: number; rates: Rates; ledger: Ledger; headroom?: number };
+export type MeterOptions = { capUsd: number; rates: Rates; ledger: Ledger; headroom?: number; requestTimeoutMs?: number };
+export type MeterActivity = { inFlight: number; oldestInFlightMs: number; lastCompletionAt: number };
 export type Invoke = (params: InvokeParams, request?: import("express").Request) => Promise<{ result: InvokeResult; attemptedProviders: string[]; fellBack: boolean }>;
 
 export class SpendMeter {
@@ -93,6 +125,10 @@ export class SpendMeter {
   private maxOutput = 0;
   private estimated = 0;
   private hitCap = false;
+  private timeoutCount = 0;
+  private sequence = 0;
+  private inFlight = new Map<number, number>();
+  private lastCompletion = 0;
   readonly capUsd: number;
   readonly ceilingUsd: number;
   constructor(private o: MeterOptions) {
@@ -111,6 +147,14 @@ export class SpendMeter {
   requests() { return this.requestCount; }
   estimatedCharges() { return this.estimated; }
   tripped() { return this.hitCap; }
+  /** Model requests abandoned for exceeding the request timeout, cumulative for this meter. */
+  timeouts() { return this.timeoutCount; }
+  /** What is on the wire right now, for the harness heartbeat. */
+  activity(): MeterActivity {
+    const now = Date.now();
+    const starts = [...this.inFlight.values()];
+    return { inFlight: starts.length, oldestInFlightMs: starts.length ? now - Math.min(...starts) : 0, lastCompletionAt: this.lastCompletion };
+  }
   /** Tripped flag is per trial: the harness clears it after recording the trial. */
   clearTrip() { this.hitCap = false; }
 
@@ -143,22 +187,46 @@ export class SpendMeter {
     return this.priceOf(this.inputEstimate(params), 0, outputTokens) * CHARGE_FACTOR;
   }
 
+  /** Rejects when the request outlives its deadline or its trial is cancelled; the abandoned call's eventual result is ignored. */
+  private bounded<T>(work: Promise<T>, scope: TrialScope | undefined): Promise<T> {
+    const ms = this.o.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    return new Promise<T>((resolve, reject) => {
+      let done = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let off: (() => void) | undefined;
+      const finish = (settle: () => void) => { if (done) return; done = true; clearTimeout(timer); off?.(); settle(); };
+      timer = setTimeout(() => finish(() => reject(new RequestTimeout(ms))), ms);
+      off = scope?.onCancel(() => finish(() => reject(new TrialCancelled())));
+      work.then((value) => finish(() => resolve(value)), (error) => finish(() => reject(error)));
+    });
+  }
+
   /** Wrap the router's invoke. Every model request of the probe goes through here. */
   wrap(invoke: Invoke): Invoke {
     return async (params, request) => {
+      const scope = trialScope.getStore();
+      if (scope?.cancelled) throw new TrialCancelled();
       const reserve = this.reserveFor(params);
       if (this.spent + reserve > this.ceilingUsd) { this.hitCap = true; throw new BudgetExceeded(); }
       this.requestCount += 1;
       this.persist(reserve);
+      const id = (this.sequence += 1);
+      this.inFlight.set(id, Date.now());
       try {
-        const out = await invoke(params, request);
+        const out = await this.bounded(invoke(params, request), scope);
         this.spent += this.chargeFor(params, out.result);
         this.persist(0);
         return out;
       } catch (error) {
-        this.spent += this.priceOf(this.inputEstimate(params), 0, 0) * CHARGE_FACTOR;
+        // An abandoned request may still finish provider-side with unknown usage, so it is charged its full worst-case reserve.
+        const abandoned = error instanceof RequestTimeout || error instanceof TrialCancelled;
+        if (error instanceof RequestTimeout) this.timeoutCount += 1;
+        this.spent += abandoned ? reserve : this.priceOf(this.inputEstimate(params), 0, 0) * CHARGE_FACTOR;
         this.persist(0);
         throw error;
+      } finally {
+        this.inFlight.delete(id);
+        this.lastCompletion = Date.now();
       }
     };
   }

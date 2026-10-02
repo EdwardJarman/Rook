@@ -69,11 +69,39 @@ Arms: `baseline`; `baseline_repeat` (identical, to measure noise); each variant 
 
 Per trial: success, checks passed, model requests, tool calls, tool errors, invalid-argument calls, skipped calls, `load_tools` calls, approvals, input / cached / output / reasoning tokens, latency, **metered cost**, first-request size. Success is deterministic: every check of the task passes (regexes and tool-call predicates in `evals/probe/tasks.ts`; no model judges another model). The 25 tasks cover small talk, ambiguous fix-it, stale topic, fresh facts, snippet honesty, GitHub read and find-then-read, Excel read, write proposal, not connected, denied write, offload candidates (`excel_add_worksheet`, table append), computer status and propose, a large retained output, a prompt injection in a tool result, credentials in chat, model identity, and **six long-conversation tasks** where a critical fact is stated early: four beyond the compaction ledger's 160-character line cut and two within it. Those six exist because compaction changes nothing on short conversations; whether such constraints are common in real use is unknown, so the compaction result is a stress result, not a prevalence estimate.
 
-Validity: a trial is **invalid, not failed**, when it throws, has no telemetry, used a non-`chatgpt` provider, ended on a provider/session error, or was cut off by the budget. A deliberate loop stop (for example a doom loop) is a real failure. Invalid trials are excluded pairwise. The run stops after 3 consecutive provider failures, when more than 20% of trials are invalid (after 10), at the request cap, or at the budget, and records why.
+Validity: a trial is **invalid, not failed**, when it throws, has no telemetry, used a non-`chatgpt` provider, ended on a provider/session error, was cut off by the budget, or **timed out** (below). A deliberate loop stop (for example a doom loop) is a real failure. Invalid trials are excluded pairwise. The run stops after 3 consecutive provider failures or timeouts, when more than 20% of trials are invalid (after 10), at the request cap, or at the budget, and records why.
 
 ### Exposure: judge a variant where it acted
 
 A pair is **exposed** when the variant changed the trial's first request (measured, not assumed). Averaging in tasks a variant never touches dilutes both its savings and its regressions; in a test, a regression on 10 exposed pairs out of 125 looked like a pass suite-wide. So the verdict, matched success rates, savings and tool-error comparison are computed on exposed pairs, with noise measured on the same tasks, and suite-wide numbers are shown beside them. Lean prompt and tool offload touch every task; plan compaction touches the six history tasks (30 exposed pairs at 5 reps, 60 at 10).
+
+## Stalls, timeouts and the partial report
+
+The ChatGPT path has no timeout of its own, so the runner supplies them. Nothing can wait forever.
+
+| Bound | Default | Variable | What happens on expiry |
+| --- | --- | --- | --- |
+| One model request | 180 s | `ROOK_EVAL_REQUEST_TIMEOUT_MS` | The request is abandoned (the agent loop sees an error), and it is charged its **full worst-case reserve**, since it may still complete provider-side with unknown usage. The trial is recorded invalid (`timeout`). |
+| One trial | 420 s | `ROOK_EVAL_TRIAL_TIMEOUT_MS` | The trial is cancelled: its in-flight request is rejected at once and it can send no further request, it gets 2 s to unwind, then it is abandoned. Recorded invalid (`timeout`); the run continues with the next trial. |
+| Session-token command | 30 s | none | Counts as a failed refresh. Two failures in a row end the run with `truncated: session_refresh` and a report. |
+| Model listing at start | 60 s | none | The run refuses to start with a clear message. |
+
+Set the request timeout no higher than the trial timeout (validated). Both bounds are wall-clock; choose them above your slowest legitimate trial (the smoke run prints latency).
+
+**You will see a hang within 40 seconds.** While a trial runs, a line is logged every 10 s:
+
+```
+trial 38 (task=github-read arm=lean_prompt rep=2) running 20s, no model request has finished for 20s; 1 model request in flight (oldest 20s); abandoned at 420s
+STALL WARNING: trial 38 (task=github-read arm=lean_prompt rep=2) running 40s, no model request has finished for 40s; 1 model request in flight (oldest 40s); abandoned at 420s
+```
+
+The warning starts after 30 s with no finished model request. The completion line now names the task and any invalid reason (`trial 38 task=... invalid=timeout`), so a task that reliably hangs is identifiable.
+
+**The report is never lost.** The numbers-only JSON (path printed at start; `ROOK_EVAL_OUT` to choose) is rewritten atomically **after every trial** with `truncated: in_progress`. The final write replaces it. The run ends with a report, and `truncated` saying why, for: `trial_timeout` (3 consecutive timeouts), `provider_failures`, `session_refresh`, `interrupted`, `aborted` (an unexpected error; the trials already run are kept), plus the existing `budget_cap`, `request_cap` and `invalid_rate`. `in_progress` in a file you find later means the process died between trials. Ctrl-C or SIGTERM once stops at once, drops the current trial and writes the report; a second one kills the process. A report with a `truncated` other than `none` is a valid partial result, but do not read a scoreboard verdict from an unbalanced partial.
+
+### Re-running after a stall: keep the ledger
+
+Keep the existing ledger; do not wipe it and do not use a fresh `ROOK_EVAL_LEDGER` path. The ledger is the spend meter's memory, not data: it holds dollars, request count and any in-flight reservation, never trial outcomes. Wiping it would only make the $25 cap look emptier than it is; the $0.60 is real API-equivalent spend and is 2.4% of the cap. It cannot be reused for analysis either: the stalled run wrote no report, so its 88 requests produced no retrievable results and the re-run starts from trial 1. The killed process may have left a reservation; it is counted as spent on reload (a small, deliberate over-count). In the new report, `budget.spentUsd` is cumulative (includes the $0.60) while `budget.runSpentUsd` is this run alone; use `runSpentUsd` for dollars per trial and for the projection. The default seed gives the same schedule, which is fine: all arms are interleaved within each repetition.
 
 ## Escalation gate (5 to 10 repetitions)
 
@@ -101,6 +129,6 @@ The 95% interval on a paired success difference is about 1.96 x sqrt(d / n) for 
 
 ## Where the code is
 
-`evals/probe/`: `probe.eval.ts` (operator entry, skipped unless confirmed), `harness.ts` (schedule, phases, escalation, scoring, scoreboard, report guard, preflight), `meter.ts` (spend meter, ledger, rates, cap), `tasks.ts`, `world.ts` and `mocks.ts` (connector stubs), `stats.ts`. `vitest.eval.config.ts` selects only `*.eval.ts`, so `pnpm test` never runs the probe.
+`evals/probe/`: `probe.eval.ts` (operator entry, skipped unless confirmed), `harness.ts` (schedule, phases, escalation, trial deadlines, heartbeat, checkpoints, scoring, scoreboard, report guard, preflight), `meter.ts` (spend meter, ledger, rates, cap, request deadline, trial cancellation), `tasks.ts`, `world.ts` and `mocks.ts` (connector stubs), `stats.ts`. `vitest.eval.config.ts` selects only `*.eval.ts`, so `pnpm test` never runs the probe.
 
 Rollback: revert the PR. The only production-code change in the probe line is the additive `errorCode` telemetry field.

@@ -6,7 +6,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import { exec } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, renameSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -33,7 +33,7 @@ vi.mock("../../server/ai/fallback-router", async (original) => {
 });
 
 import { FileLedger, meterHolder, parseBudget, parseRates, SpendMeter } from "./meter";
-import { assertNumbersOnly, createTokenSource, looksLikeJwt, parseEnvOptions, preflightProblems, renderSummary, runProbe, sessionRequest } from "./harness";
+import { assertNumbersOnly, createTokenSource, looksLikeJwt, parseEnvOptions, preflightProblems, renderSummary, runProbe, sessionRequest, withDeadline, type Report } from "./harness";
 import { TASKS } from "./tasks";
 
 const shell = promisify(exec);
@@ -49,7 +49,7 @@ describe.skipIf(process.env.ROOK_EVAL_CONFIRM !== "run")("probe (real ChatGPT se
     await session.refresh();
     if (!looksLikeJwt(session.current())) throw new Error("ROOK_EVAL_SESSION_TOKEN is not a JWT.");
     const { listChatGPTModels } = await import("../../server/ai/chatgpt");
-    const models = await listChatGPTModels(sessionRequest(session));
+    const models = await withDeadline(listChatGPTModels(sessionRequest(session)), 60_000, "Listing ChatGPT models took longer than 60s; check the network and the session token.");
     if (!models.length) throw new Error("Could not list ChatGPT models. The session token or CLERK_SECRET_KEY is wrong, or ChatGPT is not connected for this user.");
     if (!models.some((model) => model.id === options.model)) throw new Error(`ROOK_EVAL_MODEL is not in your ChatGPT model list. Available: ${models.map((model) => model.id).join(", ")}`);
 
@@ -57,19 +57,34 @@ describe.skipIf(process.env.ROOK_EVAL_CONFIRM !== "run")("probe (real ChatGPT se
     if (!tasks.length) throw new Error("ROOK_EVAL_TASKS matched no task.");
     const folder = path.join(process.cwd(), ".cache", "harness-evaluation");
     mkdirSync(folder, { recursive: true });
-    const meter = new SpendMeter({ capUsd: parseBudget(env), rates: parseRates(env), ledger: new FileLedger(options.ledger ?? path.join(folder, "probe-spend.json")) });
+    const meter = new SpendMeter({ capUsd: parseBudget(env), rates: parseRates(env), ledger: new FileLedger(options.ledger ?? path.join(folder, "probe-spend.json")), requestTimeoutMs: options.requestTimeoutMs });
     meterHolder.current = meter;
     if (meter.remainingUsd() <= 0) throw new Error("The spend ledger already reaches the cap. Raise nothing: delete the ledger deliberately only if you know it is stale.");
     const { runRookAgent } = await import("../../server/integrations/excel-agent");
     const { recentTurns } = await import("../../server/ai/telemetry");
-    const report = await runProbe({ model: options.model, tasks, arms: options.arms, reps: options.reps, maxReps: options.maxReps, seed: options.seed, meter,
-      maxRequests: options.maxRequests, minIntervalMs: options.minIntervalMs, maxInvalidRate: 0.2, margin: 0.05, minPairs: 30,
-      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)), session, run: runRookAgent, telemetry: () => recentTurns(1)[0],
-      log: (line) => console.info(line) });
-
-    assertNumbersOnly(report, [options.model, ...TASKS.map((task) => task.id)]);
+    // The report file is rewritten after every trial, so a kill, crash or hang still leaves the numbers so far.
     const file = options.out ?? path.join(folder, `probe-${new Date().toISOString().replace(/[:.]/g, "-")}.json`);
-    writeFileSync(file, JSON.stringify(report, null, 2));
+    const labels = [options.model, ...TASKS.map((task) => task.id)];
+    const save = (report: Report) => { assertNumbersOnly(report, labels); writeFileSync(`${file}.tmp`, JSON.stringify(report, null, 2)); renameSync(`${file}.tmp`, file); };
+    console.info(`report file (updated after every trial): ${file}`);
+
+    // First Ctrl-C / SIGTERM stops cleanly at the trial boundary and writes the report; a second one kills the process.
+    const stop = new AbortController();
+    const onSignal = () => { console.info("stop requested: abandoning the current trial and writing the partial report"); stop.abort(); };
+    process.once("SIGINT", onSignal); process.once("SIGTERM", onSignal);
+    let report: Report;
+    try {
+      report = await runProbe({ model: options.model, tasks, arms: options.arms, reps: options.reps, maxReps: options.maxReps, seed: options.seed, meter,
+        maxRequests: options.maxRequests, minIntervalMs: options.minIntervalMs, maxInvalidRate: 0.2, margin: 0.05, minPairs: 30,
+        trialTimeoutMs: options.trialTimeoutMs, checkpoint: save, stop: stop.signal,
+        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)), session, run: runRookAgent, telemetry: () => recentTurns(1)[0],
+        log: (line) => console.info(line) });
+    } finally {
+      process.off("SIGINT", onSignal); process.off("SIGTERM", onSignal);
+    }
+
+    save(report);
+    if (report.truncated !== "none") console.info(`\nRUN INCOMPLETE (truncated=${report.truncated}): the report covers ${report.trials.length} trials only.`);
     console.info(`\n${renderSummary(report)}\n\nNumbers-only report: ${file}`);
     const dir = process.env.ROOK_TOOL_OUTPUT_DIR;
     if (dir && path.basename(dir).startsWith("rook-probe-output-") && path.dirname(dir) === path.resolve(os.tmpdir())) rmSync(dir, { recursive: true, force: true });

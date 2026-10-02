@@ -27,8 +27,8 @@ import { observeManagedCall } from "../server/ai/request-accounting";
 import { recentTurns, __resetTelemetryForTests } from "../server/ai/telemetry";
 import { prepareAgentTurn, runRookAgent } from "../server/integrations/excel-agent";
 import type { InvokeParams, InvokeResult, ToolCall } from "../server/_core/llm";
-import { assertNumbersOnly, buildReport, createTokenSource, decideEscalation, disagreement, parseEnvOptions, preflightProblems, renderSummary, runProbe, sessionRequest, type ArmId, type EscalationInput, type ProbeOptions, type Trial } from "../evals/probe/harness";
-import { BudgetExceeded, FileLedger, HARD_CAP_USD, MemoryLedger, meterHolder, meteredInvoke, parseBudget, parseRates, SpendMeter } from "../evals/probe/meter";
+import { assertNumbersOnly, buildReport, createTokenSource, decideEscalation, disagreement, parseEnvOptions, preflightProblems, renderSummary, runProbe, sessionRequest, withDeadline, type Report, type ArmId, type EscalationInput, type ProbeOptions, type Trial } from "../evals/probe/harness";
+import { BudgetExceeded, FileLedger, HARD_CAP_USD, MemoryLedger, meterHolder, meteredInvoke, parseBudget, parseRates, RequestTimeout, SpendMeter, TrialCancelled, TrialScope, trialScope } from "../evals/probe/meter";
 import { mean, pairedBootstrap, seededRng, shuffle, verdictFor, wilson } from "../evals/probe/stats";
 import { TASKS } from "../evals/probe/tasks";
 import { setWorld } from "../evals/probe/world";
@@ -608,3 +608,161 @@ describe("history tasks and exposure-aware scoring", () => {
   });
 });
 
+
+describe("stalls: bounded trials, visible hangs, partial reports", () => {
+  const two = TASKS.filter((t) => ["small-talk", "model-identity"].includes(t.id));
+  const never = () => new Promise<never>(() => undefined);
+  const ok = async (params: InvokeParams) => {
+    const out = reply("Hey!", [], USAGE);
+    await observeManagedCall({ provider: "chatgpt", model: params.model ?? MODEL, payload: params, scope: "sdk-call" }, async () => out);
+    return { result: out, attemptedProviders: ["chatgpt"], fellBack: false };
+  };
+  let providerCalls: number;
+  /** Requests whose user text matches `pattern` never answer; all others succeed. */
+  const hangWhen = (pattern: RegExp, m: SpendMeter = meter) => {
+    providerCalls = 0;
+    vi.mocked(invokeAiResilient).mockImplementation(async (params, request) => m.wrap(async () => { providerCalls += 1; return pattern.test(userText(params)) ? never() : ok(params); })(params, request));
+  };
+  const quick = (over: Partial<ProbeOptions> = {}) => options({ tasks: two, arms: ["baseline"], reps: 1, trialTimeoutMs: 150, cancelGraceMs: 50, heartbeatMs: 0, ...over });
+
+  it("abandons a hung model request at the request timeout and charges its worst-case reserve", async () => {
+    const m = new SpendMeter({ capUsd: 5, rates: RATES, ledger: new MemoryLedger(), requestTimeoutMs: 30 });
+    const params = { messages: [{ role: "user", content: "hi" }] } as InvokeParams;
+    await expect(m.wrap(never)(params)).rejects.toBeInstanceOf(RequestTimeout);
+    expect(m.timeouts()).toBe(1);
+    expect(m.spentUsd()).toBeCloseTo(m.reserveFor(params), 10);
+    expect(m.activity()).toMatchObject({ inFlight: 0 });
+  });
+
+  it("a cancelled trial scope rejects its in-flight request at once and refuses any later one", async () => {
+    const m = new SpendMeter({ capUsd: 5, rates: RATES, ledger: new MemoryLedger(), requestTimeoutMs: 60_000 });
+    const params = { messages: [{ role: "user", content: "hi" }] } as InvokeParams;
+    const scope = new TrialScope();
+    let calls = 0;
+    const pending = trialScope.run(scope, () => m.wrap(async () => { calls += 1; return never(); })(params));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(m.activity().inFlight).toBe(1);
+    scope.cancel();
+    await expect(pending).rejects.toBeInstanceOf(TrialCancelled);
+    await expect(trialScope.run(scope, () => m.wrap(async () => { calls += 1; return ok(params); })(params))).rejects.toBeInstanceOf(TrialCancelled);
+    expect(calls).toBe(1);
+    expect(m.timeouts()).toBe(0);
+    expect(m.activity().inFlight).toBe(0);
+  });
+
+  it("bounds a hung trial, records it invalid (timeout), and keeps running the rest", async () => {
+    const big = new SpendMeter({ capUsd: HARD_CAP_USD, rates: RATES, ledger: new MemoryLedger(), requestTimeoutMs: 60_000 });
+    hangWhen(/which AI model/, big);
+    const logs: string[] = [];
+    const started = Date.now();
+    const report = await runProbe(quick({ meter: big, log: (line) => logs.push(line) }));
+    expect(Date.now() - started).toBeLessThan(3000);
+    const stuck = report.trials.find((t) => t.task === "model-identity")!;
+    expect(stuck).toMatchObject({ valid: false, invalid: "timeout", success: false });
+    expect(report.trials.find((t) => t.task === "small-talk")).toMatchObject({ valid: true });
+    expect(report.truncated).toBe("none");
+    expect(logs.join("\n")).toMatch(/trial \d+ \(task=model-identity arm=baseline rep=1\) exceeded 0s and was cancelled/);
+    expect(logs.join("\n")).toMatch(/invalid=timeout/);
+    const callsAfter = providerCalls;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(providerCalls).toBe(callsAfter);
+    expect(() => assertNumbersOnly(report, [MODEL, ...TASKS.map((t) => t.id)])).not.toThrow();
+  });
+
+  it("treats a request-level timeout inside the agent loop as a timeout trial too", async () => {
+    const tight = new SpendMeter({ capUsd: HARD_CAP_USD, rates: RATES, ledger: new MemoryLedger(), requestTimeoutMs: 20 });
+    hangWhen(/which AI model/, tight);
+    const report = await runProbe(quick({ meter: tight, trialTimeoutMs: 5000 }));
+    expect(report.trials.find((t) => t.task === "model-identity")).toMatchObject({ valid: false, invalid: "timeout" });
+    expect(tight.timeouts()).toBeGreaterThan(0);
+  });
+
+  it("stops after three consecutive timeouts with the partial numbers", async () => {
+    const big = new SpendMeter({ capUsd: HARD_CAP_USD, rates: RATES, ledger: new MemoryLedger(), requestTimeoutMs: 60_000 });
+    hangWhen(/./, big);
+    const report = await runProbe(quick({ meter: big, tasks: TASKS.slice(0, 6), trialTimeoutMs: 40 }));
+    expect(report.truncated).toBe("trial_timeout");
+    expect(report.trials).toHaveLength(3);
+    expect(report.trials.every((t) => t.invalid === "timeout")).toBe(true);
+  });
+
+  it("logs a STALL WARNING with the trial, task and in-flight request within the warn window", async () => {
+    const big = new SpendMeter({ capUsd: HARD_CAP_USD, rates: RATES, ledger: new MemoryLedger(), requestTimeoutMs: 60_000 });
+    hangWhen(/which AI model/, big);
+    const logs: string[] = [];
+    await runProbe(quick({ meter: big, tasks: two.filter((t) => t.id === "model-identity"), trialTimeoutMs: 400, heartbeatMs: 20, stallWarnMs: 60, log: (line) => logs.push(line) }));
+    const warning = logs.find((line) => line.startsWith("STALL WARNING: "));
+    expect(warning).toMatch(/trial 1 \(task=model-identity arm=baseline rep=1\) running .*1 model request in flight.*abandoned at 0s/);
+    expect(logs.indexOf(warning!)).toBeGreaterThan(0);
+    expect(logs.filter((line) => line.includes("running")).length).toBeGreaterThan(1);
+  });
+
+  it("writes a checkpoint report after every trial, numbers only, and survives a failing writer", async () => {
+    hangWhen(/^$/);
+    vi.mocked(invokeAiResilient).mockImplementation(async (params, request) => meter.wrap(() => ok(params))(params, request));
+    const seen: Report[] = [];
+    const final = await runProbe(quick({ checkpoint: (report) => { seen.push(report); assertNumbersOnly(report, [MODEL, ...TASKS.map((t) => t.id)]); } }));
+    expect(seen.map((r) => r.trials.length)).toEqual([1, 2]);
+    expect(seen.every((r) => r.truncated === "in_progress")).toBe(true);
+    expect(final.truncated).toBe("none");
+    const logs: string[] = [];
+    const survived = await runProbe(quick({ checkpoint: () => { throw new Error("disk full"); }, log: (line) => logs.push(line) }));
+    expect(survived.trials).toHaveLength(2);
+    expect(logs.join("\n")).toMatch(/checkpoint report could not be written \(Error: disk full\)/);
+  });
+
+  it("an operator stop abandons the current trial immediately and reports what finished", async () => {
+    const big = new SpendMeter({ capUsd: HARD_CAP_USD, rates: RATES, ledger: new MemoryLedger(), requestTimeoutMs: 60_000 });
+    hangWhen(/which AI model/, big);
+    const controller = new AbortController();
+    const started = Date.now();
+    const pending = runProbe(quick({ meter: big, trialTimeoutMs: 30_000, stop: controller.signal, tasks: two.filter((t) => t.id === "model-identity") }));
+    setTimeout(() => controller.abort(), 40);
+    const report = await pending;
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(report.truncated).toBe("interrupted");
+    expect(report.trials).toHaveLength(0);
+  });
+
+  it("ends with a report, not an exception, when the session token cannot be refreshed", async () => {
+    const logs: string[] = [];
+    const report = await runProbe(quick({ session: { current: () => JWT, refresh: async () => { throw new Error(`boom ${JWT}`); } }, log: (line) => logs.push(line) }));
+    expect(report.truncated).toBe("session_refresh");
+    expect(report.trials).toHaveLength(0);
+    expect(logs.join("\n")).toMatch(/session token refresh failed \(attempt 2 of 2\)/);
+    expect(logs.join("\n")).not.toContain(JWT);
+  });
+
+  it("keeps completed trials when something unexpected throws mid-run", async () => {
+    vi.mocked(invokeAiResilient).mockImplementation(async (params, request) => meter.wrap(() => ok(params))(params, request));
+    let calls = 0;
+    const report = await runProbe(quick({ telemetry: () => { calls += 1; if (calls === 2) throw new Error("surprise"); return recentTurns(1)[0]; } }));
+    expect(report.truncated).toBe("aborted");
+    expect(report.trials).toHaveLength(1);
+  });
+
+  it("bounds the token command even when exec never settles, and never echoes its output", async () => {
+    const hung = createTokenSource({ ROOK_EVAL_SESSION_TOKEN_CMD: "x" }, () => new Promise<string>(() => undefined), () => 0, 45_000, 30);
+    await expect(hung.refresh()).rejects.toThrow(/did not finish within/);
+    const failing = createTokenSource({ ROOK_EVAL_SESSION_TOKEN_CMD: "x" }, async () => { throw new Error(`Command failed: x ${JWT}`); }, () => 0);
+    await expect(failing.refresh()).rejects.toThrow("The session token command failed.");
+    await expect(failing.refresh()).rejects.not.toThrow(new RegExp(JWT));
+  });
+
+  it("withDeadline rejects a hang and leaves no timer behind on success", async () => {
+    await expect(withDeadline(never(), 20, "too slow")).rejects.toThrow("too slow");
+    vi.useFakeTimers();
+    try {
+      await expect(withDeadline(Promise.resolve(7), 60_000, "too slow")).resolves.toBe(7);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("validates the timeout settings", () => {
+    expect(parseEnvOptions({})).toMatchObject({ trialTimeoutMs: 420_000, requestTimeoutMs: 180_000 });
+    expect(parseEnvOptions({ ROOK_EVAL_TRIAL_TIMEOUT_MS: "60000" })).toMatchObject({ trialTimeoutMs: 60_000, requestTimeoutMs: 60_000 });
+    expect(parseEnvOptions({ ROOK_EVAL_TRIAL_TIMEOUT_MS: "600000", ROOK_EVAL_REQUEST_TIMEOUT_MS: "90000" })).toMatchObject({ trialTimeoutMs: 600_000, requestTimeoutMs: 90_000 });
+    expect(() => parseEnvOptions({ ROOK_EVAL_TRIAL_TIMEOUT_MS: "5" })).toThrow(/ROOK_EVAL_TRIAL_TIMEOUT_MS/);
+    expect(() => parseEnvOptions({ ROOK_EVAL_TRIAL_TIMEOUT_MS: "60000", ROOK_EVAL_REQUEST_TIMEOUT_MS: "120000" })).toThrow(/must not exceed/);
+  });
+});
