@@ -36,6 +36,7 @@ import { AgentActivityTrace } from "@/components/agent-activity-trace";
 import { AiWorkingIndicator } from "@/components/ai-working-indicator";
 import { ComposerConnectorsSheet } from "@/components/composer-connectors-sheet";
 import { ComposerModelPicker } from "@/components/composer-model-picker";
+import { ComposerPermissionPicker } from "@/components/composer-permission-picker";
 import { MobileBotDrawer } from "@/components/mobile-bot-drawer";
 import { RookLogo } from "@/components/rook-logo";
 import {
@@ -2049,6 +2050,7 @@ export default function ChatScreen() {
                         workroom.updateBotModel(activeBot.id, model)
                       }
                     />
+                    <ComposerPermissionPicker />
                   </View>
 
                   <Pressable

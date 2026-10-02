@@ -36,6 +36,7 @@ import type {
 } from "../shared/database";
 import type { WorkroomCloudSnapshot } from "../shared/workroom-snapshot";
 import { ENV } from "./_core/env";
+import { DEFAULT_PERMISSION_LEVEL, parsePermissionLevel, type PermissionLevel } from "../shared/permission-level";
 
 const ROOK_INSTANT_APP_ID = "ed69763d-c8a4-4a28-8bed-c13806f2493d";
 
@@ -252,6 +253,25 @@ export async function getUserByOpenId(
     users: { $: { where: { openId }, limit: 1 } },
   })) as { users: UserRow[] };
   return users[0] ? asUser(users[0]) : undefined;
+}
+
+/** Missing, unknown, or unreadable all resolve to Always ask. */
+export async function getUserPermissionLevel(userId: string): Promise<PermissionLevel> {
+  const database = await getDb();
+  if (!database) return DEFAULT_PERMISSION_LEVEL;
+  const { users } = (await database.query({
+    users: { $: { where: { id: userId }, limit: 1 } },
+  })) as { users: Array<{ permissionLevel?: unknown }> };
+  return parsePermissionLevel(users[0]?.permissionLevel);
+}
+
+export async function setUserPermissionLevel(userId: string, level: PermissionLevel): Promise<boolean> {
+  const database = await getDb();
+  if (!database) return false;
+  await database.transact(
+    database.tx.users[userId].update({ permissionLevel: parsePermissionLevel(level), updatedAt: new Date() }),
+  );
+  return true;
 }
 
 export async function upsertPushDevice(

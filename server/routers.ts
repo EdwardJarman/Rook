@@ -24,11 +24,10 @@ import { transcribeOpenRouterAudio } from "./ai/openrouter";
 import { deleteChatGPTSession } from "./ai/chatgpt";
 import * as db from "./db";
 import { runRookAgent } from "./integrations/excel-agent";
+import { PERMISSION_LEVELS } from "../shared/permission-level";
+import { credentialCeiling, isTokenCredential } from "./integrations/permission-gate";
+import { resolveExcelPendingAction } from "./integrations/approval-resolve";
 import { ForegroundReplay, TURN_ID_PATTERN } from "./ai/foreground-replay";
-import {
-  executeValidatedExcelWrite,
-  type ExcelToolName,
-} from "./integrations/excel-tools";
 import {
   createGithubAuthorizationUrl,
   deleteGithubConnectionForUser,
@@ -66,9 +65,16 @@ export const appRouter = router({
       .input(
         z.object({
           label: z.string().min(1).max(80).optional(),
+          /** Explicit grant for external agents; only a signed-in session may mint one. */
+          permissionGrant: z.enum(PERMISSION_LEVELS).optional(),
         }).optional(),
       )
-      .mutation(({ ctx, input }) => mintCliToken(ctx.user.openId, input?.label)),
+      .mutation(({ ctx, input }) => {
+        if (input?.permissionGrant && isTokenCredential(ctx.req.headers?.authorization)) {
+          throw new Error("A permission grant can only be minted from a signed-in session.");
+        }
+        return mintCliToken(ctx.user.openId, input?.label, input?.permissionGrant);
+      }),
     deviceChallenge: publicProcedure.mutation(() => requestDeviceChallenge()),
     deviceApprove: protectedProcedure
       .input(z.object({ code: z.string().min(4).max(16), label: z.string().min(1).max(80).optional() }))
@@ -76,6 +82,24 @@ export const appRouter = router({
     devicePoll: publicProcedure
       .input(z.object({ code: z.string().min(4).max(16) }))
       .query(({ input }) => pollDeviceChallenge(input.code)),
+  }),
+  permissions: router({
+    get: protectedProcedure.query(async ({ ctx }) => ({
+      level: await db.getUserPermissionLevel(ctx.user.id),
+      ceiling: credentialCeiling(ctx.req.headers?.authorization),
+    })),
+    set: protectedProcedure
+      .input(z.object({ level: z.enum(PERMISSION_LEVELS) }))
+      .mutation(async ({ ctx, input }) => {
+        // Only an explicit action from a signed-in session may change the level.
+        if (isTokenCredential(ctx.req.headers?.authorization)) {
+          throw new Error("Permission levels can only be changed from a signed-in session.");
+        }
+        if (/^(transient|cli):/.test(ctx.user.id)) throw new Error("Your account is not ready yet. Try again shortly.");
+        const saved = await db.setUserPermissionLevel(ctx.user.id, input.level);
+        if (!saved) throw new Error("Could not save your permission level.");
+        return { level: input.level };
+      }),
   }),
   workroom: router({
     reply: protectedProcedure
@@ -347,65 +371,9 @@ export const appRouter = router({
           decision: z.enum(["approve", "decline"]),
         }),
       )
-      .mutation(async ({ ctx, input }) => {
-        const action = await db.claimExcelPendingAction(
-          ctx.user.id,
-          input.actionId,
-        );
-        if (!action)
-          throw new Error(
-            "This Excel action is already being handled or is no longer pending",
-          );
-        if (action.expiresAt.getTime() <= Date.now()) {
-          await db.finishExcelPendingAction(ctx.user.id, action.id, {
-            state: "expired",
-          });
-          throw new Error(
-            "This Excel approval expired. Ask the Bot to prepare it again",
-          );
-        }
-        if (input.decision === "decline") {
-          await db.finishExcelPendingAction(ctx.user.id, action.id, {
-            state: "declined",
-          });
-          return {
-            executed: false,
-            declined: true,
-            summary: action.summary,
-            botId: action.botClientId,
-            taskId: action.taskClientId,
-          };
-        }
-        let result: unknown;
-        try {
-          result = await executeValidatedExcelWrite(
-            ctx.user.id,
-            action.toolName as ExcelToolName,
-            action.arguments as Record<string, unknown>,
-          );
-          await db.finishExcelPendingAction(ctx.user.id, action.id, {
-            state: "executed",
-            result,
-          });
-        } catch (error) {
-          await db.finishExcelPendingAction(ctx.user.id, action.id, {
-            state: "failed",
-            result: {
-              message:
-                error instanceof Error ? error.message : "Excel write failed",
-            },
-          });
-          throw error;
-        }
-        return {
-          executed: true,
-          declined: false,
-          summary: action.summary,
-          result,
-          botId: action.botClientId,
-          taskId: action.taskClientId,
-        };
-      }),
+      .mutation(({ ctx, input }) =>
+        resolveExcelPendingAction(ctx.user.id, input.actionId, input.decision),
+      ),
   }),
   notifications: router({
     register: protectedProcedure

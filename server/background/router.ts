@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
+import * as db from "../db";
+import { credentialCeiling, effectiveLevel } from "../integrations/permission-gate";
 import { backgroundRuntime } from "./service";
 import { JobError } from "./model";
 import type { BackgroundRuntime } from "./runtime";
@@ -41,7 +43,15 @@ export function createBackgroundRouter(runtime: BackgroundRuntime) {
         }),
       )
       .mutation(({ ctx, input }) =>
-        outcome(() => runtime.schedule(ctx.user.id, input)),
+        outcome(async () =>
+          runtime.schedule(ctx.user.id, {
+            ...input,
+            permissionLevel: effectiveLevel(
+              await db.getUserPermissionLevel(ctx.user.id).catch(() => "always_ask" as const),
+              credentialCeiling(ctx.req.headers?.authorization),
+            ),
+          }),
+        ),
       ),
     list: protectedProcedure.query(({ ctx }) =>
       outcome(async () =>

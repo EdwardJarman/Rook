@@ -14,6 +14,8 @@
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 
+import { PERMISSION_LEVELS, type PermissionLevel } from "../shared/permission-level";
+
 export const CLI_TOKEN_PREFIX = "rook_";
 const CLI_TOKEN_TTL_MS = 365 * 24 * 60 * 60 * 1_000;
 
@@ -27,6 +29,8 @@ export type CliTokenClaims = {
   openId: string;
   label: string;
   exp: number;
+  /** Explicit permission-level grant minted from a signed-in session; absent means Always ask. */
+  grant?: PermissionLevel;
 };
 
 const b64urlEncode = (value: string | Buffer): string =>
@@ -35,7 +39,7 @@ const b64urlEncode = (value: string | Buffer): string =>
 const b64urlDecode = (value: string): string =>
   Buffer.from(value, "base64url").toString("utf8");
 
-export function mintCliToken(openId: string, label = "cli"): {
+export function mintCliToken(openId: string, label = "cli", grant?: PermissionLevel): {
   token: string;
   expiresAt: string;
 } {
@@ -48,7 +52,7 @@ export function mintCliToken(openId: string, label = "cli"): {
   const cleanOpenId = openId.trim();
   if (!cleanOpenId) throw new Error("Cannot mint a CLI token without a user identity.");
   const exp = Date.now() + CLI_TOKEN_TTL_MS;
-  const payload = b64urlEncode(JSON.stringify({ o: cleanOpenId, l: label.slice(0, 80), e: exp }));
+  const payload = b64urlEncode(JSON.stringify({ o: cleanOpenId, l: label.slice(0, 80), e: exp, ...(grant && grant !== "always_ask" ? { p: grant } : {}) }));
   const sig = b64urlEncode(createHmac("sha256", secret).update(payload).digest());
   return {
     token: `${CLI_TOKEN_PREFIX}${payload}.${sig}`,
@@ -71,13 +75,14 @@ export function verifyCliToken(token: string | undefined | null): CliTokenClaims
     const a = Buffer.from(sig, "utf8");
     const b = Buffer.from(expected, "utf8");
     if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
-    const claims = JSON.parse(b64urlDecode(payload)) as { o?: unknown; l?: unknown; e?: unknown };
+    const claims = JSON.parse(b64urlDecode(payload)) as { o?: unknown; l?: unknown; e?: unknown; p?: unknown };
     if (typeof claims.o !== "string" || !claims.o || typeof claims.e !== "number") return null;
     if (claims.e <= Date.now()) return null;
     return {
       openId: claims.o,
       label: typeof claims.l === "string" ? claims.l : "cli",
       exp: claims.e,
+      ...(PERMISSION_LEVELS.includes(claims.p as PermissionLevel) ? { grant: claims.p as PermissionLevel } : {}),
     };
   } catch {
     return null;

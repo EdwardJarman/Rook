@@ -32,6 +32,7 @@ const _schema = i.schema({
       createdAt: i.date(),
       updatedAt: i.date(),
       lastSignedIn: i.date(),
+      permissionLevel: i.string().optional(),
     }),
     pushDevices: i.entity({
       installationId: i.string().unique().indexed(),

@@ -197,6 +197,7 @@ export const backgroundRuntime = new BackgroundRuntime({
     return { text: result.text, files: result.files, model: result.model };
   },
   resolve,
+  userLevel: (owner) => db.getUserPermissionLevel(owner),
   notify: async (job) => {
     if (!job.alert) return true;
     const preferences = await db.getNotificationPreferences(job.owner);
