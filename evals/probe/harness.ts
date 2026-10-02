@@ -8,7 +8,7 @@ import type { Request } from "express";
 import { ROOK_AGENT_MAX_ROUNDS } from "../../server/ai/agent-reliability";
 import type { TurnRecord } from "../../server/ai/telemetry";
 import type { RookAgentInput } from "../../server/integrations/excel-agent";
-import { parseBudget, parseRates } from "./meter";
+import { DEFAULT_REQUEST_TIMEOUT_MS, parseBudget, parseRates, TrialScope, trialScope, type MeterActivity } from "./meter";
 import { mean, pairedBootstrap, seededRng, shuffle, verdictFor, wilson, type Interval, type Verdict } from "./stats";
 import type { Task } from "./tasks";
 import { setWorld, probeWorld } from "./world";
@@ -47,8 +47,17 @@ export type TokenSource = { current(): string; refresh(): Promise<void> };
 const JWT = /^[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}$/;
 export const looksLikeJwt = (value: string): boolean => JWT.test(value);
 
-/** Static token, or a command re-run when older than `refreshMs`. Token text is never logged or thrown. */
-export function createTokenSource(env: Record<string, string | undefined>, exec: (command: string) => Promise<string>, now: () => number, refreshMs = 45_000): TokenSource {
+/** Safe to log: messages never contain token text or command output. */
+export class SessionTokenError extends Error {
+  constructor(message: string) { super(message); this.name = "SessionTokenError"; }
+}
+
+/**
+ * Static token, or a command re-run when older than `refreshMs`. Token text is never logged or thrown.
+ * The command is given `commandTimeoutMs` to finish: a promisified `exec` only settles once the child's stdio
+ * closes, so a grandchild holding the pipe would otherwise hang the whole run.
+ */
+export function createTokenSource(env: Record<string, string | undefined>, exec: (command: string) => Promise<string>, now: () => number, refreshMs = 45_000, commandTimeoutMs = 30_000): TokenSource {
   let token = env.ROOK_EVAL_SESSION_TOKEN?.trim() ?? "";
   let fetchedAt = token ? now() : Number.NEGATIVE_INFINITY;
   const command = env.ROOK_EVAL_SESSION_TOKEN_CMD?.trim();
@@ -56,8 +65,17 @@ export function createTokenSource(env: Record<string, string | undefined>, exec:
     current: () => token,
     async refresh() {
       if (!command || now() - fetchedAt < refreshMs) return;
-      const printed = (await exec(command)).trim();
-      if (!looksLikeJwt(printed)) throw new Error("The session token command did not print a JWT.");
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let printed: string;
+      try {
+        printed = (await Promise.race([
+          exec(command),
+          new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new SessionTokenError(`The session token command did not finish within ${Math.round(commandTimeoutMs / 1000)}s.`)), commandTimeoutMs); }),
+        ])).trim();
+      } catch (error) {
+        throw error instanceof SessionTokenError ? error : new SessionTokenError("The session token command failed.");
+      } finally { clearTimeout(timer); }
+      if (!looksLikeJwt(printed)) throw new SessionTokenError("The session token command did not print a JWT.");
       token = printed;
       fetchedAt = now();
     },
@@ -71,7 +89,7 @@ export const sessionRequest = (source: TokenSource): Request => ({
 }) as unknown as Request;
 
 export type RunResult = { text: string; approvals: unknown[]; computerProposals?: unknown[]; requestId: string; error?: string };
-export const INVALID_REASONS = ["exception", "no_telemetry", "fallback_used", "provider_error", "budget"] as const;
+export const INVALID_REASONS = ["exception", "no_telemetry", "fallback_used", "provider_error", "budget", "timeout"] as const;
 export type InvalidReason = (typeof INVALID_REASONS)[number];
 export type Tokens = { input: number | null; cachedInput: number | null; output: number | null; reasoning: number | null };
 export type Trial = {
@@ -90,7 +108,16 @@ export type Trial = {
 export type MeterLike = {
   capUsd: number; ceilingUsd: number;
   spentUsd(): number; remainingUsd(): number; estimatedCharges(): number; tripped(): boolean; clearTrip(): void;
+  /** Requests abandoned for exceeding the request timeout (cumulative). */
+  timeouts?(): number;
+  /** In-flight request state, for the heartbeat. */
+  activity?(): MeterActivity;
 };
+
+export const DEFAULT_TRIAL_TIMEOUT_MS = 420_000;
+export const DEFAULT_HEARTBEAT_MS = 10_000;
+export const DEFAULT_STALL_WARN_MS = 30_000;
+const DEFAULT_CANCEL_GRACE_MS = 2_000;
 
 export type ProbeOptions = {
   model: string; tasks: readonly Task[]; arms: readonly ArmId[]; seed: number;
@@ -106,28 +133,95 @@ export type ProbeOptions = {
   run: (input: RookAgentInput) => Promise<RunResult>;
   telemetry: () => TurnRecord | undefined;
   log?: (line: string) => void;
+  /** Wall-clock bound for one trial. On expiry the trial is cancelled, recorded invalid ("timeout"), and the run continues. */
+  trialTimeoutMs?: number;
+  /** While a trial runs, log a heartbeat this often (0 disables). A line becomes a STALL WARNING after `stallWarnMs` without a finished model request. */
+  heartbeatMs?: number;
+  stallWarnMs?: number;
+  /** How long a cancelled trial gets to unwind before it is abandoned. */
+  cancelGraceMs?: number;
+  /** Called after every trial with the report so far (`truncated: "in_progress"`), so a killed run still leaves numbers. */
+  checkpoint?: (report: Report) => void;
+  /** Operator stop (SIGINT/SIGTERM): the current trial is dropped and the run ends with `truncated: "interrupted"`. */
+  stop?: AbortSignal;
 };
 
 const token = (turn: TurnRecord, key: "input" | "cachedInput" | "output" | "reasoningOutput"): number | null =>
   turn.usage && turn.usage.requests > 0 && turn.usage.unknown[key] === 0 ? (turn.usage.known[key] ?? null) : null;
 
-async function runTrial(o: ProbeOptions, task: Task, arm: ArmId, rep: number): Promise<Trial> {
+const seconds = (ms: number) => `${Math.max(0, Math.round(ms / 1000))}s`;
+
+type Bounded<T> = { kind: "done"; value: T } | { kind: "failed" } | { kind: "timeout"; abandoned: boolean } | { kind: "stopped" };
+
+/** Races a trial against its deadline and the operator stop. Cancels the trial's scope when it loses, then gives it a short grace to unwind. */
+async function boundTrial<T>(running: Promise<T>, scope: TrialScope, timeoutMs: number, graceMs: number, stop: AbortSignal | undefined): Promise<Bounded<T>> {
+  const outcome = running.then((value): Bounded<T> => ({ kind: "done", value }), (): Bounded<T> => ({ kind: "failed" }));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  const expiry = new Promise<Bounded<T>>((resolve) => {
+    timer = setTimeout(() => resolve({ kind: "timeout", abandoned: false }), timeoutMs);
+    if (stop) { onAbort = () => resolve({ kind: "stopped" }); if (stop.aborted) onAbort(); else stop.addEventListener("abort", onAbort, { once: true }); }
+  });
+  try {
+    const first = await Promise.race([outcome, expiry]);
+    if (first.kind === "done" || first.kind === "failed") return first;
+    scope.cancel();
+    let grace: ReturnType<typeof setTimeout> | undefined;
+    const unwound = await Promise.race([outcome.then(() => true), new Promise<false>((resolve) => { grace = setTimeout(() => resolve(false), graceMs); })]);
+    clearTimeout(grace);
+    return first.kind === "timeout" ? { kind: "timeout", abandoned: !unwound } : first;
+  } finally {
+    clearTimeout(timer);
+    if (onAbort) stop?.removeEventListener("abort", onAbort);
+  }
+}
+
+/** Periodic proof of life while a trial runs, so a hang shows up in the log instead of as silence. */
+function startHeartbeat(o: ProbeOptions, label: string, startedAt: number, timeoutMs: number): () => void {
+  const every = o.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
+  if (!o.log || every <= 0) return () => undefined;
+  const warnAfter = o.stallWarnMs ?? DEFAULT_STALL_WARN_MS;
+  const timer = setInterval(() => {
+    const now = Date.now();
+    const activity = o.meter.activity?.();
+    const quiet = now - Math.max(startedAt, activity?.lastCompletionAt ?? 0);
+    const wire = activity ? `; ${activity.inFlight} model request${activity.inFlight === 1 ? "" : "s"} in flight${activity.inFlight ? ` (oldest ${seconds(activity.oldestInFlightMs)})` : ""}` : "";
+    o.log!(`${quiet >= warnAfter ? "STALL WARNING: " : ""}${label} running ${seconds(now - startedAt)}, no model request has finished for ${seconds(quiet)}${wire}; abandoned at ${seconds(timeoutMs)}`);
+  }, every);
+  (timer as { unref?: () => void }).unref?.();
+  return () => clearInterval(timer);
+}
+
+async function runTrial(o: ProbeOptions, task: Task, arm: ArmId, rep: number, number: number): Promise<Trial> {
   setWorld(task.world);
   const blank = { requests: 0, toolCalls: 0, toolErrors: 0, invalidArguments: 0, skippedCalls: 0, loadToolsCalls: 0, approvals: 0,
     tokens: { input: null, cachedInput: null, output: null, reasoning: null }, latencyMs: 0, answerChars: 0, costUsd: 0, costEstimated: false, firstRequestChars: 0 };
-  const spentBefore = o.meter.spentUsd(), estimatedBefore = o.meter.estimatedCharges();
+  const spentBefore = o.meter.spentUsd(), estimatedBefore = o.meter.estimatedCharges(), timeoutsBefore = o.meter.timeouts?.() ?? 0;
   const invalid = (reason: InvalidReason, extra: Partial<Trial> = {}): Trial => ({ task: task.id, arm, rep, valid: false, invalid: reason,
     success: false, checksPassed: 0, checksTotal: task.checks.length, ...blank, ...extra });
   let result: RunResult;
   const settle = (): Pick<Trial, "costUsd" | "costEstimated"> => ({ costUsd: o.meter.spentUsd() - spentBefore, costEstimated: o.meter.estimatedCharges() > estimatedBefore });
+  const timeoutMs = o.trialTimeoutMs ?? DEFAULT_TRIAL_TIMEOUT_MS;
+  const startedAt = Date.now();
+  const stopBeat = startHeartbeat(o, `trial ${number} (task=${task.id} arm=${arm} rep=${rep})`, startedAt, timeoutMs);
+  const scope = new TrialScope();
   try {
-    result = await o.run({ userId: "eval-user", botId: `eval-${task.id}`, taskId: `eval-${task.id}-${arm}-${rep}`, botName: "Scout",
+    const running = trialScope.run(scope, () => o.run({ userId: "eval-user", botId: `eval-${task.id}`, taskId: `eval-${task.id}-${arm}-${rep}`, botName: "Scout",
       botRole: "Helpful teammate", botPurpose: "Help the user get their work done.", model: o.model, message: task.message,
       userTimeZone: "UTC", recentContext: task.recentContext ?? [], ...(task.disallowedTools ? { disallowedTools: task.disallowedTools } : {}),
-      request: sessionRequest(o.session), variants: { ...ARM_FLAGS[arm] } });
-  } catch {
-    return o.meter.tripped() ? invalid("budget", settle()) : invalid("exception", settle());
+      request: sessionRequest(o.session), variants: { ...ARM_FLAGS[arm] } }));
+    const bounded = await boundTrial(running, scope, timeoutMs, o.cancelGraceMs ?? DEFAULT_CANCEL_GRACE_MS, o.stop);
+    if (bounded.kind === "timeout") {
+      o.log?.(`trial ${number} (task=${task.id} arm=${arm} rep=${rep}) exceeded ${seconds(timeoutMs)} and was cancelled${bounded.abandoned ? "; it did not unwind and is abandoned" : ""}; recorded invalid (timeout)`);
+      return invalid("timeout", settle());
+    }
+    if (bounded.kind === "stopped") return invalid("exception", settle());
+    if (bounded.kind === "failed") return o.meter.tripped() ? invalid("budget", settle()) : (o.meter.timeouts?.() ?? 0) > timeoutsBefore ? invalid("timeout", settle()) : invalid("exception", settle());
+    result = bounded.value;
+  } finally {
+    stopBeat();
   }
+  if ((o.meter.timeouts?.() ?? 0) > timeoutsBefore) return invalid("timeout", settle());
   if (o.meter.tripped()) return invalid("budget", settle());
   const turn = o.telemetry();
   if (!turn || turn.requestId !== result.requestId) return invalid("no_telemetry", settle());
@@ -151,7 +245,7 @@ async function runTrial(o: ProbeOptions, task: Task, arm: ArmId, rep: number): P
   return { task: task.id, arm, rep, valid: true, invalid: null, success: passed === task.checks.length, checksPassed: passed, checksTotal: task.checks.length, ...measured };
 }
 
-export type Truncation = "none" | "request_cap" | "provider_failures" | "invalid_rate" | "budget_cap";
+export type Truncation = "none" | "request_cap" | "provider_failures" | "invalid_rate" | "budget_cap" | "trial_timeout" | "interrupted" | "session_refresh" | "aborted" | "in_progress";
 export const METRICS = ["success", "requests", "toolCalls", "toolErrors", "inputTokens", "outputTokens", "latencyMs", "costUsd"] as const;
 export type MetricName = (typeof METRICS)[number];
 const metricOf = (trial: Trial, metric: MetricName): number | null => {
@@ -358,7 +452,7 @@ export const REPORT_LABELS = [...ESCALATION_REASONS, ...SCOREBOARD_REASONS, "shi
 
 /** Throws unless every string in the report is a known label. Keys and numbers are checked for shape. */
 export function assertNumbersOnly(report: unknown, labels: Iterable<string>): void {
-  const allowed = new Set([...labels, ...REPORT_LABELS, "rook-probe-report", ...Object.keys(ARM_FLAGS), ...INVALID_REASONS, "none", "request_cap", "provider_failures", "invalid_rate", "budget_cap",
+  const allowed = new Set([...labels, ...REPORT_LABELS, "rook-probe-report", ...Object.keys(ARM_FLAGS), ...INVALID_REASONS, "none", "request_cap", "provider_failures", "invalid_rate", "budget_cap", "trial_timeout", "interrupted", "session_refresh", "aborted", "in_progress",
     "kill", "inconclusive", "pass", "insufficient"]);
   const walk = (value: unknown, path: string): void => {
     if (value === null || typeof value === "boolean") return;
@@ -377,6 +471,16 @@ export function assertNumbersOnly(report: unknown, labels: Iterable<string>): vo
   walk(report, "report");
 }
 
+/** Rejects with `message` if `work` has not settled within `ms`; the timer never outlives the race. */
+export async function withDeadline<T>(work: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([work, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(message)), ms); })]);
+  } finally { clearTimeout(timer); }
+}
+
+const safeMessage = (error: unknown): string => error instanceof SessionTokenError ? error.message : `${error instanceof Error ? error.name : "Error"}: ${error instanceof Error ? error.message : "unknown"}`.slice(0, 200);
+
 export async function runProbe(o: ProbeOptions): Promise<Report> {
   const maxReps = Math.max(o.reps, o.maxReps ?? o.reps);
   const decide = o.decide ?? decideEscalation;
@@ -389,47 +493,72 @@ export async function runProbe(o: ProbeOptions): Promise<Report> {
   const meta = (): ReportMeta => ({ model: o.model, seed: o.seed, reps: o.reps, maxReps, tasks: o.tasks.length, requestsUsed, truncated, margin: o.margin, minPairs: o.minPairs,
     budget: { capUsd: o.meter.capUsd, ceilingUsd: o.meter.ceilingUsd, spentUsd: o.meter.spentUsd(), runSpentUsd: o.meter.spentUsd() - startSpend, estimatedCharges: o.meter.estimatedCharges() }, escalation });
 
+  const checkpoint = () => {
+    if (!o.checkpoint) return;
+    try { o.checkpoint(buildReport([...trials], { ...meta(), truncated: "in_progress" })); } catch (error) { o.log?.(`checkpoint report could not be written (${safeMessage(error)})`); }
+  };
+  /** A refresh that keeps failing ends the run with a report instead of an exception. */
+  const refreshSession = async (): Promise<boolean> => {
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try { await o.session.refresh(); return true; } catch (error) { o.log?.(`session token refresh failed (attempt ${attempt} of 2): ${error instanceof SessionTokenError ? error.message : "unexpected error"}`); }
+    }
+    return false;
+  };
+
   const runReps = async (from: number, to: number): Promise<void> => {
     for (let rep = from; rep <= to && truncated === "none"; rep += 1) {
       // Each repetition is shuffled from its own seed, so a rep's order never depends on how many reps were planned.
       const rng = seededRng(o.seed + rep * 7919);
       const schedule = shuffle(o.tasks, rng).flatMap((task) => shuffle(arms, rng).map((arm) => ({ task, arm })));
       for (const item of schedule) {
+        if (o.stop?.aborted) { truncated = "interrupted"; return; }
         const valid = trials.filter((t) => t.valid);
         const typical = valid.length ? mean(valid.map((t) => t.costUsd)) : 0;
         if (requestsUsed + ROOK_AGENT_MAX_ROUNDS > o.maxRequests) { truncated = "request_cap"; return; }
         if (o.meter.remainingUsd() < typical * 1.5) { truncated = "budget_cap"; return; }
-        await o.session.refresh();
-        const trial = await runTrial(o, item.task, item.arm, rep);
+        if (!(await refreshSession())) { truncated = "session_refresh"; return; }
+        const trial = await runTrial(o, item.task, item.arm, rep, trials.length + 1);
+        if (o.stop?.aborted) { truncated = "interrupted"; return; }
         trials.push(trial);
         requestsUsed += trial.requests;
         const hitBudget = o.meter.tripped(); o.meter.clearTrip();
-        infraStreak = trial.invalid === "provider_error" || trial.invalid === "exception" ? infraStreak + 1 : 0;
-        o.log?.(`trial ${trials.length} rep=${rep} arm=${item.arm} valid=${trial.valid} success=${trial.success} spent=$${o.meter.spentUsd().toFixed(2)}/$${o.meter.capUsd}`);
+        infraStreak = trial.invalid === "provider_error" || trial.invalid === "exception" || trial.invalid === "timeout" ? infraStreak + 1 : 0;
+        o.log?.(`trial ${trials.length} task=${item.task.id} rep=${rep} arm=${item.arm} valid=${trial.valid}${trial.invalid ? ` invalid=${trial.invalid}` : ""} success=${trial.success} spent=$${o.meter.spentUsd().toFixed(2)}/$${o.meter.capUsd}`);
+        checkpoint();
         if (hitBudget) { truncated = "budget_cap"; return; }
-        if (infraStreak >= 3) { truncated = "provider_failures"; return; }
+        if (infraStreak >= 3) { truncated = trial.invalid === "timeout" ? "trial_timeout" : "provider_failures"; return; }
         if (trials.length >= 10 && trials.filter((t) => !t.valid).length / trials.length > o.maxInvalidRate) { truncated = "invalid_rate"; return; }
         await o.sleep(o.minIntervalMs * (infraStreak ? 10 : 1));
       }
     }
   };
 
-  await runReps(1, o.reps);
-  if (maxReps > o.reps) {
-    const interim = buildReport(trials, meta());
-    const valid = trials.filter((t) => t.valid);
-    escalation = decide({ enabled: true, truncated, repsRun: o.reps, maxReps, margin: o.margin, minPairs: o.minPairs, tasks: o.tasks.length,
-      noise: interim.noise?.success,
-      variants: interim.scoreboard.map((row) => ({ arm: row.arm, verdict: row.verdict, diff: row.successDiff, disagreement: disagreement(trials, row.arm, "baseline", exposedKeys(trials, row.arm)) })),
-      costPerTrialUsd: valid.length ? mean(valid.map((t) => t.costUsd)) : 0, armsInNextPhase: (resolvable) => resolvable.length + 2, remainingUsd: o.meter.remainingUsd() });
-    o.log?.(`escalation: ${escalation.decision} (${escalation.reason})`);
-    if (escalation.decision === "go") {
-      const next: ArmId[] = ["baseline", "baseline_repeat", ...escalation.resolvableArms];
-      arms = next.filter((arm) => o.arms.includes(arm));
-      await runReps(o.reps + 1, maxReps);
-    }
+  try {
+    await runPhases();
+  } catch (error) {
+    // Whatever went wrong, the trials already run are worth keeping.
+    truncated = "aborted";
+    o.log?.(`probe stopped by an unexpected error (${safeMessage(error)}); reporting the ${trials.length} completed trials`);
   }
   return buildReport(trials, meta());
+
+  async function runPhases(): Promise<void> {
+    await runReps(1, o.reps);
+    if (maxReps > o.reps) {
+      const interim = buildReport(trials, meta());
+      const valid = trials.filter((t) => t.valid);
+      escalation = decide({ enabled: true, truncated, repsRun: o.reps, maxReps, margin: o.margin, minPairs: o.minPairs, tasks: o.tasks.length,
+        noise: interim.noise?.success,
+        variants: interim.scoreboard.map((row) => ({ arm: row.arm, verdict: row.verdict, diff: row.successDiff, disagreement: disagreement(trials, row.arm, "baseline", exposedKeys(trials, row.arm)) })),
+        costPerTrialUsd: valid.length ? mean(valid.map((t) => t.costUsd)) : 0, armsInNextPhase: (resolvable) => resolvable.length + 2, remainingUsd: o.meter.remainingUsd() });
+      o.log?.(`escalation: ${escalation.decision} (${escalation.reason})`);
+      if (escalation.decision === "go") {
+        const next: ArmId[] = ["baseline", "baseline_repeat", ...escalation.resolvableArms];
+        arms = next.filter((arm) => o.arms.includes(arm));
+        await runReps(o.reps + 1, maxReps);
+      }
+    }
+  }
 }
 
 const pct = (value: number) => `${(value * 100).toFixed(0)}%`;
@@ -461,7 +590,7 @@ export function renderSummary(report: Report): string {
   return lines.join("\n");
 }
 
-export type EnvOptions = { model: string; arms: ArmId[]; reps: number; maxReps: number; seed: number; maxRequests: number; minIntervalMs: number; taskIds: string[] | null; out: string | null; ledger: string | null };
+export type EnvOptions = { model: string; arms: ArmId[]; reps: number; maxReps: number; seed: number; maxRequests: number; minIntervalMs: number; trialTimeoutMs: number; requestTimeoutMs: number; taskIds: string[] | null; out: string | null; ledger: string | null };
 
 /** Validated ROOK_EVAL_* settings. Throws with the variable name, never a value. */
 export function parseEnvOptions(env: Record<string, string | undefined>): EnvOptions {
@@ -488,7 +617,10 @@ export function parseEnvOptions(env: Record<string, string | undefined>): EnvOpt
   if (escalate !== "auto" && escalate !== "off") throw new Error("ROOK_EVAL_ESCALATE must be auto or off.");
   const reps = int("ROOK_EVAL_REPS", 5, 1, 20);
   const maxReps = escalate === "off" ? reps : int("ROOK_EVAL_MAX_REPS", 10, reps, 20);
-  return { model: env.ROOK_EVAL_MODEL?.trim() ?? "", arms, reps, maxReps, seed: int("ROOK_EVAL_SEED", 20260930, 0, 2 ** 31),
+  const trialTimeoutMs = int("ROOK_EVAL_TRIAL_TIMEOUT_MS", DEFAULT_TRIAL_TIMEOUT_MS, 10_000, 3_600_000);
+  const requestTimeoutMs = int("ROOK_EVAL_REQUEST_TIMEOUT_MS", Math.min(DEFAULT_REQUEST_TIMEOUT_MS, trialTimeoutMs), 5_000, 3_600_000);
+  if (requestTimeoutMs > trialTimeoutMs) throw new Error("ROOK_EVAL_REQUEST_TIMEOUT_MS must not exceed ROOK_EVAL_TRIAL_TIMEOUT_MS.");
+  return { model: env.ROOK_EVAL_MODEL?.trim() ?? "", arms, reps, maxReps, trialTimeoutMs, requestTimeoutMs, seed: int("ROOK_EVAL_SEED", 20260930, 0, 2 ** 31),
     maxRequests: int("ROOK_EVAL_MAX_REQUESTS", 3000, 6, 20_000), minIntervalMs: int("ROOK_EVAL_MIN_INTERVAL_MS", 1500, 0, 60_000),
     taskIds: list("ROOK_EVAL_TASKS"), out: path("ROOK_EVAL_OUT"), ledger: path("ROOK_EVAL_LEDGER") };
 }
