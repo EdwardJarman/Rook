@@ -1,0 +1,109 @@
+:root {
+  --rook-font: -apple-system, BlinkMacSystemFont, "Segoe UI", "SF Pro Text",
+    Roboto, Helvetica, Arial, sans-serif;
+  --rook-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    monospace;
+  --sidebar-width: 248px;
+  --rail-width: 64px;
+  --titlebar-height: 36px;
+  --shell-radius: 18px;
+  --shell-shadow: 0 1px 0 rgba(0, 0, 0, 0.02), 0 14px 36px rgba(16, 18, 24, 0.06);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  background: var(--rook-canvas);
+  color: var(--rook-text);
+  font-family: var(--rook-font);
+  font-size: 14px;
+  line-height: 1.5;
+  overflow: hidden;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+a {
+  color: var(--rook-accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--rook-line-strong);
+  border-radius: 999px;
+  border: 2px solid var(--rook-canvas);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+input,
+textarea,
+select {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--rook-placeholder);
+}
+
+:focus-visible {
+  outline: 2px solid var(--rook-focus);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+code,
+pre,
+.mono {
+  font-family: var(--rook-mono);
+}
+
+/* Drag region for the Tauri title bar — only the top strip is draggable so
+   that nav buttons and the rest of the UI remain interactive. */
+.titlebar {
+  -webkit-app-region: drag;
+  height: var(--titlebar-height);
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--rook-line);
+  background: var(--rook-surface);
+  user-select: none;
+}
+
+.titlebar button,
+.titlebar .no-drag {
+  -webkit-app-region: no-drag;
+}

@@ -6,7 +6,7 @@ export type RookAuthUser = {
   openId: string;
   name: string | null;
   email: string | null;
-  loginMethod: "clerk" | "google" | "github";
+  loginMethod: "clerk" | "google" | "github" | "apple";
   lastSignedIn: Date;
 };
 
@@ -20,12 +20,24 @@ export function useAuth() {
 
   const user = useMemo<RookAuthUser | null>(() => {
     if (!isSignedIn || !clerkUser) return null;
+    // Detect the OAuth provider the user actually signed in with so the UI can
+    // show "Google" / "GitHub" / "Apple" instead of falling back to "Clerk".
+    let loginMethod: RookAuthUser["loginMethod"] = "clerk";
+    const externalProvider = clerkUser.externalAccounts?.find(
+      (account) => account.verification?.status === "verified",
+    );
+    if (externalProvider) {
+      const provider = externalProvider.provider.toLowerCase();
+      if (provider.includes("google")) loginMethod = "google";
+      else if (provider.includes("github")) loginMethod = "github";
+      else if (provider.includes("apple")) loginMethod = "apple";
+    }
     return {
       id: `clerk:${clerkUser.id}`,
       openId: `clerk:${clerkUser.id}`,
       name: clerkUser.fullName || clerkUser.username || null,
       email: clerkUser.primaryEmailAddress?.emailAddress ?? null,
-      loginMethod: "clerk",
+      loginMethod,
       lastSignedIn: new Date(clerkUser.lastSignInAt ?? Date.now()),
     };
   }, [clerkUser, isSignedIn]);

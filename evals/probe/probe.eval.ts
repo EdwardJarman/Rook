@@ -1,0 +1,93 @@
+/**
+ * Operator entry point. Run locally with `pnpm eval:probe` (see docs/eval-probe.md).
+ * It sends real requests through the existing authenticated ChatGPT session
+ * path using the operator's own plan; connector backends are stubbed. It is
+ * skipped unless ROOK_EVAL_CONFIRM=run, and writes a numbers-only report.
+ */
+import { describe, expect, it, vi } from "vitest";
+import { exec } from "node:child_process";
+import { mkdirSync, rmSync, renameSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
+
+vi.hoisted(() => {
+  // Retained tool outputs go to a throwaway directory for this run only.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  process.env.ROOK_TOOL_OUTPUT_DIR = require("node:fs").mkdtempSync(require("node:path").join(require("node:os").tmpdir(), "rook-probe-output-"));
+});
+vi.mock("../../server/db", async () => (await import("./mocks")).db());
+vi.mock("../../server/integrations/excel-tools", async (original) => (await import("./mocks")).excelTools(await original()));
+vi.mock("../../server/integrations/github-tools", async (original) => (await import("./mocks")).githubTools(await original()));
+vi.mock("../../server/integrations/computer-tools", async (original) => (await import("./mocks")).computerTools(await original()));
+vi.mock("../../server/integrations/microsoft-excel", async (original) => (await import("./mocks")).microsoftExcel(await original()));
+vi.mock("../../server/integrations/github", async (original) => (await import("./mocks")).github(await original()));
+vi.mock("../../server/integrations/cloud-computer", async (original) => (await import("./mocks")).cloudComputer(await original()));
+vi.mock("../../server/integrations/web-research", async () => (await import("./mocks")).webResearch());
+vi.mock("../../server/integrations/agent-tool-executor", async (original) => (await import("./mocks")).agentToolExecutor(await original()));
+// Every model request of the probe goes through the spend meter; with none installed the router refuses to call out.
+vi.mock("../../server/ai/fallback-router", async (original) => {
+  const actual = await original<typeof import("../../server/ai/fallback-router")>();
+  const { meteredInvoke } = await import("./meter");
+  return { ...actual, invokeAiResilient: meteredInvoke(actual.invokeAiResilient) };
+});
+
+import { FileLedger, meterHolder, parseBudget, parseRates, SpendMeter } from "./meter";
+import { assertNumbersOnly, createTokenSource, looksLikeJwt, parseEnvOptions, preflightProblems, renderSummary, runProbe, sessionRequest, withDeadline, type Report } from "./harness";
+import { TASKS } from "./tasks";
+
+const shell = promisify(exec);
+
+describe.skipIf(process.env.ROOK_EVAL_CONFIRM !== "run")("probe (real ChatGPT session)", () => {
+  it("runs the arms and writes a numbers-only report", async () => {
+    const env = process.env;
+    const options = parseEnvOptions(env);
+    const problems = preflightProblems(env, options.model);
+    if (problems.length) throw new Error(`The probe cannot start:\n- ${problems.join("\n- ")}`);
+
+    const session = createTokenSource(env, async (command) => (await shell(command, { timeout: 20_000 })).stdout, Date.now);
+    await session.refresh();
+    if (!looksLikeJwt(session.current())) throw new Error("ROOK_EVAL_SESSION_TOKEN is not a JWT.");
+    const { listChatGPTModels } = await import("../../server/ai/chatgpt");
+    const models = await withDeadline(listChatGPTModels(sessionRequest(session)), 60_000, "Listing ChatGPT models took longer than 60s; check the network and the session token.");
+    if (!models.length) throw new Error("Could not list ChatGPT models. The session token or CLERK_SECRET_KEY is wrong, or ChatGPT is not connected for this user.");
+    if (!models.some((model) => model.id === options.model)) throw new Error(`ROOK_EVAL_MODEL is not in your ChatGPT model list. Available: ${models.map((model) => model.id).join(", ")}`);
+
+    const tasks = options.taskIds ? TASKS.filter((task) => options.taskIds!.includes(task.id)) : TASKS;
+    if (!tasks.length) throw new Error("ROOK_EVAL_TASKS matched no task.");
+    const folder = path.join(process.cwd(), ".cache", "harness-evaluation");
+    mkdirSync(folder, { recursive: true });
+    const meter = new SpendMeter({ capUsd: parseBudget(env), rates: parseRates(env), ledger: new FileLedger(options.ledger ?? path.join(folder, "probe-spend.json")), requestTimeoutMs: options.requestTimeoutMs });
+    meterHolder.current = meter;
+    if (meter.remainingUsd() <= 0) throw new Error("The spend ledger already reaches the cap. Raise nothing: delete the ledger deliberately only if you know it is stale.");
+    const { runRookAgent } = await import("../../server/integrations/excel-agent");
+    const { recentTurns } = await import("../../server/ai/telemetry");
+    // The report file is rewritten after every trial, so a kill, crash or hang still leaves the numbers so far.
+    const file = options.out ?? path.join(folder, `probe-${new Date().toISOString().replace(/[:.]/g, "-")}.json`);
+    const labels = [options.model, ...TASKS.map((task) => task.id)];
+    const save = (report: Report) => { assertNumbersOnly(report, labels); writeFileSync(`${file}.tmp`, JSON.stringify(report, null, 2)); renameSync(`${file}.tmp`, file); };
+    console.info(`report file (updated after every trial): ${file}`);
+
+    // First Ctrl-C / SIGTERM stops cleanly at the trial boundary and writes the report; a second one kills the process.
+    const stop = new AbortController();
+    const onSignal = () => { console.info("stop requested: abandoning the current trial and writing the partial report"); stop.abort(); };
+    process.once("SIGINT", onSignal); process.once("SIGTERM", onSignal);
+    let report: Report;
+    try {
+      report = await runProbe({ model: options.model, tasks, arms: options.arms, reps: options.reps, maxReps: options.maxReps, seed: options.seed, meter,
+        maxRequests: options.maxRequests, minIntervalMs: options.minIntervalMs, maxInvalidRate: 0.2, margin: 0.05, minPairs: 30,
+        trialTimeoutMs: options.trialTimeoutMs, checkpoint: save, stop: stop.signal,
+        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)), session, run: runRookAgent, telemetry: () => recentTurns(1)[0],
+        log: (line) => console.info(line) });
+    } finally {
+      process.off("SIGINT", onSignal); process.off("SIGTERM", onSignal);
+    }
+
+    save(report);
+    if (report.truncated !== "none") console.info(`\nRUN INCOMPLETE (truncated=${report.truncated}): the report covers ${report.trials.length} trials only.`);
+    console.info(`\n${renderSummary(report)}\n\nNumbers-only report: ${file}`);
+    const dir = process.env.ROOK_TOOL_OUTPUT_DIR;
+    if (dir && path.basename(dir).startsWith("rook-probe-output-") && path.dirname(dir) === path.resolve(os.tmpdir())) rmSync(dir, { recursive: true, force: true });
+    expect(report.trials.length).toBeGreaterThan(0);
+  });
+});

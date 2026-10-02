@@ -1,7 +1,8 @@
 import { createClerkClient, verifyToken } from "@clerk/backend";
 import type { Request } from "express";
 
-import type { User } from "../drizzle/schema";
+import type { User } from "../shared/database";
+import { CLI_TOKEN_PREFIX, verifyCliToken } from "./cli-tokens";
 import * as db from "./db";
 
 export function extractClerkBearerToken(value: string | undefined): string | null {
@@ -14,10 +15,65 @@ export function clerkOpenId(clerkUserId: string): string {
   return `clerk:${clerkUserId}`;
 }
 
+export function transientClerkUser(input: {
+  clerkUserId: string;
+  name: string | null;
+  email: string | null;
+}): User {
+  const now = new Date();
+  return {
+    id: `transient:${clerkOpenId(input.clerkUserId)}`,
+    openId: clerkOpenId(input.clerkUserId),
+    name: input.name,
+    email: input.email,
+    loginMethod: "clerk",
+    role: "user",
+    createdAt: now,
+    updatedAt: now,
+    lastSignedIn: now,
+  };
+}
+
+/**
+ * Rook CLI API tokens (`rook_…`, minted via `auth.createCliToken`).
+ * Same User shape as Clerk auth; the openId is embedded at mint time.
+ */
+export async function authenticateCliToken(token: string): Promise<User | null> {
+  const claims = verifyCliToken(token);
+  if (!claims) return null;
+  try {
+    const storedUser = await db.getUserByOpenId(claims.openId);
+    if (storedUser) return storedUser;
+  } catch {
+    // Database down: fall through to the transient user below.
+  }
+  const now = new Date();
+  return {
+    id: `cli:${claims.openId}`,
+    openId: claims.openId,
+    name: "CLI",
+    email: null,
+    loginMethod: "cli",
+    role: "user",
+    createdAt: now,
+    updatedAt: now,
+    lastSignedIn: now,
+  };
+}
+
 export async function authenticateClerkRequest(request: Request): Promise<User | null> {
   const secretKey = process.env.CLERK_SECRET_KEY;
   const token = extractClerkBearerToken(request.header("authorization"));
-  if (!secretKey || !token) return null;
+  if (token?.startsWith(CLI_TOKEN_PREFIX)) {
+    return authenticateCliToken(token);
+  }
+  if (!secretKey || !token) {
+    console.warn("[Clerk auth] Request rejected", {
+      hasSecretKey: Boolean(secretKey),
+      hasBearerToken: Boolean(token),
+    });
+    return null;
+  }
 
   try {
     const claims = await verifyToken(token, { secretKey });
@@ -30,6 +86,7 @@ export async function authenticateClerkRequest(request: Request): Promise<User |
     )?.emailAddress ?? clerkUser.emailAddresses[0]?.emailAddress ?? null;
     const name = [clerkUser.firstName, clerkUser.lastName].filter(Boolean).join(" ") || null;
     const openId = clerkOpenId(claims.sub);
+    const transientUser = transientClerkUser({ clerkUserId: claims.sub, name, email });
 
     await db.upsertUser({
       openId,
@@ -39,8 +96,15 @@ export async function authenticateClerkRequest(request: Request): Promise<User |
       lastSignedIn: new Date(),
     });
 
-    return (await db.getUserByOpenId(openId)) ?? null;
-  } catch {
+    const storedUser = await db.getUserByOpenId(openId);
+    if (storedUser) return storedUser;
+
+    console.warn("[Clerk auth] Database unavailable; using transient authenticated user");
+    return transientUser;
+  } catch (error) {
+    console.warn("[Clerk auth] Token verification failed", {
+      errorName: error instanceof Error ? error.name : "UnknownError",
+    });
     return null;
   }
 }
