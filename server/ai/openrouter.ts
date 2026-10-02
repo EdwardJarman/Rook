@@ -381,6 +381,11 @@ export async function invokeOpenRouter(
   if (params.thinking) payload.thinking = params.thinking;
 
   let response: Response | undefined;
+  let result: (InvokeResult & {
+    choices?: Array<{
+      message?: { tool_calls?: ToolCall[] };
+    }>;
+  }) | undefined;
   let lastNetworkError: unknown;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
@@ -402,7 +407,27 @@ export async function invokeOpenRouter(
       );
       continue;
     }
-    if (response.ok || ![429, 500, 502, 503, 504].includes(response.status) || attempt === 2)
+    if (response.ok) {
+      // Gateways can return an HTML/plain-text error with a 2xx status. Parse
+      // through accounting so the failed attempt is recorded, then retry
+      // rather than exposing a JSON parser exception in chat.
+      try {
+        result = (await readModelJson<InvokeResult>(response)) as InvokeResult & {
+          choices?: Array<{ message?: { tool_calls?: ToolCall[] } }>;
+        };
+        break;
+      } catch {
+        lastNetworkError = new Error("unreadable provider response");
+        response = undefined;
+        if (attempt === 2) break;
+        const backoff = Math.min(500 * 2 ** attempt, 4000);
+        await new Promise((resolve) =>
+          setTimeout(resolve, backoff / 2 + Math.random() * (backoff / 2)),
+        );
+        continue;
+      }
+    }
+    if (![429, 500, 502, 503, 504].includes(response.status) || attempt === 2)
       break;
     const rawRetryAfter = Number(response.headers.get("retry-after") || "0");
     const retryAfter = Math.min(Math.max(Number.isFinite(rawRetryAfter) ? rawRetryAfter : 0, 0) * 1000, 8000);
@@ -415,6 +440,9 @@ export async function invokeOpenRouter(
 
   if (!response) {
     throw new Error(
+      lastNetworkError instanceof Error && /unreadable provider response/i.test(lastNetworkError.message)
+        ? "The AI provider returned an unreadable response. Please try again."
+        :
       lastNetworkError instanceof Error && /timed out|timeout|abort/i.test(lastNetworkError.message)
         ? "The AI request timed out before finishing. Please try again."
         : "The AI network request failed before reaching OpenRouter. Please try again.",
@@ -454,11 +482,15 @@ export async function invokeOpenRouter(
     }
   }
 
-  const result = (await readModelJson<InvokeResult>(response)) as InvokeResult & {
-    choices?: Array<{
-      message?: { tool_calls?: ToolCall[] };
-    }>;
-  };
+  if (!result) {
+    try {
+      result = (await readModelJson<InvokeResult>(response)) as InvokeResult & {
+        choices?: Array<{ message?: { tool_calls?: ToolCall[] } }>;
+      };
+    } catch {
+      throw new Error("The AI provider returned an unreadable response. Please try again.");
+    }
+  }
   if (!result.choices?.length)
     throw new Error("The selected free model did not return a response.");
   const firstMessage = result.choices[0]?.message;
