@@ -11,6 +11,7 @@ import {
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { systemRouter } from "./_core/systemRouter";
 import { getAiBackendStatus, listAiModels } from "./ai";
+import { modelHealth } from "./ai/model-health";
 import { listSkills } from "./ai/skills";
 import { AgentLoopStop } from "./ai/agent-reliability";
 import { mintCliToken } from "./cli-tokens";
@@ -245,6 +246,7 @@ export const appRouter = router({
         stats: turnStats(),
         taskUsage: taskUsageStats(),
         toolUsage: toolStats(),
+        modelHealth: modelHealth.snapshot(),
       })),
   }),
   voice: router({

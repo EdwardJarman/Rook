@@ -219,6 +219,7 @@ export default function ChatScreen() {
     const selected = models.find(
       (model) =>
         model.id === canonical &&
+        !model.unavailable &&
         modelMatchesProvider(model.id, activeProvider),
     );
     if (selected) return selected;

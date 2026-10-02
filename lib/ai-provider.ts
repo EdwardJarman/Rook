@@ -10,6 +10,8 @@ export type AiModelSummary = {
   name: string;
   provider: string;
   automatic: boolean;
+  /** The provider rejected this model for the account: shown disabled, never auto-selected. */
+  unavailable?: boolean;
 };
 
 const PREFIXES: Record<Exclude<AiProvider, "openrouter">, string> = {
@@ -72,7 +74,7 @@ export const defaultModelForProvider = <T extends AiModelSummary>(
   models: T[],
   provider: AiProvider,
 ) => {
-  const available = modelsForProvider(models, provider);
+  const available = modelsForProvider(models, provider).filter((model) => !model.unavailable);
   if (provider === "openrouter") {
     return (
       available.find((model) => model.id === "openrouter/free") ??

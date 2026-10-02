@@ -2,6 +2,7 @@ import type { InvokeResult, Message, Tool } from "../_core/llm";
 import type { Request } from "express";
 import { randomUUID } from "node:crypto";
 import { invokeAiResilient } from "../ai/fallback-router";
+import { describeErrorForLog, fallbackTraceStep } from "../ai/provider-error";
 import { collectOpenCodeFiles } from "../ai/opencode";
 import {
   SKILL_TOOLS,
@@ -567,6 +568,8 @@ async function runAccountedAgent(input: RookAgentInput) {
       response = invoked.result;
       attemptedProviders = invoked.attemptedProviders;
       fellBackToAuto = fellBackToAuto || invoked.fellBack;
+      const fallbackStep = fallbackTraceStep(invoked);
+      if (fallbackStep && !trace.some((existing) => existing.detail === fallbackStep.detail)) trace.push(fallbackStep);
     };
     try {
       await invokeOnce();
@@ -598,7 +601,8 @@ async function runAccountedAgent(input: RookAgentInput) {
             console.warn("[RookAI] turn failed after retry", {
               requestId,
               round,
-              errorName: retryError instanceof Error ? retryError.name : "UnknownError",
+              requestedModel,
+              ...describeErrorForLog(retryError),
             });
             return friendlyTurnEnd(retryError);
           }
@@ -606,7 +610,8 @@ async function runAccountedAgent(input: RookAgentInput) {
           console.warn("[RookAI] turn failed", {
             requestId,
             round,
-            errorName: error instanceof Error ? error.name : "UnknownError",
+            requestedModel,
+            ...describeErrorForLog(error),
           });
           return friendlyTurnEnd(error);
         }
