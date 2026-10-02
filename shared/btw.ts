@@ -32,3 +32,21 @@ export function boundedBtwContext(entries: BtwContextEntry[]): BtwContextEntry[]
   }
   return kept;
 }
+
+/** Typing "/btw" plus a space in the composer opens the aside bar; the rest of the text seeds it. */
+export function btwTrigger(text: string): string | null {
+  const match = /^\s*\/btw\s([\s\S]*)$/i.exec(text);
+  return match ? match[1] : null;
+}
+
+export type BtwKeyAction = "dismiss" | "ask" | "none";
+
+/** Esc dismisses in every state; Enter asks unless composing, shifted, or already answering. */
+export function btwKeyAction(
+  key: { key: string; shiftKey?: boolean; isComposing?: boolean; keyCode?: number },
+  status: "idle" | "answering" | "done" | "error",
+): BtwKeyAction {
+  if (key.key === "Escape") return "dismiss";
+  if (key.key === "Enter" && !key.shiftKey && !key.isComposing && key.keyCode !== 229 && status !== "answering") return "ask";
+  return "none";
+}
