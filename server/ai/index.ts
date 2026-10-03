@@ -11,7 +11,7 @@ import { invokeChatGPT, isChatGPTModel, listChatGPTModels } from "./chatgpt";
 import {
   invokeOpenCode,
   isOpenCodeModel,
-  listOpenCodeModels,
+  listOpenCodeModelsLive,
   opencodeStatus,
   OPENCODE_MODEL_PREFIX,
 } from "./opencode";
@@ -33,16 +33,17 @@ export type AiModel = RookAiModel;
 export type AiBackendStatus = RookAiStatus | RouterGatewayStatus;
 
 export const listAiModels = async (request?: Request) => {
-  const [openRouter, chatGPT] = await Promise.all([
+  const [openRouter, chatGPT, openCode] = await Promise.all([
     listOpenRouterModels().catch(() => []),
     request ? listChatGPTModels(request).catch(() => []) : Promise.resolve([]),
+    listOpenCodeModelsLive().catch(() => []),
   ]);
   return [
     ...chatGPT,
     ...openRouter,
     ...listOrcaRouterModels(),
     ...listTokenRouterModels(),
-    ...listOpenCodeModels(),
+    ...openCode,
   ];
 };
 export const getAiBackendStatus = async (

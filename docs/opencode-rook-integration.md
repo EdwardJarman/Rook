@@ -69,3 +69,28 @@ Your ask: "has quite a few good free models" + "build in cli into the app like O
 *   Live incremental-stream probe (temp script, since removed): `session.next.text.delta` frames captured from `/api/event` during a real turn; `invokeAiStream` delivered **4 separate `onToken` calls** whose join equals the final text (no duplication); SSE-dead path covered by unit test (poll-only, single emit)
 *   Live servers: `:3000/api/health` 200, `:8081` 200 (bundled), `:4123` opencode serve listening
 
+
+## Failure handling (typed errors, labelling, drill)
+
+OpenCode failures use the same typed taxonomy as the ChatGPT path (`server/ai/provider-error.ts`, helpers in `server/ai/opencode-errors.ts`). Every failure is a `ProviderError { layer, kind, status, code }`; the generic "I couldn't produce a usable answer" line is reached only by untyped errors.
+
+**Root causes found by tracing a real `hi` against `opencode serve` v1.18.34** (shapes quoted from the live server):
+
+| What the server does | Shape | What Rook used to do |
+| --- | --- | --- |
+| Upstream gateway fails the step | history event `session.next.step.failed` with `error: { type: "unknown", message: "Provider request failed with HTTP 400: {\"error\":{\"type\":\"server_error\",\"message\":\"Error from provider (Console): Upstream request failed: Endpoint is unavailable.\"}}" }`; the message read is `{ content: [], finish: "error", error: {…} }` | Only `step.ended` was recognised, so the turn polled until the 20-minute budget. When it did read the message it threw `OpenCode run failed: unknown error.` (the real reason lives in `error`, not `content`) |
+| Gateway sends a malformed chunk | `step.failed` message `Invalid opencode/openai-compatible-chat stream event.` | same |
+| Model id the server doesn't serve | `POST /api/session` → 200, prompt → 200, then **no events at all** and the session is absent from `GET /api/session/active` | waited out the budget |
+| Tool-first model (Muse Spark 1.3 runs a tool before answering) | step 1 `step.ended` with `finish: "tool-calls"`, step 2 starts seconds later | "idle" was any `step.ended` + 3 quiet polls, so a slow gap could return step 1's partial text or an empty reply |
+| Agent asks for a permission | `GET /api/session/{id}/permission` → pending request (`external_directory`) | typed as a plain `Error` → generic line |
+| 401 / unreachable / 5xx | `{"_tag":"UnauthorizedError","message":"Authentication required"}` / `ECONNREFUSED` | plain `Error`s that matched no classifier |
+
+**Layers** (`info.layer`): `opencode-config`, `opencode-server`, `opencode-catalog`, `opencode-session`, `opencode-prompt`, `opencode-poll`, `opencode-turn`, `opencode-upstream`. New kinds: `permission` and `timeout` (never retried or silently fallen back).
+
+**Policy.** Completion = last step ended with a `finish` other than `tool-calls` and history quiet; a failed step is final once history settles. A stalled turn (no events for `OPENCODE_STALL_AFTER_MS`) is diagnosed: pending permission → `permission`; session no longer in `/api/session/active` → `empty` (`never_started` / `stopped_early`). A model the server doesn't serve (`GET /api/model`, cached 60s, fail-open when unknown) is rejected before any session is created. Fallback to the shared free route (single owner: `invokeAiResilient`): transient, rate-limit, dead model, empty reply. Not silently swapped: auth, permission, timeout.
+
+**Labelling.** `listAiModels` → `listOpenCodeModelsLive()` flags a catalog id `unavailable` (+ `unavailableReason`) when the server doesn't serve/disable it, when a turn proved it dead, or — for 5 minutes — when the gateway reports its endpoint down. `deprecated` models the server still serves are *not* blocked (Muse Spark 1.2 and MiMo V2.5 are deprecated but answer). Per-model attempts/failures are recorded in `modelHealth` (`trpc.ai.turns` → `modelHealth`) for both the router and the streaming entry point.
+
+**Logs / debug.** Failure logs carry `layer/kind/status/code`; `ROOK_AI_DEBUG=1` adds the raw server/gateway body (redacted, ≤1000 chars). `OPENCODE_POLL_INTERVAL_MS` (default 1000) exists for hermetic tests.
+
+**Drill (operator-run).** `pnpm drill:opencode-models` needs only a reachable server: `OPENCODE_BASE_URL` (+ `OPENCODE_SERVER_PASSWORD`/`OPENCODE_SERVER_USERNAME` if secured) or `OPENCODE_MANAGED=1` with the binary. It lists catalog vs `/api/model`, sends `hi` per model, prints ok / UNAVAILABLE / FAILED with layer-kind-status-code, and exits 1 on any shrug or if nothing answered. Tests: `tests/opencode-failure-matrix.test.ts` (fake server replaying the captured shapes).

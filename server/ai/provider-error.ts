@@ -14,6 +14,10 @@ export type ProviderFailureKind =
   | "transient"
   | "bad-request"
   | "empty"
+  /** The agent is paused on a decision only the user can make (OpenCode permission prompt). */
+  | "permission"
+  /** The provider accepted the work but did not finish inside Rook's turn budget. Never retried: a retry would double the wait. */
+  | "timeout"
   | "unknown";
 
 export type ProviderErrorInfo = {
@@ -124,6 +128,8 @@ export function classifyProviderFailure(input: { status?: number; code?: string;
     return "model-unavailable";
   if ((code && AUTH_CODES.test(code)) || status === 401 || status === 403) return "auth";
   if (status === 429 || /rate.?limit|too many requests/i.test(`${code ?? ""} ${message}`)) return "rate-limit";
+  // Upstream gateways report their own outages as HTTP 400 + "server_error"; the status alone would read as our bad request.
+  if (/endpoint is unavailable|server_error|overloaded|service unavailable|upstream request failed/i.test(`${code ?? ""} ${message}`)) return "transient";
   if (code === "network_error" || (status !== undefined && (status >= 500 || status === 408 || status === 425))) return "transient";
   if (status !== undefined && status >= 400) return "bad-request";
   // Message-only errors (no HTTP status): same buckets, by wording.

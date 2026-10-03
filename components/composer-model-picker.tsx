@@ -264,7 +264,7 @@ export function ComposerModelPicker({
                           marginTop: 2,
                         }}
                       >
-                        {model.provider} · {model.unavailable ? "Unavailable on your account" : model.usageLabel}
+                        {model.provider} · {model.usageLabel}
                       </Text>
                     </View>
                     {active ? (
