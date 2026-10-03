@@ -33,6 +33,8 @@ import {
 } from "./router-gateways";
 import { OPENROUTER_API_BASE, openRouterHeaders, resolveOpenRouterModel } from "./openrouter";
 import { isReasoningRejectedError } from "./agent-reliability";
+import { modelHealth } from "./model-health";
+import { toProviderError } from "./provider-error";
 
 export const STREAM_NOT_SUPPORTED_MESSAGE =
   "Streaming is not supported for this model route.";
@@ -371,14 +373,25 @@ export async function invokeAiStream(
     // the event stream was unavailable, nothing was forwarded yet, so the
     // whole answer goes out as one token event instead — never both.
     let forwarded = false;
-    const invoked = await invokeOpenCode(params, {
-      onToken: (delta) => {
-        forwarded = true;
-        input?.onToken?.(delta);
-      },
-      onToolActivity: input?.onToolActivity,
-      signal: input?.signal ?? null,
-    });
+    let invoked: Awaited<ReturnType<typeof invokeOpenCode>>;
+    try {
+      invoked = await invokeOpenCode(params, {
+        onToken: (delta) => {
+          forwarded = true;
+          input?.onToken?.(delta);
+        },
+        onToolActivity: input?.onToolActivity,
+        signal: input?.signal ?? null,
+      });
+      modelHealth.record({ provider: "opencode", model: params.model, ok: true });
+    } catch (error) {
+      // Streaming bypasses the resilient router, so per-model telemetry is recorded here.
+      if (!input?.signal?.aborted) {
+        const failure = toProviderError(error, { layer: "opencode-stream", provider: "opencode", model: params.model });
+        modelHealth.record({ provider: "opencode", model: params.model, ok: false, kind: failure.kind, status: failure.info.status, code: failure.info.code });
+      }
+      throw error;
+    }
     const answer = invoked.choices[0]?.message;
     const text =
       typeof answer?.content === "string"

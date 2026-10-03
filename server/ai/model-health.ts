@@ -21,7 +21,7 @@ export type ModelStats = {
   lastAt: string;
 };
 
-export type ModelState = { state: "ok" | "unavailable"; reason?: string; at: number };
+export type ModelState = { state: "ok" | "unavailable"; reason?: string; at: number; ttlMs?: number };
 
 export type ModelHealthOptions = {
   now?: () => number;
@@ -80,10 +80,11 @@ export class ModelHealth {
     return [...this.stats.values()].map((entry) => ({ ...entry })).sort((a, b) => b.consecutiveFailures - a.consecutiveFailures || b.failures - a.failures);
   }
 
-  mark(scope: string, model: string, state: "ok" | "unavailable", reason?: string): void {
+  /** `ttlMs` shortens how long this one verdict is believed (default: the instance TTL). */
+  mark(scope: string, model: string, state: "ok" | "unavailable", reason?: string, ttlMs?: number): void {
     const key = `${scope}\u0000${model}`;
     this.states.delete(key);
-    this.states.set(key, { state, reason, at: this.now() });
+    this.states.set(key, { state, reason, at: this.now(), ttlMs });
     while (this.states.size > this.maxEntries) this.states.delete(this.states.keys().next().value as string);
   }
 
@@ -91,7 +92,7 @@ export class ModelHealth {
     const key = `${scope}\u0000${model}`;
     const entry = this.states.get(key);
     if (!entry) return undefined;
-    if (this.now() - entry.at >= this.stateTtlMs) {
+    if (this.now() - entry.at >= (entry.ttlMs ?? this.stateTtlMs)) {
       this.states.delete(key);
       return undefined;
     }

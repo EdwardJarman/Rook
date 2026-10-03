@@ -27,6 +27,18 @@
 import type { InvokeParams, InvokeResult, Message } from "../_core/llm";
 import type { RookAiModel } from "./openrouter";
 import { observeManagedCall } from "./request-accounting";
+import { modelHealth } from "./model-health";
+import { aiDebug, classifyProviderFailure, ProviderError } from "./provider-error";
+import {
+  GATEWAY_DOWN_TTL_MS,
+  isGatewayEndpointDown,
+  openCodeError,
+  parseOpenCodeBody,
+  stepFailure,
+  unservedReason,
+  type OpenCodeLayer,
+  type ServedModel,
+} from "./opencode-errors";
 import {
   OPENCODE_DEFAULT_BASE,
   ensureManagedServer,
@@ -38,7 +50,11 @@ import {
 export const OPENCODE_MODEL_PREFIX = "opencode:";
 export const OPENCODE_DEFAULT_MODEL = `${OPENCODE_MODEL_PREFIX}big-pickle`;
 
-const POLL_INTERVAL_MS = 1_000;
+/** History poll cadence; `OPENCODE_POLL_INTERVAL_MS` exists so hermetic tests don't wait in real seconds. */
+const pollIntervalMs = (): number => {
+  const raw = Number(process.env.OPENCODE_POLL_INTERVAL_MS);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 1_000;
+};
 const HEALTH_TIMEOUT_MS = 15_000;
 /**
  * How long one turn may run. OpenCode agents legitimately work for many
@@ -161,6 +177,72 @@ export const isOpenCodeModel = (modelId?: string): boolean => {
   return OPENCODE_MODELS.some((model) => model.upstreamId === raw);
 };
 
+const SERVED_TTL_MS = 60_000;
+const SERVED_TIMEOUT_MS = 5_000;
+let servedCache: { base: string; at: number; models: Map<string, ServedModel> } | undefined;
+
+/**
+ * The models the live server serves under the `opencode` provider, or
+ * undefined when that can't be established (unreachable, old/odd shape).
+ * Never throws: an unknown answer must not block a turn the server may
+ * well be able to run.
+ */
+export const fetchServedModels = async (options?: { force?: boolean }): Promise<Map<string, ServedModel> | undefined> => {
+  const base = effectiveOpenCodeBase();
+  if (!base) return undefined;
+  if (!options?.force && servedCache && servedCache.base === base && Date.now() - servedCache.at < SERVED_TTL_MS) {
+    return servedCache.models;
+  }
+  try {
+    const response = await apiFetch("/api/model", { method: "GET", timeoutMs: SERVED_TIMEOUT_MS });
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      return undefined;
+    }
+    const body = (await response.json().catch(() => undefined)) as
+      | { data?: Array<{ id?: unknown; providerID?: unknown; status?: unknown; enabled?: unknown }> }
+      | undefined;
+    const models = new Map<string, ServedModel>();
+    for (const entry of Array.isArray(body?.data) ? body.data : []) {
+      if (entry.providerID !== "opencode" || typeof entry.id !== "string") continue;
+      models.set(entry.id, {
+        id: entry.id,
+        status: typeof entry.status === "string" ? entry.status : undefined,
+        enabled: typeof entry.enabled === "boolean" ? entry.enabled : undefined,
+      });
+    }
+    if (!models.size) return undefined;
+    servedCache = { base, at: Date.now(), models };
+    return models;
+  } catch (error) {
+    aiDebug("opencode model list unavailable", { message: error instanceof Error ? error.message : String(error) });
+    return undefined;
+  }
+};
+
+const UNAVAILABLE_LABEL = "Unavailable on this server";
+
+/**
+ * The catalog with truth applied: ids the live server doesn't serve (or has
+ * disabled), and ids whose last turn proved them dead, come back flagged
+ * `unavailable` with the reason — the picker shows them disabled instead of
+ * offering a model that can only fail.
+ */
+export const listOpenCodeModelsLive = async (): Promise<RookAiModel[]> => {
+  const models = listOpenCodeModels();
+  if (!models.length) return models;
+  const served = await fetchServedModels();
+  const scope = effectiveOpenCodeBase();
+  return models.map((model) => {
+    const upstream = model.id.slice(OPENCODE_MODEL_PREFIX.length);
+    const state = modelHealth.stateOf(scope, upstream);
+    const reason =
+      (served ? unservedReason(served.get(upstream), upstream) : undefined) ??
+      (state?.state === "unavailable" ? (state.reason ?? "OpenCode rejected this model.") : undefined);
+    return reason ? { ...model, description: reason, usageLabel: UNAVAILABLE_LABEL, unavailable: true, unavailableReason: reason } : model;
+  });
+};
+
 const upstreamModelId = (modelId: string | undefined): string => {
   if (!modelId) throw new Error("Choose an OpenCode model first.");
   if (!isOpenCodeModel(modelId))
@@ -173,27 +255,37 @@ type OpenCodeApiError = { message?: string; error?: string };
 const readErrorSnippet = async (response: Response): Promise<string> => {
   try {
     const text = await response.text();
-    return text.slice(0, 300).trim();
+    return text.slice(0, 2000).trim();
   } catch {
     return "";
   }
 };
 
-const throwForStatus = async (response: Response, action: string): Promise<never> => {
-  const snippet = await readErrorSnippet(response);
+const layerForAction = (action: string): OpenCodeLayer => {
+  if (action === "session create") return "opencode-session";
+  if (action === "prompt") return "opencode-prompt";
+  if (action === "health check" || action === "model list") return "opencode-server";
+  return "opencode-poll";
+};
+
+const throwForStatus = async (response: Response, action: string, model?: string): Promise<never> => {
+  const raw = await readErrorSnippet(response);
+  const parsed = parseOpenCodeBody(raw);
+  const snippet = parsed.message.slice(0, 300).trim();
   const detail = snippet ? ` — ${snippet}` : "";
-  if (response.status === 401 || response.status === 403) {
-    throw new Error(
-      `Rook's OpenCode connection needs attention (the server rejected our credentials)${detail}.`,
-    );
+  const status = response.status;
+  let message: string;
+  if (status === 401 || status === 403) {
+    message = `Rook's OpenCode connection needs attention (the server rejected our credentials)${detail}.`;
+  } else if (status === 404) {
+    message = `OpenCode ${action} was not found (404)${detail}.`;
+  } else if ([429, 502, 503, 504].includes(status)) {
+    message = `OpenCode is temporarily unavailable (${status})${detail}.`;
+  } else {
+    message = `OpenCode ${action} failed (${status})${detail}.`;
   }
-  if (response.status === 404) {
-    throw new Error(`OpenCode ${action} was not found (404)${detail}.`);
-  }
-  if ([429, 502, 503, 504].includes(response.status)) {
-    throw new Error(`OpenCode is temporarily unavailable (${response.status})${detail}.`);
-  }
-  throw new Error(`OpenCode ${action} failed (${response.status})${detail}.`);
+  const kind = classifyProviderFailure({ status, code: parsed.code, message });
+  throw openCodeError({ layer: layerForAction(action), model, kind, status, code: parsed.code, message, raw });
 };
 
 const combineSignal = (userSignal?: AbortSignal | null, timeoutMs?: number): AbortSignal => {
@@ -214,9 +306,13 @@ const apiFetch = async (
 ): Promise<Response> => {
   const base = effectiveOpenCodeBase();
   if (!base)
-    throw new Error(
-      "OpenCode is not connected. Set OPENCODE_BASE_URL (e.g. http://127.0.0.1:4123) or enable the managed server with OPENCODE_MANAGED=1, then select OpenCode again.",
-    );
+    throw openCodeError({
+      layer: "opencode-config",
+      kind: "auth",
+      code: "not_configured",
+      message:
+        "OpenCode is not connected. Set OPENCODE_BASE_URL (e.g. http://127.0.0.1:4123) or enable the managed server with OPENCODE_MANAGED=1, then select OpenCode again.",
+    });
   let response: Response;
   try {
     response = await fetch(`${base}${path}`, {
@@ -232,8 +328,22 @@ const apiFetch = async (
     if ((init?.userSignal as AbortSignal | undefined)?.aborted) {
       throw new Error("OpenCode request was aborted.");
     }
-    throw new Error(
-      `OpenCode server is unreachable at ${base} (fetch failed: ${error instanceof Error ? error.message : String(error)}). Start \`opencode serve\` and check OPENCODE_BASE_URL.`,
+    const reason = error instanceof Error ? error.message : String(error);
+    if (error instanceof Error && error.name === "TimeoutError") {
+      throw openCodeError(
+        { layer: "opencode-server", kind: "transient", code: "request_timeout", message: `OpenCode server at ${base} did not answer ${path} in time (request timed out).` },
+        error,
+      );
+    }
+    const code = (error as { cause?: { code?: unknown } } | undefined)?.cause?.code;
+    throw openCodeError(
+      {
+        layer: "opencode-server",
+        kind: "transient",
+        code: typeof code === "string" ? code : "unreachable",
+        message: `OpenCode server is unreachable at ${base} (fetch failed: ${reason}). Start \`opencode serve\` and check OPENCODE_BASE_URL.`,
+      },
+      error,
     );
   }
   return response;
@@ -438,7 +548,12 @@ export const opencodeStatus = async (): Promise<OpenCodeStatus> => {
       operational: false,
       freeModels: OPENCODE_MODELS.length,
       dailyFreeRequestAllowance: null,
-      message: error instanceof Error ? error.message : "OpenCode health check failed.",
+      message:
+        error instanceof ProviderError
+          ? error.info.providerMessage
+          : error instanceof Error
+            ? error.message
+            : "OpenCode health check failed.",
     };
   }
 };
@@ -466,6 +581,35 @@ async function invokeAccountedOpenCode(
 ): Promise<InvokeResult> {
   const requested = params.model ?? OPENCODE_DEFAULT_MODEL;
   const modelId = upstreamModelId(requested);
+  try {
+    const result = await runOpenCodeTurn(requested, modelId, params, opts);
+    modelHealth.mark(effectiveOpenCodeBase(), modelId, "ok");
+    return result;
+  } catch (error) {
+    if (error instanceof ProviderError && error.kind === "model-unavailable") {
+      modelHealth.mark(effectiveOpenCodeBase(), modelId, "unavailable", error.info.providerMessage);
+    } else if (isGatewayEndpointDown(error)) {
+      modelHealth.mark(effectiveOpenCodeBase(), modelId, "unavailable", error.info.providerMessage, GATEWAY_DOWN_TTL_MS);
+    }
+    throw error;
+  }
+}
+
+type StepError = { type?: unknown; message?: unknown };
+type TurnState = {
+  assistantMessageId?: string;
+  /** How the most recent step ended; cleared while a newer step is running. */
+  terminal?: { kind: "ended"; finish?: string } | { kind: "failed"; error?: StepError };
+  started: boolean;
+  eventCount: number;
+};
+
+async function runOpenCodeTurn(
+  requested: string,
+  modelId: string,
+  params: InvokeParams,
+  opts?: InvokeOpenCodeOptions,
+): Promise<InvokeResult> {
   // Standing instruction (scoped to OpenCode turns only): files the agent
   // builds are only attachable when the answer states their absolute paths.
   // Without this, models write "in your workspace" and the files strand.
@@ -481,13 +625,23 @@ async function invokeAccountedOpenCode(
     await ensureManagedServer(effectiveOpenCodeBase());
   }
 
+  // The server accepts a prompt for a model it doesn't serve and then never
+  // starts a step (no error, no event) — so ask first instead of waiting out
+  // the turn budget.
+  const served = await fetchServedModels();
+  const unserved = served ? unservedReason(served.get(modelId), modelId) : undefined;
+  if (unserved) {
+    throw openCodeError({ layer: "opencode-catalog", model: requested, kind: "model-unavailable", code: "model_not_served", message: unserved });
+  }
+  aiDebug("opencode dispatch", { requestedModel: requested, upstream: modelId, base: effectiveOpenCodeBase(), served: served?.get(modelId) });
+
   const post = async (path: string, body: Record<string, unknown>, action: string) => {
     const response = await apiFetch(path, {
       method: "POST",
       body: JSON.stringify(body),
       userSignal,
     });
-    if (!response.ok) await throwForStatus(response, action);
+    if (!response.ok) await throwForStatus(response, action, requested);
     return (await response.json().catch(() => ({}))) as { data?: { id?: string } };
   };
 
@@ -497,7 +651,9 @@ async function invokeAccountedOpenCode(
     "session create",
   );
   const sessionId = created.data?.id;
-  if (!sessionId) throw new Error("OpenCode did not return a session id.");
+  if (!sessionId) {
+    throw openCodeError({ layer: "opencode-session", model: requested, kind: "unknown", code: "no_session_id", message: "OpenCode did not return a session id (unexpected response from the server)." });
+  }
 
   const deadline = Date.now() + turnTimeoutMs();
   // Best-effort live tail: text deltas stream to the UI while the turn runs.
@@ -522,7 +678,7 @@ async function invokeAccountedOpenCode(
   // can still finish. The tail exists only to forward live text deltas.
   void liveTail.then(
     () => undefined,
-    () => undefined,
+    (error) => aiDebug("opencode event tail ended", { message: error instanceof Error ? error.message : String(error) }),
   );
 
   const admitted = await post(
@@ -530,18 +686,21 @@ async function invokeAccountedOpenCode(
     { prompt: { text: prompt } },
     "prompt",
   );
-  if (!admitted.data?.id) throw new Error("OpenCode did not admit the prompt.");
+  if (!admitted.data?.id) {
+    throw openCodeError({ layer: "opencode-prompt", model: requested, kind: "unknown", code: "prompt_not_admitted", message: "OpenCode did not admit the prompt (unexpected response from the server)." });
+  }
 
   const readAnswer = async (assistantMessageId: string): Promise<InvokeResult | null> => {
     const messageResponse = await apiFetch(
       `/api/session/${sessionId}/message/${assistantMessageId}`,
       { userSignal, timeoutMs: HEALTH_TIMEOUT_MS },
     );
-    if (!messageResponse.ok) await throwForStatus(messageResponse, "message read");
+    if (!messageResponse.ok) await throwForStatus(messageResponse, "message read", requested);
     const message = (await messageResponse.json().catch(() => ({}))) as {
       data?: {
         content?: Array<{ type?: string; text?: string }>;
         finish?: string;
+        error?: StepError;
         tokens?: { input?: number; output?: number };
         time?: { completed?: number };
       };
@@ -553,12 +712,19 @@ async function invokeAccountedOpenCode(
       .map((part) => part.text as string)
       .join("\n")
       .trim();
-    if (message.data.finish === "error") {
-      throw new Error(`OpenCode run failed: ${(text || "unknown error").slice(0, 300)}.`);
-    }
-    if (!text) throw new Error("OpenCode returned an empty reply.");
+    // A failed step carries its reason in `error`, not in the (empty) content.
+    if (message.data.finish === "error") throw stepFailure(message.data.error ?? { message: text }, requested);
     const input = message.data.tokens?.input;
     const output = message.data.tokens?.output;
+    if (!text) {
+      throw openCodeError({
+        layer: "opencode-turn",
+        model: requested,
+        kind: "empty",
+        code: message.data.finish,
+        message: `OpenCode returned an empty reply (finish: ${message.data.finish ?? "none"}, ${output ?? 0} output tokens).`,
+      });
+    }
     return {
       id: assistantMessageId,
       created: Date.now(),
@@ -578,97 +744,137 @@ async function invokeAccountedOpenCode(
     };
   };
 
-  const pollSession = async (): Promise<{
-    assistantMessageId?: string;
-    stepEnded: boolean;
-    eventCount: number;
-  }> => {
+  const pollSession = async (): Promise<TurnState> => {
     const historyResponse = await apiFetch(`/api/session/${sessionId}/history`, {
       userSignal,
       timeoutMs: HEALTH_TIMEOUT_MS,
     });
-    if (!historyResponse.ok) await throwForStatus(historyResponse, "history poll");
+    if (!historyResponse.ok) await throwForStatus(historyResponse, "history poll", requested);
     const history = (await historyResponse.json().catch(() => ({}))) as {
       data?: HistoryEvent[];
     };
     const events = history.data ?? [];
-    let assistantMessageId: string | undefined;
+    const state: TurnState = { started: false, eventCount: events.length };
     for (const event of events) {
       if (event.type === "session.next.step.started" && event.data?.assistantMessageID) {
-        assistantMessageId = event.data.assistantMessageID;
+        state.assistantMessageId = event.data.assistantMessageID;
+        state.started = true;
+        state.terminal = undefined;
+      } else if (event.type === "session.next.step.ended") {
+        const finish = event.data?.finish;
+        state.terminal = { kind: "ended", finish: typeof finish === "string" ? finish : undefined };
+      } else if (event.type === "session.next.step.failed") {
+        state.terminal = { kind: "failed", error: event.data?.error as StepError | undefined };
       }
     }
-    return {
-      assistantMessageId,
-      stepEnded: events.some((event) => event.type === "session.next.step.ended"),
-      eventCount: events.length,
-    };
+    return state;
+  };
+
+  const activeSessions = async (): Promise<Set<string> | undefined> => {
+    try {
+      const response = await apiFetch("/api/session/active", { userSignal, timeoutMs: HEALTH_TIMEOUT_MS });
+      if (!response.ok) return undefined;
+      const body = (await response.json().catch(() => undefined)) as { data?: unknown } | undefined;
+      return body?.data && typeof body.data === "object" ? new Set(Object.keys(body.data)) : undefined;
+    } catch {
+      return undefined;
+    }
   };
 
   /**
    * A stalled turn is usually the agent waiting on a permission decision
    * (shell/file writes default to ask). Rook never auto-approves those —
    * that would execute arbitrary commands on the user's machine — so a
-   * stall surfaces as an honest, actionable message instead.
+   * stall surfaces as an honest, actionable message instead. A stall with
+   * no pending permission and a session the server no longer runs means the
+   * turn silently died: say so rather than wait out the budget.
    */
-  const checkPermissionStall = async (): Promise<void> => {
+  const diagnoseStall = async (state: TurnState): Promise<void> => {
     const response = await apiFetch(`/api/session/${sessionId}/permission`, {
       userSignal,
       timeoutMs: HEALTH_TIMEOUT_MS,
     });
-    if (!response.ok) return;
-    const body = (await response.json().catch(() => ({}))) as { data?: unknown };
-    const pending = Array.isArray(body.data) ? body.data : [];
-    if (!pending.length) return;
-    const first = pending[0] as { title?: string; action?: string; tool?: string } | undefined;
-    const hint =
-      (typeof first?.title === "string" && first.title) ||
-      (typeof first?.action === "string" && first.action) ||
-      (typeof first?.tool === "string" && first.tool) ||
-      "a tool call";
-    throw new Error(
-      `OpenCode paused waiting for a permission decision (${hint}). Approve or deny it in \`opencode web\` / the OpenCode TUI, or set that permission to allow in opencode.json — Rook will not approve shell or file writes on your machine by itself. Then send your message again.`,
-    );
+    if (response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { data?: unknown };
+      const pending = Array.isArray(body.data) ? body.data : [];
+      if (pending.length) {
+        const first = pending[0] as { title?: string; action?: string; tool?: string; permission?: string } | undefined;
+        const hint =
+          (typeof first?.title === "string" && first.title) ||
+          (typeof first?.action === "string" && first.action) ||
+          (typeof first?.permission === "string" && first.permission) ||
+          (typeof first?.tool === "string" && first.tool) ||
+          "a tool call";
+        throw openCodeError({
+          layer: "opencode-turn",
+          model: requested,
+          kind: "permission",
+          code: "permission_pending",
+          message: `OpenCode paused waiting for a permission decision (${hint}). Approve or deny it in \`opencode web\` / the OpenCode TUI, or set that permission to allow in opencode.json — Rook will not approve shell or file writes on your machine by itself. Then send your message again.`,
+        });
+      }
+    }
+    const active = await activeSessions();
+    if (active && !active.has(sessionId)) {
+      throw openCodeError({
+        layer: "opencode-turn",
+        model: requested,
+        kind: "empty",
+        code: state.started ? "stopped_early" : "never_started",
+        message: state.started
+          ? "OpenCode stopped after a tool call without writing a reply (the session is idle on the server)."
+          : "OpenCode accepted the prompt but never started processing it (the session is idle and no model step ran). Check the OpenCode server log.",
+      });
+    }
   };
 
-  // Completion = the session went idle: a step ended AND the history
-  // stopped growing (multi-step plans keep appending steps, so the FIRST
-  // step.ended must not end the turn). The live tail concurrently forwards
-  // text deltas so the UI streams while the turn runs; the final text
-  // always comes from the message read (source of truth, never partials).
+  // Completion = the session went idle: a step ended with a final finish
+  // reason AND the history stopped growing. `tool-calls` means more steps
+  // follow (the next one may take seconds to start), so it never completes
+  // a turn. A failed step is final once the history settles — a retry would
+  // grow it. The live tail concurrently forwards text deltas so the UI
+  // streams while the turn runs; the final text always comes from the
+  // message read (source of truth, never partials).
   let lastEventCount = -1;
   let quietPolls = 0;
   let lastProgressAt = Date.now();
-  let lastPermissionCheckAt = 0;
+  let lastStallCheckAt = 0;
   try {
     for (;;) {
       if (userSignal?.aborted) throw new Error("OpenCode request was aborted.");
-      const { assistantMessageId, stepEnded, eventCount } = await pollSession();
-      if (eventCount !== lastEventCount) {
-        lastEventCount = eventCount;
+      const state = await pollSession();
+      if (state.eventCount !== lastEventCount) {
+        lastEventCount = state.eventCount;
         quietPolls = 0;
         lastProgressAt = Date.now();
       } else {
         quietPolls += 1;
       }
-      const idle = stepEnded && quietPolls >= IDLE_QUIET_POLLS;
-      if (idle && assistantMessageId) {
-        const answer = await readAnswer(assistantMessageId);
+      const settled = quietPolls >= IDLE_QUIET_POLLS;
+      if (settled && state.terminal?.kind === "failed") throw stepFailure(state.terminal.error, requested);
+      const idle = settled && state.terminal?.kind === "ended" && state.terminal.finish !== "tool-calls";
+      if (idle && state.assistantMessageId) {
+        const answer = await readAnswer(state.assistantMessageId);
         if (answer) {
           turnDone.current = true;
           return answer;
         }
       }
-      if (!idle && Date.now() - lastProgressAt > stallAfterMs() && Date.now() - lastPermissionCheckAt > 30_000) {
-        lastPermissionCheckAt = Date.now();
-        await checkPermissionStall();
+      if (!idle && Date.now() - lastProgressAt > stallAfterMs() && Date.now() - lastStallCheckAt > 30_000) {
+        lastStallCheckAt = Date.now();
+        await diagnoseStall(state);
       }
       if (Date.now() > deadline) {
-        throw new Error(
-          "OpenCode is still working past the turn budget. It keeps running server-side — ask for a status update, or raise OPENCODE_TURN_TIMEOUT_MS for very long jobs.",
-        );
+        throw openCodeError({
+          layer: "opencode-turn",
+          model: requested,
+          kind: "timeout",
+          code: "turn_budget",
+          message:
+            "OpenCode is still working past the turn budget. It keeps running server-side — ask for a status update, or raise OPENCODE_TURN_TIMEOUT_MS for very long jobs.",
+        });
       }
-      await sleep(POLL_INTERVAL_MS);
+      await sleep(pollIntervalMs());
     }
   } finally {
     // Release the event-stream connection however the turn ended.
@@ -677,7 +883,9 @@ async function invokeAccountedOpenCode(
   }
 }
 
-export const __resetOpenCodeForTests = (): void => undefined;
+export const __resetOpenCodeForTests = (): void => {
+  servedCache = undefined;
+};
 
 /* ------------------------------------------------------------------ */
 /* Turn files: agent-built artifacts surfaced in the browser.          */
