@@ -77,6 +77,13 @@ Thumbs.db
 # Agent loop scratch state (local memory, never committed)
 LOOP_STATE*.md
 
+# Local Firebase / EAS secrets (paths referenced by app.config.ts, never committed)
+google-services.json
+.google-services.json
+eas-project.json
+*.keystore
+*.jks
+
 # Rook Node build outputs
 rook-node/build/
 rook-node/src-tauri/binaries/

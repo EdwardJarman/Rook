@@ -41,6 +41,7 @@ const env = {
 const config: ExpoConfig = {
   name: env.appName,
   slug: env.appSlug,
+  owner: "rook-app",
   version: "0.1.5",
   runtimeVersion: { policy: "appVersion" },
   orientation: "portrait",
@@ -66,6 +67,9 @@ const config: ExpoConfig = {
     edgeToEdgeEnabled: true,
     predictiveBackGestureEnabled: false,
     package: env.androidPackage,
+    // Firebase client config for push (local file, git-ignored). Absent =
+    // local-only builds; EAS cloud builds fail fast naming the missing file.
+    googleServicesFile: "./google-services.json",
     versionCode: 6,
     permissions: ["POST_NOTIFICATIONS", "RECORD_AUDIO"],
     intentFilters: [
@@ -141,6 +145,24 @@ const config: ExpoConfig = {
   experiments: {
     typedRoutes: true,
     reactCompiler: true,
+  },
+  extra: {
+    // EAS project link (dynamic configs can't be auto-written by `eas init`):
+    // eas-project.json (git-ignored) or EAS_PROJECT_ID env. Absent = local-only
+    // builds; EAS cloud builds fail fast naming the missing link.
+    eas: (() => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const fs = require("node:fs");
+        const raw = fs.readFileSync("./eas-project.json", "utf8") as string;
+        const id = (JSON.parse(raw) as { projectId?: unknown }).projectId;
+        if (typeof id === "string" && id.trim()) return { projectId: id.trim() };
+      } catch {
+        // No local link file; fall through to env.
+      }
+      const envId = process.env.EAS_PROJECT_ID?.trim();
+      return envId ? { projectId: envId } : {};
+    })(),
   },
 };
 
