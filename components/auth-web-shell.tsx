@@ -1,5 +1,11 @@
 import { type ReactNode, useMemo } from "react";
-import { StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import {
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+} from "react-native";
 
 import { RookLogo } from "@/components/rook-logo";
 import { useRookTheme, type RookTokens } from "@/lib/ui";
@@ -21,7 +27,11 @@ export function AuthWebShell({
   const styles = useMemo(() => buildStyles(colors), [colors]);
 
   return (
-    <View style={styles.page}>
+    <ScrollView
+      style={styles.page}
+      contentContainerStyle={styles.scrollContent}
+      keyboardShouldPersistTaps="handled"
+    >
       <View
         style={[
           styles.frame,
@@ -62,7 +72,7 @@ export function AuthWebShell({
           <Text style={styles.footerText}>Built for deliberate work</Text>
         </View>
       </View>
-    </View>
+    </ScrollView>
   );
 }
 
@@ -70,20 +80,22 @@ function buildStyles(colors: RookTokens) {
   return StyleSheet.create({
     page: {
       flex: 1,
-      minHeight: "100%",
       backgroundColor: colors.canvas,
     },
+    scrollContent: {
+      flexGrow: 1,
+    },
     frame: {
-      flex: 1,
+      flexGrow: 1,
+      flexShrink: 0,
       width: "100%",
       maxWidth: 1180,
-      minHeight: "100%",
       alignSelf: "center",
       paddingTop: 20,
       paddingBottom: 28,
     },
     frameCompact: {
-      minHeight: 760,
+      maxWidth: 480,
     },
     header: {
       minHeight: 44,
@@ -110,9 +122,10 @@ function buildStyles(colors: RookTokens) {
       letterSpacing: -0.4,
     },
     main: {
-      flex: 1,
-      paddingTop: 40,
-      paddingBottom: 40,
+      flexGrow: 1,
+      flexShrink: 0,
+      paddingTop: 28,
+      paddingBottom: 28,
     },
     mainWide: {
       flexDirection: "row",
@@ -152,11 +165,11 @@ function buildStyles(colors: RookTokens) {
     },
     title: {
       color: colors.text,
-      fontSize: 38,
-      lineHeight: 42,
+      fontSize: 32,
+      lineHeight: 36,
       fontWeight: "800",
       letterSpacing: -1.2,
-      marginTop: 22,
+      marginTop: 16,
       maxWidth: 480,
     },
     titleWide: {
@@ -169,35 +182,41 @@ function buildStyles(colors: RookTokens) {
       color: colors.textSoft,
       fontSize: 15.5,
       lineHeight: 24,
-      marginTop: 18,
+      marginTop: 12,
       maxWidth: 420,
     },
     formColumn: {
+      minWidth: 0,
+      flexShrink: 0,
       width: "100%",
       maxWidth: 420,
-      marginTop: 36,
+      marginTop: 24,
     },
     formColumnWide: {
       marginTop: 0,
     },
     clerkSlot: {
+      minWidth: 0,
       width: "100%",
       alignItems: "stretch",
       backgroundColor: colors.surface,
       borderWidth: 1,
       borderColor: colors.line,
       borderRadius: 24,
-      padding: 20,
+      padding: 16,
       shadowColor: colors.shadow,
       shadowOpacity: 0.06,
       shadowRadius: 24,
       shadowOffset: { width: 0, height: 10 },
     },
     footer: {
+      flexShrink: 0,
+      flexWrap: "wrap",
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "space-between",
-      gap: 20,
+      columnGap: 20,
+      rowGap: 8,
       borderTopWidth: 1,
       borderTopColor: colors.line,
       paddingTop: 16,
