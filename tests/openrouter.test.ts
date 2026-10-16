@@ -180,6 +180,30 @@ describe("OpenRouter inference", () => {
     expect(body.models).toEqual(["openrouter/free"]);
   });
 
+  it("retries a successful but unreadable gateway response", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: [model("openrouter/free")] }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(new Response("An error occurred upstream", { status: 200 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({
+          id: "generation-retried",
+          created: 1,
+          model: "openrouter/free",
+          choices: [{ index: 0, message: { role: "assistant", content: "Recovered." }, finish_reason: "stop" }],
+        }), { status: 200 }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(invokeOpenRouter({
+      model: "openrouter/free",
+      messages: [{ role: "user", content: "Hello" }],
+    })).resolves.toMatchObject({ model: "openrouter/free" });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
   it("transcribes recorded audio with the free audio-capable model", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({
