@@ -278,6 +278,28 @@ export function isMaxTokensError(error: unknown): boolean {
   );
 }
 
+/** An OpenCode model that is dead or produced nothing: worth moving the turn to the shared free route. */
+export const isOpenCodeFallbackError = (error: unknown): boolean =>
+  error instanceof ProviderError && error.info.provider === "opencode" && (error.kind === "model-unavailable" || error.kind === "empty");
+
+/** OpenCode failures name what actually broke: the server, its credentials, the model, or the agent waiting on you. */
+const openCodeFailureLine = (error: ProviderError, detailText: string, also: string): string | undefined => {
+  const { kind, model, layer, status, providerMessage } = error.info;
+  const name = model ?? "that model";
+  const detail = detailText.replace(/\.+$/, "");
+  if (kind === "permission" || kind === "timeout") return `${providerMessage}`;
+  if (layer === "opencode-config") return providerMessage;
+  if (kind === "auth")
+    return layer === "opencode-upstream"
+      ? `OpenCode's model gateway rejected the request for ${name} (${detail}). Pick a different OpenCode model.${also}`
+      : "Rook can't sign in to the OpenCode server (it rejected the credentials). Check OPENCODE_SERVER_PASSWORD / OPENCODE_SERVER_USERNAME on the Rook server, then try again.";
+  if (kind === "model-unavailable")
+    return `OpenCode can't run ${name} right now (${detail}). Pick a different OpenCode model from the model chooser.${also}`;
+  if (kind === "transient" || kind === "rate-limit")
+    return `OpenCode couldn't reach ${name}${status ? ` (${status})` : ""}: ${detail}. Try again in a moment, or pick a different model.${also}`;
+  return undefined;
+};
+
 const providerFailureLine = (error: ProviderError): string | undefined => {
   const { provider, model, kind, providerMessage } = error.info;
   const label = providerLabelFor(provider);
@@ -285,6 +307,10 @@ const providerFailureLine = (error: ProviderError): string | undefined => {
   const also = error.fallbackFailure
     ? ` I also tried ${providerLabelFor(error.fallbackFailure.provider)} as a backup and that failed too (${error.fallbackFailure.kind}).`
     : "";
+  if (provider === "opencode") {
+    const line = openCodeFailureLine(error, detail, also);
+    if (line) return line;
+  }
   if (kind === "model-unavailable")
     return `${label} can't run ${model ?? "that model"} on your account right now (it said: ${detail}). Pick a different model from the model chooser.${also}`;
   if (kind === "auth" && provider === "chatgpt")

@@ -25,7 +25,7 @@ import type { InvokeParams, InvokeResult } from "../_core/llm";
 import { invokeAi } from "./index";
 import { isOrcaRouterConfigured, isTokenRouterConfigured, listOrcaRouterModels, listTokenRouterModels } from "./router-gateways";
 import { isOpenRouterConfigured } from "./openrouter";
-import { canRetryAgentRound } from "./agent-reliability";
+import { canRetryAgentRound, isOpenCodeFallbackError } from "./agent-reliability";
 import { modelHealth } from "./model-health";
 import {
   aiDebug,
@@ -146,16 +146,19 @@ export function fallbackCandidates(requestedModel: string | undefined): string[]
  * Whether an error from the *requested* model should move the turn to the
  * next provider. Transient wobbles always do. For a user's own ChatGPT model
  * a dead model, an expired/missing session or an empty reply also do — the
- * documented OpenRouter fallback — because the alternative is a dead chat.
+ * documented OpenRouter fallback — because the alternative is a dead chat;
+ * OpenCode gets the same for a dead model or an empty reply.
  * Shared-provider auth/config errors still surface (a bad key must be seen).
  */
 export function shouldFallBack(error: unknown, requestedProvider: string): boolean {
   if (canRetryAgentRound(error)) return true;
-  return (
-    requestedProvider === "chatgpt" &&
-    error instanceof ProviderError &&
-    (error.kind === "model-unavailable" || error.kind === "auth" || error.kind === "empty")
-  );
+  if (!(error instanceof ProviderError)) return false;
+  if (requestedProvider === "chatgpt") return error.kind === "model-unavailable" || error.kind === "auth" || error.kind === "empty";
+  // OpenCode: a model its server can't serve, or that produced nothing, moves
+  // to the shared free route. Auth/permission/timeout stay visible: a wrong
+  // password or a pending approval is the user's to fix, and a timeout means
+  // the work may still be running server-side.
+  return requestedProvider === "opencode" && isOpenCodeFallbackError(error);
 }
 
 export async function invokeAiResilient(
