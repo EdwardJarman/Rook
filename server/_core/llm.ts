@@ -30,6 +30,7 @@ export type Message = {
   content: MessageContent | MessageContent[];
   name?: string;
   tool_call_id?: string;
+  tool_calls?: ToolCall[];
 };
 
 export type Tool = {
@@ -91,9 +92,13 @@ export type InvokeResult = {
     finish_reason: string | null;
   }>;
   usage?: {
-    prompt_tokens: number;
-    completion_tokens: number;
-    total_tokens: number;
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+    prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
+    completion_tokens_details?: { reasoning_tokens?: number };
+    /** Provider-reported billed amount, when available (OpenRouter). */
+    cost?: number;
   };
 };
 
@@ -134,7 +139,7 @@ const normalizeContentPart = (part: MessageContent): TextContent | ImageContent 
 };
 
 const normalizeMessage = (message: Message) => {
-  const { role, name, tool_call_id } = message;
+  const { role, name, tool_call_id, tool_calls } = message;
 
   if (role === "tool" || role === "function") {
     const content = ensureArray(message.content)
@@ -157,6 +162,7 @@ const normalizeMessage = (message: Message) => {
       role,
       name,
       content: contentParts[0].text,
+      ...(tool_calls?.length ? { tool_calls } : {}),
     };
   }
 
@@ -164,6 +170,7 @@ const normalizeMessage = (message: Message) => {
     role,
     name,
     content: contentParts,
+    ...(tool_calls?.length ? { tool_calls } : {}),
   };
 };
 

@@ -1,6 +1,6 @@
 import * as Linking from "expo-linking";
 import * as ReactNative from "react-native";
-import { buildLoginUrl, type OAuthProvider } from "@/lib/oauth-url";
+import { buildLoginUrl, resolveApiBaseUrl, type OAuthProvider } from "@/lib/oauth-url";
 
 // Extract scheme from bundle ID (last segment timestamp, prefixed with "manus")
 // e.g., "space.manus.my.app.t20240115103045" -> "manus20240115103045"
@@ -14,7 +14,9 @@ const env = {
   appId: process.env.EXPO_PUBLIC_APP_ID ?? "",
   ownerId: process.env.EXPO_PUBLIC_OWNER_OPEN_ID ?? "",
   ownerName: process.env.EXPO_PUBLIC_OWNER_NAME ?? "",
-  apiBaseUrl: process.env.EXPO_PUBLIC_API_BASE_URL ?? "",
+  // Keep the legacy name for existing web deployments, but prefer the name
+  // supplied to the Android release workflow as well.
+  apiBaseUrl: process.env.EXPO_PUBLIC_API_BASE_URL ?? process.env.EXPO_PUBLIC_API_ORIGIN ?? "",
   deepLinkScheme: schemeFromBundleId,
 };
 
@@ -29,6 +31,9 @@ export const API_BASE_URL = env.apiBaseUrl;
  * Get the API base URL, deriving from current hostname if not set.
  * Metro runs on 8081, API server runs on 3000.
  * URL pattern: https://PORT-sandboxid.region.domain
+ *
+ * Resolution lives in pure `resolveApiBaseUrl` (see lib/oauth-url.ts);
+ * EXPO_PUBLIC_API_PORT overrides the local-dev API port (default 3000).
  */
 export function getApiBaseUrl(): string {
   // If API_BASE_URL is set, use it
@@ -36,17 +41,29 @@ export function getApiBaseUrl(): string {
     return API_BASE_URL.replace(/\/$/, "");
   }
 
-  // On web, derive from current hostname by replacing port 8081 with 3000
+  // On web, derive from current location (sandbox mapping + localhost dev).
   if (ReactNative.Platform.OS === "web" && typeof window !== "undefined" && window.location) {
-    const { protocol, hostname } = window.location;
-    // Pattern: 8081-sandboxid.region.domain -> 3000-sandboxid.region.domain
-    const apiHostname = hostname.replace(/^8081-/, "3000-");
-    if (apiHostname !== hostname) {
-      return `${protocol}//${apiHostname}`;
-    }
+    const { protocol, hostname, port } = window.location;
+    const resolved = resolveApiBaseUrl({
+      configuredBaseUrl: "",
+      platform: "web",
+      protocol,
+      hostname,
+      port,
+      devApiPort: process.env.EXPO_PUBLIC_API_PORT ?? "3000",
+    });
+    if (resolved) return resolved;
   }
 
-  // Fallback to empty (will use relative URL)
+  // React Native cannot fetch a relative path. A production Android build must
+  // always use Rook's public API; without this, `/api/chatgpt/login` fails
+  // before the ChatGPT device-login flow can start and cloud workspaces cannot
+  // hydrate for an existing account.
+  if (ReactNative.Platform.OS !== "web") {
+    return "https://www.rook.lighting";
+  }
+
+  // Same-origin relative paths remain correct for a production web deployment.
   return "";
 }
 
