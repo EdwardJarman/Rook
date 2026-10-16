@@ -65,7 +65,19 @@ export const authWebAppearance = {
     clerkCopyrightBox: { display: "none" as const },
     badge: { display: "none" as const },
     poweredByClerk: { display: "none" as const },
+    // Reset Clerk's intrinsic card width at every containing layer. The shell
+    // owns padding; a second card inset leaves too little room on phones.
+    cardBox: {
+      width: "100%",
+      maxWidth: "100%",
+      minWidth: 0,
+      boxShadow: "none",
+    },
     card: {
+      maxWidth: "100%",
+      minWidth: 0,
+      padding: 0,
+      boxSizing: "border-box" as const,
       backgroundColor: "transparent",
       boxShadow: "none",
       border: "none",
@@ -73,7 +85,8 @@ export const authWebAppearance = {
     },
     rootBox: {
       width: "100%",
-      maxWidth: "28rem",
+      maxWidth: "100%",
+      minWidth: 0,
     },
     header: {
       // The Rook shell renders the product heading, so Clerk's duplicate
@@ -110,6 +123,11 @@ export const authWebAppearance = {
     dividerText: { color: MUTED },
     formFieldLabel: { color: INK, fontWeight: "700" },
     formFieldInput: {
+      // Prevent iOS Safari from zooming the page when a field receives focus.
+      fontSize: "16px",
+      width: "100%",
+      minWidth: 0,
+      boxSizing: "border-box" as const,
       minHeight: "3.1rem",
       borderRadius: "14px",
       border: `1px solid ${LINE}`,
