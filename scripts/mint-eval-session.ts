@@ -6,7 +6,13 @@
  * in the environment and an ACTIVE Clerk session for the user.
  */
 import dotenv from "dotenv";
-dotenv.config();
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// Resolve .env.local from this script's location, not the working directory,
+// so token commands work from any cwd (evals, worktrees, CI).
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+dotenv.config({ path: join(repoRoot, ".env.local") });
 
 import { createClerkClient } from "@clerk/backend";
 

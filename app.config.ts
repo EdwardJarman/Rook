@@ -67,9 +67,10 @@ const config: ExpoConfig = {
     edgeToEdgeEnabled: true,
     predictiveBackGestureEnabled: false,
     package: env.androidPackage,
-    // Firebase client config for push (local file, git-ignored). Absent =
-    // local-only builds; EAS cloud builds fail fast naming the missing file.
-    googleServicesFile: "./google-services.json",
+    // Firebase client config for push (local file, git-ignored; on EAS cloud
+    // builds the GOOGLE_SERVICES_JSON file-type env var provides the path).
+    // Absent = local-only builds; builds fail fast naming the missing file.
+    googleServicesFile: process.env.GOOGLE_SERVICES_JSON ?? "./google-services.json",
     versionCode: 6,
     permissions: ["POST_NOTIFICATIONS", "RECORD_AUDIO"],
     intentFilters: [
