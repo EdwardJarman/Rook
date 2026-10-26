@@ -25,6 +25,7 @@ import { invokeAiStream } from "../server/ai/openai-stream";
 import * as executor from "../server/integrations/agent-tool-executor";
 import { __resetTelemetryForTests, recentTurns } from "../server/ai/telemetry";
 import { LOAD_TOOLS_NAME, loadToolsResult, offloadTools, OFFLOADABLE_TOOL_NAMES, ToolActivation, buildLoadToolsTool } from "../server/ai/tool-offload";
+import { NO_VARIANTS } from "../server/ai/variants";
 import { EXCEL_TOOLS } from "../server/integrations/excel-tools";
 import { COMPUTER_TOOLS } from "../server/integrations/computer-tools";
 import type { InvokeParams, InvokeResult, Tool, ToolCall } from "../server/_core/llm";
@@ -105,8 +106,9 @@ describe("prepareAgentTurn with the offload flag", () => {
   const turn: RookAgentInput = { userId: "u", botId: "b", taskId: "t", botName: "Scout", botRole: "Helper", botPurpose: "Help", message: "hello", recentContext: [], model: "fixture/model" };
   beforeEach(() => { connectors.on = true; });
   it("off: tools are exactly the static list. on: fewer bytes, same relative order, pointer last", async () => {
-    const off = await prepareAgentTurn(turn, "a");
-    const on = await prepareAgentTurn({ ...turn, variants: { toolOffload: true } }, "b");
+    // Pin every other variant OFF so tool lists differ only by offload.
+    const off = await prepareAgentTurn({ ...turn, variants: NO_VARIANTS }, "a");
+    const on = await prepareAgentTurn({ ...turn, variants: { toolOffload: true, leanPrompt: false, compactPlan: false } }, "b");
     expect(off.offloaded).toEqual([]);
     const offNames = names(off.tools), onNames = names(on.tools);
     expect(onNames.at(-1)).toBe(LOAD_TOOLS_NAME);
@@ -156,7 +158,7 @@ describe.each(["response", "stream"] as const)("offload through the %s loop", (m
     expect(toolLists[1]).toEqual([...toolLists[0], "computer_propose_task"]);
     expect(toolLists[2]).toEqual(toolLists[1]);
     expect(vi.mocked(executor.executeAgentTool)).toHaveBeenCalledWith(expect.objectContaining({ name: LOAD_TOOLS_NAME, offloadedTools: ["computer_propose_task"] }));
-    expect(recentTurns(1)[0].variants).toEqual(["toolOffload"]);
+    expect(recentTurns(1)[0].variants).toEqual(["leanPrompt", "toolOffload"]);
   });
   it("activates an offloaded tool the model calls directly", async () => {
     steps = [answer([call("computer_propose_task", { title: "x" }, "c1")]), answer()];
@@ -165,7 +167,7 @@ describe.each(["response", "stream"] as const)("offload through the %s loop", (m
   });
   it("flag off: identical static tools every round and no pointer", async () => {
     steps = [answer([call("computer_status", {}, "c1")]), answer()];
-    await run({});
+    await run({ variants: NO_VARIANTS });
     expect(toolLists[0]).toContain("computer_propose_task"); expect(toolLists[0]).not.toContain(LOAD_TOOLS_NAME);
     expect(toolLists[1]).toEqual(toolLists[0]); expect(recentTurns(1)[0].variants).toEqual([]);
   });

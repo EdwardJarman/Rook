@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("../server/db", () => ({ listRookNodesForUser: vi.fn(async () => []) }));
 import { buildRookSystemPromptParts, type RookSystemPromptInput } from "../server/ai/system-prompt";
 import { prepareAgentTurn, type RookAgentInput } from "../server/integrations/excel-agent";
-import { activeVariantNames, NO_VARIANTS, resolveVariants } from "../server/ai/variants";
+import { activeVariantNames, DEFAULT_VARIANTS, NO_VARIANTS, resolveVariants } from "../server/ai/variants";
 
 const input: RookSystemPromptInput = { botName: "Scout", botRole: "Helper", botPurpose: "Help with <b>things</b> & </bot_identity> stuff",
   modelRoute: "fixture/model", clockLocal: "today", clockTimeZone: "UTC", clockIso: "2026-09-29",
@@ -13,8 +13,11 @@ const sha = (text: string) => createHash("sha256").update(text).digest("hex");
 const LEGACY = { stable: "d66248ae8c50a876a8ccee49db34990af4c8ba5180563bd466e3ad20eee4a3d7", setup: "b8c519f4baac8e9facc69cff3f5eeae60455195ec3b44741edcbea595ca25622" };
 
 describe("variant flags", () => {
-  it("are off by default and only turn on from explicit values or a server override", () => {
-    expect(resolveVariants(undefined, {})).toEqual(NO_VARIANTS);
+  it("default to the shipped set and only change from explicit values or a server override", () => {
+    expect(resolveVariants(undefined, {})).toEqual(DEFAULT_VARIANTS);
+    expect(resolveVariants(undefined, {}).leanPrompt).toBe(true);
+    expect(resolveVariants(undefined, {}).toolOffload).toBe(true);
+    expect(resolveVariants(undefined, {}).compactPlan).toBe(false);
     expect(resolveVariants(undefined, { ROOK_VARIANT_LEAN_PROMPT: "0" }).leanPrompt).toBe(false);
     expect(resolveVariants(undefined, { ROOK_VARIANT_LEAN_PROMPT: "yes" }).leanPrompt).toBe(false);
     for (const on of ["1", "true", "TRUE"]) expect(resolveVariants(undefined, { ROOK_VARIANT_LEAN_PROMPT: on }).leanPrompt).toBe(true);
@@ -73,21 +76,23 @@ describe("prepareAgentTurn with the lean prompt flag", () => {
   const turn: RookAgentInput = { userId: "u", botId: "b", taskId: "t", botName: "Scout", botRole: "Helper", botPurpose: "Help",
     message: "hello", recentContext: [], model: "fixture/model" };
   it("swaps only the system message; tools, setup, history and user turn are unchanged", async () => {
-    const off = await prepareAgentTurn(turn, "a");
-    const on = await prepareAgentTurn({ ...turn, variants: { leanPrompt: true } }, "b");
-    expect(off.variants).toEqual(NO_VARIANTS); expect(on.variants.leanPrompt).toBe(true);
-    expect(on.messages[0].content).not.toBe(off.messages[0].content);
-    expect(String(on.messages[0].content).length).toBeLessThan(String(off.messages[0].content).length);
-    expect(on.messages.slice(1).map((m) => m.content.toString().replace(/Clock: .*\n/, ""))).toEqual(
-      off.messages.slice(1).map((m) => m.content.toString().replace(/Clock: .*\n/, "")));
-    expect(JSON.stringify(on.tools)).toBe(JSON.stringify(off.tools));
+    // Compare lean ON vs OFF with every other variant pinned OFF, so only the
+    // lean system message may differ (tool offload alone would change tools).
+    const legacyTurn = await prepareAgentTurn({ ...turn, variants: NO_VARIANTS }, "a");
+    const defaultTurn = await prepareAgentTurn({ ...turn, variants: { leanPrompt: true, toolOffload: false, compactPlan: false } }, "b");
+    expect(defaultTurn.variants.leanPrompt).toBe(true);
+    expect(defaultTurn.messages[0].content).not.toBe(legacyTurn.messages[0].content);
+    expect(String(defaultTurn.messages[0].content).length).toBeLessThan(String(legacyTurn.messages[0].content).length);
+    expect(defaultTurn.messages.slice(1).map((m) => m.content.toString().replace(/Clock: .*\n/, ""))).toEqual(
+      legacyTurn.messages.slice(1).map((m) => m.content.toString().replace(/Clock: .*\n/, "")));
+    expect(JSON.stringify(defaultTurn.tools)).toBe(JSON.stringify(legacyTurn.tools));
   });
-  it("is off unless the environment or override enables it", async () => {
-    vi.stubEnv("ROOK_VARIANT_LEAN_PROMPT", "1");
+  it("is on by default; environment or override can turn it off", async () => {
+    expect((await prepareAgentTurn(turn, "e")).variants.leanPrompt).toBe(true);
+    expect((await prepareAgentTurn({ ...turn, variants: { leanPrompt: false } }, "d")).variants.leanPrompt).toBe(false);
+    vi.stubEnv("ROOK_VARIANT_LEAN_PROMPT", "0");
     try {
-      expect((await prepareAgentTurn(turn, "c")).variants.leanPrompt).toBe(true);
-      expect((await prepareAgentTurn({ ...turn, variants: { leanPrompt: false } }, "d")).variants.leanPrompt).toBe(false);
+      expect((await prepareAgentTurn(turn, "c")).variants.leanPrompt).toBe(false);
     } finally { vi.unstubAllEnvs(); }
-    expect((await prepareAgentTurn(turn, "e")).variants.leanPrompt).toBe(false);
   });
 });

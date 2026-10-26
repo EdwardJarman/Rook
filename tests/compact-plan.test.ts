@@ -61,7 +61,8 @@ describe("compaction variant through prepareAgentTurn", () => {
   it("off: the largest history the API accepts never overflows the 6,000-token budget, so no ledger exists to engage", async () => {
     const off = await prepareAgentTurn(turn, "a");
     expect(setupOf(off)).not.toContain("condensed"); expect(historyChars(off)).toBeGreaterThan(15_000);
-    expect(off.variants).toEqual(NO_VARIANTS);
+    expect(off.variants.compactPlan).toBe(false);
+    expect(off.variants.leanPrompt).toBe(true);
   });
   it("on: older turns leave the request; goal and pointer arrive in setup; history shrinks", async () => {
     const off = await prepareAgentTurn(turn, "a");
