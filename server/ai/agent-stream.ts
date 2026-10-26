@@ -51,6 +51,7 @@ import {
   backoffSleep,
   AgentLoopStop,
   canRetryAgentRound,
+  isOpenCodeFallbackError,
   DOOM_LOOP_ABORT_MESSAGE,
   hasDoomLoop,
   terminalToolError,
@@ -357,9 +358,10 @@ async function runAccountedAgentStream(
           budgetHalved = true;
           effectiveBudget = Math.max(800, Math.floor(effectiveBudget / 2));
           return invokeRoundBare();
-        } else if (canRetryAgentRound(error) && !signal?.aborted) {
+        } else if ((canRetryAgentRound(error) || isOpenCodeFallbackError(error)) && !signal?.aborted) {
           // Nothing emitted yet: drop to the resilient non-streaming path
-          // for the rest of this turn rather than failing the chat.
+          // (which owns fallback) for the rest of this turn rather than
+          // failing the chat.
           canStream = false;
           await backoffSleep(0, parseRetryAfterMs(null));
         } else {
