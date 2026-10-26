@@ -22,13 +22,14 @@ export function buildExpoPushPayload(alert: TaskAlert) {
   };
 }
 
-export async function sendExpoPushAlert(alert: TaskAlert): Promise<{ accepted: boolean; reason?: string }> {
+export async function sendExpoPushAlert(alert: TaskAlert, signal?: AbortSignal): Promise<{ accepted: boolean; reason?: string }> {
   if (!isExpoPushToken(alert.expoPushToken)) return { accepted: false, reason: "No valid device push token is registered." };
   try {
     const response = await fetch("https://exp.host/--/api/v2/push/send", {
       method: "POST",
       headers: { Accept: "application/json", "Content-Type": "application/json" },
       body: JSON.stringify(buildExpoPushPayload(alert)),
+      ...(signal ? { signal } : {}),
     });
     if (!response.ok) return { accepted: false, reason: `Expo Push returned ${response.status}.` };
     const body = await response.json() as { data?: { status?: string; message?: string } };

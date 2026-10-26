@@ -21,10 +21,10 @@ const bundleId =
       return /^[a-zA-Z]/.test(segment) ? segment : "x" + segment;
     })
     .join(".") || "space.manus.app";
-// Extract timestamp from bundle ID and prefix with "manus" for deep link scheme
-// e.g., "space.manus.my.app.t20240115103045" -> "manus20240115103045"
-const timestamp = bundleId.split(".").pop()?.replace(/^t/, "") ?? "";
-const schemeFromBundleId = `manus${timestamp}`;
+// Keep the Android deep-link scheme stable. Hosted authentication, Microsoft
+// OAuth, and notification taps must continue to return to the installed app
+// across development, preview, and production builds.
+const appScheme = "manusrook";
 
 const env = {
   // App branding - update these values directly (do not use env vars)
@@ -33,7 +33,7 @@ const env = {
   // S3 URL of the app logo - set this to the URL returned by generate_image when creating custom logo
   // Leave empty to use the default icon from assets/images/icon.png
   logoUrl: "",
-  scheme: schemeFromBundleId,
+  scheme: appScheme,
   iosBundleId: bundleId,
   androidPackage: bundleId,
 };
@@ -41,9 +41,11 @@ const env = {
 const config: ExpoConfig = {
   name: env.appName,
   slug: env.appSlug,
-  version: "1.0.0",
+  owner: "rook-app",
+  version: "0.1.5",
+  runtimeVersion: { policy: "appVersion" },
   orientation: "portrait",
-  icon: "./assets/images/icon.png",
+  icon: "./assets/images/rook-logo.png",
   scheme: env.scheme,
   userInterfaceStyle: "light",
   newArchEnabled: true,
@@ -56,23 +58,30 @@ const config: ExpoConfig = {
   },
   android: {
     adaptiveIcon: {
-      backgroundColor: "#E6F4FE",
-      foregroundImage: "./assets/images/android-icon-foreground.png",
-      backgroundImage: "./assets/images/android-icon-background.png",
-      monochromeImage: "./assets/images/android-icon-monochrome.png",
+      // Use the same current Rook mark as the in-app header rather than the
+      // legacy generic Android asset family.
+      backgroundColor: "#F5F6F3",
+      foregroundImage: "./assets/images/rook-logo.png",
+      monochromeImage: "./assets/images/rook-logo.png",
     },
     edgeToEdgeEnabled: true,
     predictiveBackGestureEnabled: false,
     package: env.androidPackage,
-    permissions: ["POST_NOTIFICATIONS"],
+    // Firebase client config for push (local file, git-ignored; on EAS cloud
+    // builds the GOOGLE_SERVICES_JSON file-type env var provides the path).
+    // Absent = local-only builds; builds fail fast naming the missing file.
+    googleServicesFile: process.env.GOOGLE_SERVICES_JSON ?? "./google-services.json",
+    versionCode: 6,
+    permissions: ["POST_NOTIFICATIONS", "RECORD_AUDIO"],
     intentFilters: [
       {
         action: "VIEW",
         autoVerify: true,
+        // Expo Router callback URLs such as `manusrook:///sign-in` use an
+        // empty host, so the scheme must accept both empty and named hosts.
         data: [
           {
             scheme: env.scheme,
-            host: "*",
           },
         ],
         category: ["BROWSABLE", "DEFAULT"],
@@ -97,7 +106,7 @@ const config: ExpoConfig = {
     [
       "expo-notifications",
       {
-        icon: "./assets/images/android-icon-foreground.png",
+        icon: "./assets/images/rook-logo.png",
         color: "#77F3C4",
         defaultChannel: "workroom-alerts",
         enableBackgroundRemoteNotifications: false,
@@ -128,6 +137,8 @@ const config: ExpoConfig = {
         android: {
           buildArchs: ["armeabi-v7a", "arm64-v8a"],
           minSdkVersion: 24,
+          targetSdkVersion: 35,
+          compileSdkVersion: 36,
         },
       },
     ],
@@ -135,6 +146,24 @@ const config: ExpoConfig = {
   experiments: {
     typedRoutes: true,
     reactCompiler: true,
+  },
+  extra: {
+    // EAS project link (dynamic configs can't be auto-written by `eas init`):
+    // eas-project.json (git-ignored) or EAS_PROJECT_ID env. Absent = local-only
+    // builds; EAS cloud builds fail fast naming the missing link.
+    eas: (() => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const fs = require("node:fs");
+        const raw = fs.readFileSync("./eas-project.json", "utf8") as string;
+        const id = (JSON.parse(raw) as { projectId?: unknown }).projectId;
+        if (typeof id === "string" && id.trim()) return { projectId: id.trim() };
+      } catch {
+        // No local link file; fall through to env.
+      }
+      const envId = process.env.EAS_PROJECT_ID?.trim();
+      return envId ? { projectId: envId } : {};
+    })(),
   },
 };
 

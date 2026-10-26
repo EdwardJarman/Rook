@@ -125,7 +125,7 @@ export async function logout(): Promise<void> {
 
 // Get current authenticated user (web uses cookie-based auth)
 export async function getMe(): Promise<{
-  id: number;
+  id: string;
   openId: string;
   name: string | null;
   email: string | null;
